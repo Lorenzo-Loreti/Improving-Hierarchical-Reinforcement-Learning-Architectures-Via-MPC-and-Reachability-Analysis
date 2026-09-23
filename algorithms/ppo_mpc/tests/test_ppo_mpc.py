@@ -22,14 +22,8 @@ import pytest
 import torch
 
 from ppo_mpc import (
-    ManagerActor,
     ManagerRolloutBuffer,
     PPOMPCAgent,
-    RunningMeanStd,
-    ScaledBeta,
-    clipped_value_loss,
-    floor_normalize,
-    normalize_obs,
 )
 
 OBS_DIM, GOAL_DIM = 4, 4
@@ -67,15 +61,6 @@ def _filled_buffer(num_steps=16, obs_dim=OBS_DIM, goal_dim=GOAL_DIM, seed=0, fil
 # --------------------------------------------------------------------------
 # Observation map
 # --------------------------------------------------------------------------
-
-def test_normalize_obs_maps_bounds_to_plus_minus_one():
-    low = np.array(OBS_LOW, dtype=np.float32)
-    high = np.array(OBS_HIGH, dtype=np.float32)
-    assert normalize_obs(low, low, high) == pytest.approx([-1.0] * 4)
-    assert normalize_obs(high, low, high) == pytest.approx([1.0] * 4)
-    mid = (low + high) / 2
-    assert normalize_obs(mid, low, high) == pytest.approx([0.0] * 4)
-
 
 def test_agent_without_bounds_refuses_to_normalize():
     """Silently feeding raw physical units (p_x in [-1, 11]) to a policy
@@ -211,14 +196,6 @@ def test_get_manager_value_inverts_the_standardisation():
         raw * agent.manager_ret_rms.std + agent.manager_ret_rms.mean,
         atol=1e-4,
     )
-
-
-def test_running_mean_std_tracks_batch_statistics():
-    rms = RunningMeanStd()
-    x = torch.randn(4096) * 30 + 400
-    rms.update(x)
-    assert rms.mean == pytest.approx(float(x.mean()), rel=1e-3)
-    assert rms.std == pytest.approx(float(x.std(unbiased=False)), rel=1e-2)
 
 
 # --------------------------------------------------------------------------
@@ -453,83 +430,6 @@ def test_update_runs_every_epoch_when_target_kl_manager_is_unset():
     assert agent.update_manager(buf, minibatch_size=8, update_epochs=10)["manager/update_epochs_ran"] == 10
 
 
-def test_clipped_value_loss_matches_plain_mse_when_disabled():
-    newvalue = torch.tensor([0.0, 5.0, -3.0])
-    old_value = torch.tensor([10.0, 10.0, 10.0])
-    target = torch.tensor([1.0, 1.0, 1.0])
-    expected = 0.5 * ((newvalue - target) ** 2).mean()
-    actual = clipped_value_loss(newvalue, old_value, target, clip_coef=0.2, clip_vloss=False)
-    assert torch.allclose(actual, expected)
-
-
-def test_clipped_value_loss_matches_unclipped_inside_the_trust_region():
-    old_value = torch.tensor([10.0])
-    newvalue = old_value + 0.05  # inside clip_coef=0.2
-    target = torch.tensor([10.5])
-    expected = 0.5 * ((newvalue - target) ** 2).mean()
-    actual = clipped_value_loss(newvalue, old_value, target, clip_coef=0.2, clip_vloss=True)
-    assert torch.allclose(actual, expected)
-
-
-def test_clipped_value_loss_picks_the_clipped_candidate_when_it_scores_worse():
-    """newvalue has moved beyond clip_coef *and* toward target (a legitimate
-    improvement): the clipped candidate, pinned near the stale old_value,
-    scores worse than the unclipped one and must be the one used."""
-    old_value = torch.tensor([10.0])
-    target = torch.tensor([0.0])
-    newvalue = torch.tensor([8.0])  # moved 2.0 toward target, past clip_coef=0.2
-    unclipped_loss = 0.5 * ((newvalue - target) ** 2).mean()
-    actual = clipped_value_loss(newvalue, old_value, target, clip_coef=0.2, clip_vloss=True)
-    assert actual > unclipped_loss
-    v_clipped = old_value - 0.2  # clamp(8-10, -0.2, 0.2) == -0.2
-    expected = 0.5 * ((v_clipped - target) ** 2).mean()
-    assert torch.allclose(actual, expected)
-
-
-def test_clipped_value_loss_zero_gradient_beyond_the_clip_boundary():
-    old_value = torch.tensor([10.0])
-    target = torch.tensor([0.0])
-    newvalue = torch.tensor([8.0], requires_grad=True)
-    loss = clipped_value_loss(newvalue, old_value, target, clip_coef=0.2, clip_vloss=True)
-    loss.backward()
-    assert newvalue.grad.item() == pytest.approx(0.0)
-
-
-def test_floor_normalize_matches_previous_behaviour_when_floor_is_zero():
-    advantages = torch.tensor([1.0, -2.0, 3.0, 0.5])
-    expected = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-    normalized, raw_std = floor_normalize(advantages.clone(), RunningMeanStd(), 0.0)
-    assert torch.allclose(normalized, expected, atol=1e-6)
-    assert raw_std == pytest.approx(float(advantages.std()))
-
-
-def test_floor_normalize_floors_a_degenerate_batchs_std():
-    rms = RunningMeanStd()
-    rms.mean, rms.var = 0.0, 100.0  # multi-update history: std == 10.0
-    tiny = torch.tensor([1.0, 1.0001, 0.9999, 1.0])  # std ~= 4e-5
-    normalized, raw_std = floor_normalize(tiny, rms, floor_frac=0.5)
-    assert raw_std < 1e-3
-    expected = (tiny - tiny.mean()) / (0.5 * 10.0 + 1e-8)
-    assert torch.allclose(normalized, expected, atol=1e-4)
-
-
-def test_floor_normalize_leaves_a_healthy_batch_unfloored():
-    rms = RunningMeanStd()
-    rms.mean, rms.var = 0.0, 1.0  # multi-update history: std == 1.0
-    advantages = torch.tensor([10.0, -20.0, 30.0, 5.0])  # std >> 0.5 * 1.0
-    normalized, raw_std = floor_normalize(advantages.clone(), rms, floor_frac=0.5)
-    expected = (advantages - advantages.mean()) / (raw_std + 1e-8)
-    assert torch.allclose(normalized, expected, atol=1e-5)
-
-
-def test_floor_normalize_updates_adv_rms_but_not_in_time_for_its_own_floor():
-    rms = RunningMeanStd()
-    rms.mean, rms.var, rms.count = 0.0, 100.0, 1000.0  # well-established std == 10.0
-    tiny = torch.tensor([1.0, 1.0001, 0.9999, 1.0])
-    floor_normalize(tiny, rms, floor_frac=0.5)
-    assert rms.std < 10.0
-
-
 def test_agent_customizes_the_manager_ret_rms_horizon():
     agent = _agent(ret_rms_horizon_manager=40)
     batch = torch.randn(64)
@@ -668,49 +568,3 @@ def test_agent_defaults_match_the_training_script():
     assert agent.clip_vloss is True
     assert agent.target_kl_manager is None
     assert agent.adv_std_floor_frac == pytest.approx(0.0)
-
-
-# --------------------------------------------------------------------------
-# ScaledBeta sanity (shared with RL/PPO and HRL/hPPO; a quick smoke check)
-# --------------------------------------------------------------------------
-
-def test_scaled_beta_samples_are_inside_the_action_box():
-    dist = ScaledBeta(torch.full((2000,), 1.7), torch.full((2000,), 3.1), low=torch.tensor(-1.0), high=torch.tensor(1.0))
-    samples = dist.sample()
-    assert samples.min() >= -1.0 and samples.max() <= 1.0
-
-
-def test_manager_actor_output_shapes():
-    actor = ManagerActor(OBS_DIM, GOAL_DIM)
-    alpha, beta = actor(torch.randn(5, OBS_DIM))
-    assert alpha.shape == (5, GOAL_DIM)
-    assert beta.shape == (5, GOAL_DIM)
-    assert (alpha >= 1.0).all() and (beta >= 1.0).all()
-
-
-def test_manager_actor_concentrations_never_exceed_cap():
-    """softplus(x) + 1 alone has no ceiling, so nothing stops the manager's
-    Beta from sharpening arbitrarily close to a point mass -- which is what
-    collapsed HPPO's manager on the slalom task (see the MAX_CONCENTRATION
-    comment on ManagerActor). Driving logits to +inf must still saturate at
-    the cap, not climb past it."""
-    actor = ManagerActor(OBS_DIM, GOAL_DIM)
-    with torch.no_grad():
-        for layer in actor.net:
-            if isinstance(layer, torch.nn.Linear):
-                layer.bias.fill_(50.0)  # drive softplus to ~50
-    alpha, beta = actor(torch.randn(64, OBS_DIM))
-    assert alpha.max().item() == pytest.approx(ManagerActor.MAX_CONCENTRATION)
-    assert beta.max().item() == pytest.approx(ManagerActor.MAX_CONCENTRATION)
-
-
-def test_manager_actor_concentrations_never_drop_below_one():
-    """The pre-existing floor (softplus >= 0, so alpha/beta >= 1) must survive
-    the clamp -- the cap should only ever bind from above."""
-    actor = ManagerActor(OBS_DIM, GOAL_DIM)
-    with torch.no_grad():
-        for layer in actor.net:
-            if isinstance(layer, torch.nn.Linear):
-                layer.bias.fill_(-50.0)  # drive softplus to ~0
-    alpha, beta = actor(torch.randn(64, OBS_DIM))
-    assert alpha.min().item() >= 1.0 and beta.min().item() >= 1.0

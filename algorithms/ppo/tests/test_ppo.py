@@ -1,8 +1,10 @@
 """Regression tests for the PPO implementation.
 
 Each test pins down a property that is either non-obvious from the source or
-easy to break silently -- the corrections in ScaledBeta, the GAE indexing
-convention, the value standardisation round trip, and the metric definitions.
+easy to break silently -- the GAE indexing convention, the value
+standardisation round trip, and the metric definitions. The building blocks
+PPO shares with the other algorithms (ScaledBeta's corrections,
+RunningMeanStd, normalize_obs) are tested once, in algorithms/tests/test_common.py.
 See the thesis PPO chapter (kept outside this repo) for the reasoning
 behind each.
 """
@@ -14,17 +16,11 @@ import tempfile
 import numpy as np
 import pytest
 import torch
-import torch.nn.functional as F
-from torch.distributions import Beta
 
 from ppo import (
     ActorNetwork,
-    CriticNetwork,
     PPOAgent,
     RolloutBuffer,
-    RunningMeanStd,
-    ScaledBeta,
-    normalize_obs,
 )
 
 LOW, HIGH = torch.tensor(-1.0), torch.tensor(1.0)
@@ -41,55 +37,6 @@ def _filled_buffer(num_steps=4, num_envs=2, obs_dim=4, act_dim=2, seed=0):
     buf.values = torch.randn(num_steps, num_envs) * 100
     buf.dones = (torch.rand(num_steps, num_envs) < 0.3).float()
     return buf
-
-
-# --------------------------------------------------------------------------
-# ScaledBeta: the change-of-variables corrections
-# --------------------------------------------------------------------------
-
-def test_scaled_beta_density_integrates_to_one():
-    """The Jacobian correction in log_prob makes it a density on [-1, 1]."""
-    dist = ScaledBeta(torch.tensor([2.5]), torch.tensor([1.3]), low=LOW, high=HIGH)
-    xs = torch.linspace(-1 + 1e-6, 1 - 1e-6, 200001).unsqueeze(1)
-    density = dist.log_prob(xs).exp().squeeze(1)
-    assert torch.trapz(density, xs.squeeze(1)).item() == pytest.approx(1.0, abs=1e-4)
-
-
-def test_scaled_beta_entropy_matches_numeric_integration():
-    """The +log(scale) shift in entropy() matches -E[log p] of the scaled density."""
-    dist = ScaledBeta(torch.tensor([2.5]), torch.tensor([1.3]), low=LOW, high=HIGH)
-    xs = torch.linspace(-1 + 1e-6, 1 - 1e-6, 200001).unsqueeze(1)
-    logp = dist.log_prob(xs).squeeze(1)
-    numeric = -torch.trapz(logp.exp() * logp, xs.squeeze(1))
-    assert numeric.item() == pytest.approx(float(dist.entropy()), abs=1e-4)
-
-
-def test_scaled_beta_corrections_are_the_log_of_the_scale():
-    """Both corrections are exactly log(high - low) against the base Beta."""
-    alpha, beta = torch.tensor([2.5]), torch.tensor([1.3])
-    base, scaled = Beta(alpha, beta), ScaledBeta(alpha, beta, low=LOW, high=HIGH)
-    action = torch.tensor([0.4])
-    unscaled = (action - LOW) / (HIGH - LOW)
-    assert scaled.log_prob(action).item() == pytest.approx(
-        (base.log_prob(unscaled) - math.log(2.0)).item(), abs=1e-6)
-    assert float(scaled.entropy()) == pytest.approx(float(base.entropy()) + math.log(2.0), abs=1e-6)
-
-
-def test_scaled_beta_samples_are_inside_the_action_box():
-    """Support is the action box, so the env's action clip is a no-op."""
-    dist = ScaledBeta(torch.full((5000, 2), 1.7), torch.full((5000, 2), 3.1), low=LOW, high=HIGH)
-    samples = dist.sample()
-    assert samples.min() >= -1.0 and samples.max() <= 1.0
-
-
-def test_deterministic_sample_is_the_distribution_mean():
-    """Evaluation uses the mean, NOT the mode -- thesis PPO chapter, 4.5."""
-    alpha, beta = torch.tensor([2.5]), torch.tensor([1.3])
-    dist = ScaledBeta(alpha, beta, low=LOW, high=HIGH)
-    expected_mean = 2.0 * (alpha / (alpha + beta)) - 1.0
-    expected_mode = 2.0 * ((alpha - 1) / (alpha + beta - 2)) - 1.0
-    assert dist.deterministic_sample().item() == pytest.approx(expected_mean.item(), abs=1e-6)
-    assert dist.deterministic_sample().item() != pytest.approx(expected_mode.item(), abs=1e-3)
 
 
 # --------------------------------------------------------------------------
@@ -116,13 +63,18 @@ def test_actor_initial_policy_is_near_uniform():
     assert beta.flatten().tolist() == pytest.approx([expected] * 2, abs=1e-4)
 
 
-def test_entropy_is_bounded_above_by_the_uniform_case():
-    """Unlike a Gaussian, the entropy bonus has an attainable maximum."""
-    uniform = float(ScaledBeta(torch.tensor(1.0), torch.tensor(1.0), LOW, HIGH).entropy())
-    assert uniform == pytest.approx(math.log(2.0), abs=1e-6)
-    at_init = float(ScaledBeta(torch.tensor(math.log(2.0) + 1.0),
-                               torch.tensor(math.log(2.0) + 1.0), LOW, HIGH).entropy())
-    assert at_init < uniform
+def test_act_is_the_deterministic_action_without_a_critic_pass():
+    """Evaluation and the solved-check only need the action; they used to go
+    through get_action_and_value and throw its value away."""
+    agent = PPOAgent(4, 2, device="cpu")
+    state = torch.randn(3, 4)
+    expected = agent.policy_forward(state, deterministic=True)[0]
+
+    def no_critic(*_):
+        raise AssertionError("act() must not evaluate the critic")
+
+    agent.critic.forward = no_critic
+    assert torch.equal(agent.act(state), expected)
 
 
 # --------------------------------------------------------------------------
@@ -204,6 +156,12 @@ def test_agent_is_the_single_source_of_the_discount():
     assert not torch.allclose(buf_a.advantages, buf_b.advantages, atol=1e-6)
 
 
+def test_agent_default_discount_is_the_documented_one():
+    """gamma = 0.99 is a deliberate default, not an accident (PPO chapter §11.1),
+    and it must match ppo_train.py's --gamma default."""
+    assert PPOAgent(4, 2, device="cpu").gamma == 0.99
+
+
 # --------------------------------------------------------------------------
 # Value-target standardisation
 # --------------------------------------------------------------------------
@@ -218,47 +176,9 @@ def test_get_value_inverts_the_standardisation():
                           raw * agent.ret_rms.std + agent.ret_rms.mean, atol=1e-4)
 
 
-def test_running_mean_std_tracks_batch_statistics():
-    rms = RunningMeanStd()
-    x = torch.randn(4096) * 30 + 400
-    rms.update(x)
-    assert rms.mean == pytest.approx(float(x.mean()), rel=1e-3)
-    assert rms.std == pytest.approx(float(x.std(unbiased=False)), rel=1e-2)
-
-
-def test_running_mean_std_count_is_capped_at_the_horizon():
-    """The cap is what keeps early-training returns from poisoning late targets."""
-    rms = RunningMeanStd(horizon=10)
-    batch = torch.randn(2048)
-    for _ in range(30):
-        rms.update(batch)
-    assert rms.count == 10 * 2048
-
-
-def test_running_mean_std_forgets_a_stale_regime():
-    """A capped estimator must migrate to a new return level; an uncapped one lags."""
-    capped, uncapped = RunningMeanStd(horizon=10), RunningMeanStd(horizon=10**9)
-    for _ in range(3):
-        capped.update(torch.full((2048,), -600.0))
-        uncapped.update(torch.full((2048,), -600.0))
-    for _ in range(15):
-        capped.update(torch.full((2048,), 400.0))
-        uncapped.update(torch.full((2048,), 400.0))
-    assert capped.mean > uncapped.mean
-
-
 # --------------------------------------------------------------------------
 # Observation map and checkpoint round trip
 # --------------------------------------------------------------------------
-
-def test_normalize_obs_maps_bounds_to_plus_minus_one():
-    low = np.array([-1.0, -2.0, -2.0, -2.0], dtype=np.float32)
-    high = np.array([11.0, 2.0, 2.0, 2.0], dtype=np.float32)
-    assert normalize_obs(low, low, high) == pytest.approx([-1.0] * 4)
-    assert normalize_obs(high, low, high) == pytest.approx([1.0] * 4)
-    mid = (low + high) / 2
-    assert normalize_obs(mid, low, high) == pytest.approx([0.0] * 4)
-
 
 def test_agent_without_bounds_refuses_to_normalize():
     """Silently feeding raw physical units to a policy trained on [-1,1] is the
@@ -288,6 +208,28 @@ def test_checkpoint_is_self_describing():
     assert reloaded.obs_high == pytest.approx(high)
     assert torch.allclose(reloaded.get_value(states), before, atol=1e-5)
     assert reloaded.normalize_obs(np.array(high, dtype=np.float32)) == pytest.approx([1.0] * 4)
+
+
+def test_checkpoint_from_the_autotuning_era_still_loads():
+    """Every checkpoint trained before the entropy autotuner was removed
+    carries log_ent_coef and its optimiser state. Loading one must restore
+    the weights and leave the fixed ent_coef alone, not raise."""
+    agent = PPOAgent(4, 2, device="cpu")
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "old.pt")
+        agent.save(path)
+        checkpoint = torch.load(path, weights_only=False)
+        log_ent_coef = torch.tensor(math.log(0.3), requires_grad=True)
+        checkpoint["log_ent_coef"] = math.log(0.3)
+        checkpoint["ent_coef_optimizer"] = torch.optim.Adam([log_ent_coef], lr=3e-4).state_dict()
+        torch.save(checkpoint, path)
+
+        reloaded = PPOAgent(4, 2, device="cpu")
+        reloaded.load(path)  # must not raise, and must not need weights_only=False
+
+    assert reloaded.ent_coef == 0.01
+    for a, b in zip(agent.actor.parameters(), reloaded.actor.parameters()):
+        assert torch.equal(a, b)
 
 
 # --------------------------------------------------------------------------
@@ -398,45 +340,3 @@ def test_annealing_every_group_keeps_the_critic_ratio():
     lrs = [g["lr"] for g in agent.optimizer.param_groups]
     assert lrs == pytest.approx([1.5e-4, 4.5e-4])
     assert lrs[1] / lrs[0] == pytest.approx(3.0)
-
-
-def test_checkpoint_from_the_autotuning_era_still_loads():
-    """Every checkpoint trained before the entropy autotuner was removed
-    carries log_ent_coef and its optimiser state. Loading one must restore
-    the weights and leave the fixed ent_coef alone, not raise."""
-    agent = PPOAgent(4, 2, device="cpu")
-    with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "old.pt")
-        agent.save(path)
-        checkpoint = torch.load(path, weights_only=False)
-        log_ent_coef = torch.tensor(math.log(0.3), requires_grad=True)
-        checkpoint["log_ent_coef"] = math.log(0.3)
-        checkpoint["ent_coef_optimizer"] = torch.optim.Adam([log_ent_coef], lr=3e-4).state_dict()
-        torch.save(checkpoint, path)
-
-        reloaded = PPOAgent(4, 2, device="cpu")
-        reloaded.load(path)  # must not raise, and must not need weights_only=False
-
-    assert reloaded.ent_coef == 0.01
-    for a, b in zip(agent.actor.parameters(), reloaded.actor.parameters()):
-        assert torch.equal(a, b)
-
-
-def test_act_is_the_deterministic_action_without_a_critic_pass():
-    """Evaluation and the solved-check only need the action; they used to go
-    through get_action_and_value and throw its value away."""
-    agent = PPOAgent(4, 2, device="cpu")
-    state = torch.randn(3, 4)
-    expected = agent.policy_forward(state, deterministic=True)[0]
-
-    def no_critic(*_):
-        raise AssertionError("act() must not evaluate the critic")
-
-    agent.critic.forward = no_critic
-    assert torch.equal(agent.act(state), expected)
-
-
-def test_agent_default_discount_is_the_documented_one():
-    """gamma = 0.99 is a deliberate default, not an accident (PPO chapter §11.1),
-    and it must match ppo_train.py's --gamma default."""
-    assert PPOAgent(4, 2, device="cpu").gamma == 0.99
