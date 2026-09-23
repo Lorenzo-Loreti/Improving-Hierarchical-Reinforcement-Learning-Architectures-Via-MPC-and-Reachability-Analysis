@@ -3,7 +3,8 @@
 Each test pins down a property that is either non-obvious from the source or
 easy to break silently -- the corrections in ScaledBeta, the GAE indexing
 convention, the value standardisation round trip, and the metric definitions.
-See RL/PPO/PPO.md for the reasoning behind each.
+See the thesis PPO chapter (kept outside this repo) for the reasoning
+behind each.
 """
 
 import math
@@ -23,6 +24,8 @@ from ppo import (
     RolloutBuffer,
     RunningMeanStd,
     ScaledBeta,
+    clipped_value_loss,
+    floor_normalize,
     normalize_obs,
 )
 
@@ -82,7 +85,7 @@ def test_scaled_beta_samples_are_inside_the_action_box():
 
 
 def test_deterministic_sample_is_the_distribution_mean():
-    """Evaluation uses the mean, NOT the mode -- see PPO.md section 4.5."""
+    """Evaluation uses the mean, NOT the mode -- thesis PPO chapter, 4.5."""
     alpha, beta = torch.tensor([2.5]), torch.tensor([1.3])
     dist = ScaledBeta(alpha, beta, low=LOW, high=HIGH)
     expected_mean = 2.0 * (alpha / (alpha + beta)) - 1.0
@@ -282,8 +285,8 @@ def test_checkpoint_is_self_describing():
 # update()
 # --------------------------------------------------------------------------
 
-def _prepared_agent_and_buffer():
-    agent = PPOAgent(4, 2, device="cpu")
+def _prepared_agent_and_buffer(agent=None):
+    agent = agent or PPOAgent(4, 2, device="cpu")
     buf = _filled_buffer(num_steps=8, num_envs=4)
     with torch.no_grad():
         flat = buf.states.reshape(-1, 4)
@@ -320,12 +323,18 @@ def test_target_kl_stops_the_update_early():
 
 
 def test_update_reports_the_expected_metrics():
+    """Autotuning is on by default, so the default agent's metrics include
+    loss/ent_coef; see test_autotune_off_matches_todays_metrics_and_checkpoint_shape
+    for the metrics dict with autotuning explicitly disabled."""
     agent, buf = _prepared_agent_and_buffer()
     metrics = agent.update(buf, minibatch_size=8, update_epochs=2)
     assert set(metrics) == {
         "loss/policy_loss", "loss/value_loss", "loss/entropy", "loss/approx_kl",
+        "loss/approx_kl_max", "loss/ratio_max_dev",
         "loss/clipfrac", "loss/update_epochs_ran", "loss/value_bias",
         "loss/value_target_mean", "loss/value_target_std", "loss/explained_variance",
+        "loss/adv_std_raw", "loss/batch_size",
+        "loss/ent_coef",
     }
     assert all(isinstance(v, float) for v in metrics.values())
 
@@ -340,7 +349,276 @@ def test_update_changes_both_heads():
 
 
 # --------------------------------------------------------------------------
-# The two-group optimiser (PPO.md §8.2, §11.1)
+# Ported-for-parity mitigations: value-loss clipping, advantage-std floor,
+# ret_rms horizon (see clipped_value_loss/floor_normalize's docstrings --
+# these were added to HPPOAgent during a manager-collapse investigation and
+# ported here for API/diagnostic parity, not a finding specific to flat PPO)
+# --------------------------------------------------------------------------
+
+def test_clipped_value_loss_matches_plain_mse_when_disabled():
+    """clip_vloss=False must reproduce the original, unclipped loss exactly
+    -- this is the default, so every run before this option existed depends
+    on it being a no-op."""
+    newvalue = torch.tensor([0.0, 5.0, -3.0])
+    old_value = torch.tensor([10.0, 10.0, 10.0])
+    target = torch.tensor([1.0, 1.0, 1.0])
+    expected = 0.5 * ((newvalue - target) ** 2).mean()
+    actual = clipped_value_loss(newvalue, old_value, target, clip_coef=0.2, clip_vloss=False)
+    assert torch.allclose(actual, expected)
+
+
+def test_clipped_value_loss_matches_unclipped_inside_the_trust_region():
+    """When newvalue is already within clip_coef of old_value, clipping has
+    nothing to bind on: clipped and unclipped candidates coincide."""
+    old_value = torch.tensor([10.0])
+    newvalue = old_value + 0.05  # inside clip_coef=0.2
+    target = torch.tensor([10.5])
+    expected = 0.5 * ((newvalue - target) ** 2).mean()
+    actual = clipped_value_loss(newvalue, old_value, target, clip_coef=0.2, clip_vloss=True)
+    assert torch.allclose(actual, expected)
+
+
+def test_clipped_value_loss_picks_the_clipped_candidate_when_it_scores_worse():
+    """newvalue has moved beyond clip_coef *and* toward target (a legitimate
+    improvement): the clipped candidate, pinned near the stale old_value,
+    scores worse than the unclipped one and must be the one used -- this is
+    the actual trust-region bite, not a no-op."""
+    old_value = torch.tensor([10.0])
+    target = torch.tensor([0.0])
+    newvalue = torch.tensor([8.0])  # moved 2.0 toward target, past clip_coef=0.2
+    unclipped_loss = 0.5 * ((newvalue - target) ** 2).mean()
+    actual = clipped_value_loss(newvalue, old_value, target, clip_coef=0.2, clip_vloss=True)
+    assert actual > unclipped_loss
+    v_clipped = old_value - 0.2  # clamp(8-10, -0.2, 0.2) == -0.2, so old_value + (-0.2)
+    expected = 0.5 * ((v_clipped - target) ** 2).mean()
+    assert torch.allclose(actual, expected)
+
+
+def test_clipped_value_loss_zero_gradient_beyond_the_clip_boundary():
+    """The actual protection clip_vloss buys: once the clipped candidate wins
+    the max() (previous test), its gradient w.r.t. newvalue is zero out there
+    -- clamp() is flat beyond the boundary -- so this update stops pushing
+    the critic any further in that direction."""
+    old_value = torch.tensor([10.0])
+    target = torch.tensor([0.0])
+    newvalue = torch.tensor([8.0], requires_grad=True)
+    loss = clipped_value_loss(newvalue, old_value, target, clip_coef=0.2, clip_vloss=True)
+    loss.backward()
+    assert newvalue.grad.item() == pytest.approx(0.0)
+
+
+def test_floor_normalize_matches_previous_behaviour_when_floor_is_zero():
+    """floor_frac=0.0 (the default) must reproduce the original single-batch
+    normalization exactly, whether or not an adv_rms is supplied."""
+    advantages = torch.tensor([1.0, -2.0, 3.0, 0.5])
+    expected = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+    normalized, raw_std = floor_normalize(advantages.clone(), RunningMeanStd(), 0.0)
+    assert torch.allclose(normalized, expected, atol=1e-6)
+    assert raw_std == pytest.approx(float(advantages.std()))
+
+
+def test_floor_normalize_floors_a_degenerate_batchs_std():
+    """A batch with an anomalously small std must be normalized against the
+    floor, not its own near-zero std, or dividing by it would amplify
+    whatever noise is left into an oversized update."""
+    rms = RunningMeanStd()
+    rms.mean, rms.var = 0.0, 100.0  # multi-update history: std == 10.0
+    tiny = torch.tensor([1.0, 1.0001, 0.9999, 1.0])  # std ~= 4e-5
+    normalized, raw_std = floor_normalize(tiny, rms, floor_frac=0.5)
+    assert raw_std < 1e-3
+    expected = (tiny - tiny.mean()) / (0.5 * 10.0 + 1e-8)
+    assert torch.allclose(normalized, expected, atol=1e-4)
+
+
+def test_floor_normalize_leaves_a_healthy_batch_unfloored():
+    """A batch whose own std already exceeds the floor must be normalized
+    against its own std, unchanged from the un-floored behaviour -- the floor
+    only ever raises the denominator, never lowers it."""
+    rms = RunningMeanStd()
+    rms.mean, rms.var = 0.0, 1.0  # multi-update history: std == 1.0
+    advantages = torch.tensor([10.0, -20.0, 30.0, 5.0])  # std >> 0.5 * 1.0
+    normalized, raw_std = floor_normalize(advantages.clone(), rms, floor_frac=0.5)
+    expected = (advantages - advantages.mean()) / (raw_std + 1e-8)
+    assert torch.allclose(normalized, expected, atol=1e-5)
+
+
+def test_floor_normalize_updates_adv_rms_but_not_in_time_for_its_own_floor():
+    """Complements test_floor_normalize_floors_a_degenerate_batchs_std, which
+    shows a degenerate batch cannot lift its own floor. This shows the other
+    half: adv_rms is still updated with that batch, just *after* the floor
+    was computed from its pre-update state -- so the next call sees it, even
+    though this one did not."""
+    rms = RunningMeanStd()
+    rms.mean, rms.var, rms.count = 0.0, 100.0, 1000.0  # well-established std == 10.0
+    tiny = torch.tensor([1.0, 1.0001, 0.9999, 1.0])  # std ~= 4e-5
+    floor_normalize(tiny, rms, floor_frac=0.5)
+    # The tiny batch must have pulled the running std down for whatever
+    # checks it *after* this call -- proving it landed, not that it was
+    # silently dropped.
+    assert rms.std < 10.0
+
+
+def test_agent_honours_its_own_ret_rms_horizon():
+    """ret_rms_horizon lets the critic's value-target statistics be given a
+    longer or shorter memory than the default 10 -- unlike HPPOAgent's two
+    independent heads, PPOAgent has only the one, so there is a single
+    ret_rms_horizon kwarg rather than a per-head pair."""
+    agent = PPOAgent(4, 2, device="cpu", ret_rms_horizon=40)
+    batch = torch.randn(64)
+    # Enough updates (> horizon) that count is actually capped rather than
+    # still climbing -- 20 updates would leave count at a plain running
+    # total (20*64 < 40*64) and pass by accident.
+    for _ in range(100):
+        agent.ret_rms.update(batch)
+    assert agent.ret_rms.count == pytest.approx(40 * 64)
+
+
+def test_update_reports_the_pre_normalization_advantage_std():
+    """adv_std_raw must reflect the buffer's own GAE advantages, not
+    something post-normalization or otherwise disconnected from them."""
+    agent, buf = _prepared_agent_and_buffer()
+    expected = float(buf.advantages.reshape(-1).std())
+    metrics = agent.update(buf, minibatch_size=8, update_epochs=2)
+    assert metrics["loss/adv_std_raw"] == pytest.approx(expected, rel=1e-4)
+
+
+def test_clip_vloss_bounds_how_far_the_critic_moves_on_a_noisy_batch():
+    """With clip_vloss on, a single update's value-loss gradient is capped
+    the same way the policy ratio clip caps the actor's -- this is the
+    end-to-end claim (through a real update() call) that the unit tests
+    above verify only at the clipped_value_loss level."""
+    torch.manual_seed(0)
+    agent, buf = _prepared_agent_and_buffer(PPOAgent(4, 2, device="cpu", clip_vloss=True))
+    assert agent.clip_vloss
+    metrics = agent.update(buf, minibatch_size=8, update_epochs=2)
+    assert "loss/value_loss" in metrics and math.isfinite(metrics["loss/value_loss"])
+
+
+# --------------------------------------------------------------------------
+# Entropy autotuning (SAC-style dual ascent on log_ent_coef)
+# --------------------------------------------------------------------------
+
+def _autotuning_agent_and_buffer(target_entropy, seed=0, **agent_kwargs):
+    agent = PPOAgent(4, 2, autotune_ent_coef=True, device="cpu", **agent_kwargs)
+    agent.target_entropy = target_entropy
+    buf = _filled_buffer(num_steps=8, num_envs=4, seed=seed)
+    with torch.no_grad():
+        flat = buf.states.reshape(-1, 4)
+        _, logprobs, _ = agent.policy_forward(flat, buf.actions.reshape(-1, 2))
+    buf.logprobs = logprobs.reshape(8, 4)
+    agent.compute_returns_and_advantage(buf, torch.zeros(4), torch.zeros(4))
+    return agent, buf
+
+
+def test_autotune_off_matches_todays_metrics_and_checkpoint_shape():
+    """Explicitly disabling autotuning must be unchanged from before
+    autotuning existed: no extra tensors, no new checkpoint keys, same
+    metrics dict. Autotuning itself is on by default (see
+    test_update_reports_the_expected_metrics)."""
+    agent, buf = _prepared_agent_and_buffer(PPOAgent(4, 2, autotune_ent_coef=False, device="cpu"))
+    assert not agent.autotune_ent_coef
+    assert not hasattr(agent, "log_ent_coef")
+    metrics = agent.update(buf, minibatch_size=8, update_epochs=2)
+    assert "loss/ent_coef" not in metrics
+
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "ckpt.pt")
+        agent.save(path)
+        checkpoint = torch.load(path, weights_only=False)
+    assert "log_ent_coef" not in checkpoint
+    assert "ent_coef_optimizer" not in checkpoint
+
+
+def test_ent_coef_rises_when_entropy_is_below_target():
+    """A target far above the policy's actual (bounded) entropy ceiling must
+    push log_ent_coef, hence ent_coef, up: not enough exploration yet."""
+    agent, buf = _autotuning_agent_and_buffer(target_entropy=10.0)
+    before = float(agent.log_ent_coef.detach().exp())
+    metrics = agent.update(buf, minibatch_size=8, update_epochs=2)
+    assert metrics["loss/ent_coef"] > before
+
+
+def test_ent_coef_falls_when_entropy_is_above_target():
+    """A target far below the policy's entropy must push ent_coef down."""
+    agent, buf = _autotuning_agent_and_buffer(target_entropy=-10.0)
+    before = float(agent.log_ent_coef.detach().exp())
+    metrics = agent.update(buf, minibatch_size=8, update_epochs=2)
+    assert metrics["loss/ent_coef"] < before
+
+
+def test_log_ent_coef_is_clamped():
+    """A strongly-pushing target must not drive ent_coef past ent_coef_max --
+    PPO's entropy term shares one backward pass with pg_loss/v_loss, so an
+    unclamped coefficient could otherwise starve them of gradient signal."""
+    agent, buf = _autotuning_agent_and_buffer(
+        target_entropy=100.0, ent_coef_max=0.02, ent_coef_lr=1.0
+    )
+    for i in range(20):
+        metrics = agent.update(buf, minibatch_size=8, update_epochs=2)
+        assert metrics["loss/ent_coef"] <= 0.02 + 1e-8
+        buf = _filled_buffer(num_steps=8, num_envs=4, seed=i + 1)
+        with torch.no_grad():
+            flat = buf.states.reshape(-1, 4)
+            _, logprobs, _ = agent.policy_forward(flat, buf.actions.reshape(-1, 2))
+        buf.logprobs = logprobs.reshape(8, 4)
+        agent.compute_returns_and_advantage(buf, torch.zeros(4), torch.zeros(4))
+
+
+def test_ent_coef_is_fixed_within_one_update_call():
+    """PPO reuses one batch across update_epochs passes; the dual-ascent
+    optimizer must step exactly once per update() call, not once per
+    minibatch, or the coefficient (and hence the loss it enters) would drift
+    mid-update, epoch 1 and epoch 10 no longer optimizing the same surrogate."""
+    agent, buf = _autotuning_agent_and_buffer(target_entropy=10.0)
+    step_calls = []
+    original_step = agent.ent_coef_optimizer.step
+
+    def counting_step(*args, **kwargs):
+        step_calls.append(1)
+        return original_step(*args, **kwargs)
+
+    agent.ent_coef_optimizer.step = counting_step
+    agent.update(buf, minibatch_size=8, update_epochs=5)
+    assert len(step_calls) == 1
+
+
+def test_autotune_checkpoint_round_trips():
+    """log_ent_coef and its optimiser state must survive a save/load round
+    trip, or a resumed autotuning run silently restarts from the initial
+    ent_coef instead of the value it had converged to."""
+    agent = PPOAgent(4, 2, autotune_ent_coef=True, device="cpu")
+    with torch.no_grad():
+        agent.log_ent_coef.fill_(math.log(0.5))
+
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "ckpt.pt")
+        agent.save(path)
+        reloaded = PPOAgent(4, 2, autotune_ent_coef=True, device="cpu")
+        reloaded.load(path)  # must not need weights_only=False
+
+    assert float(reloaded.log_ent_coef.detach()) == pytest.approx(math.log(0.5), abs=1e-6)
+
+
+def test_loading_autotuned_checkpoint_into_non_autotuning_agent_warns_and_folds_back(capsys):
+    """A checkpoint trained with autotuning, loaded into an agent constructed
+    without it, must fold the tuned value into a fixed ent_coef rather than
+    silently dropping it (mirrors test_load_tolerates_a_single_group_optimiser_state)."""
+    agent = PPOAgent(4, 2, autotune_ent_coef=True, device="cpu")
+    with torch.no_grad():
+        agent.log_ent_coef.fill_(math.log(0.3))
+
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "ckpt.pt")
+        agent.save(path)
+        reloaded = PPOAgent(4, 2, autotune_ent_coef=False, device="cpu")
+        reloaded.load(path)  # must not raise
+
+    assert "trained with autotune_ent_coef=True" in capsys.readouterr().out
+    assert reloaded.ent_coef == pytest.approx(0.3, abs=1e-6)
+
+
+# --------------------------------------------------------------------------
+# The two-group optimiser (thesis PPO chapter, §8.2, §11.1)
 # --------------------------------------------------------------------------
 
 def test_optimiser_splits_actor_and_critic_into_separate_groups():
@@ -381,7 +659,7 @@ def test_annealing_every_group_keeps_the_critic_ratio():
 def test_load_tolerates_a_single_group_optimiser_state(capsys):
     """Checkpoints written before the split hold a one-group optimiser state.
     Adam rejects it; `load` must warn and keep the weights rather than raise,
-    because nothing downstream needs the moment estimates (PPO.md §8.2)."""
+    because nothing downstream needs the moment estimates (PPO chapter §8.2)."""
     import torch.optim as optim
 
     old = PPOAgent(4, 2, device="cpu")
@@ -405,6 +683,6 @@ def test_load_tolerates_a_single_group_optimiser_state(capsys):
 
 
 def test_agent_default_discount_is_the_documented_one():
-    """gamma = 0.99 is a deliberate default, not an accident (PPO.md §11.1),
+    """gamma = 0.99 is a deliberate default, not an accident (PPO chapter §11.1),
     and it must match what each scenario's script_ppo.py passes."""
     assert PPOAgent(4, 2, device="cpu").gamma == 0.99

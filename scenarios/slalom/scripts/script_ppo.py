@@ -9,11 +9,14 @@ import wandb
 # the flat `ppo` module it imports by bare name.
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'algorithms', 'ppo')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'algorithms')))
 from envs.config import SlalomEnvConfig
 from envs.slalom_env import SlalomEnv
 from envs.vec_slalom_env import SlalomVecEnv
 from envs.width_profile import slalom_profile
 from ppo import PPOAgent, RolloutBuffer
+from optimal_solver import spawn_grid, precompute_optimal_grid, MinTimeSolver
+from solved_check import check_solved
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -21,6 +24,12 @@ def parse_args():
         help="the name of this experiment")
     parser.add_argument("--seed", type=int, default=1,
         help="seed of the experiment")
+    parser.add_argument("--env-u-max", type=float, default=None,
+        help="REGIME STUDY ONLY. Override the environment's acceleration "
+             "limit u_max (default None = the canonical 2.5). Mirrors the "
+             "flag of the same name in script_ppo_mpc.py so flat PPO can be "
+             "run as the control arm of the reachability regime study; see "
+             "docs/reachability-regime-study.md")
     parser.add_argument("--torch-deterministic", type=lambda x: x.lower() in ['true', '1', 't', 'y', 'yes'], default=True,
         help="if toggled, `torch.backends.cudnn.deterministic=False`")
     parser.add_argument("--cuda", type=lambda x: x.lower() in ['true', '1', 't', 'y', 'yes'], default=True,
@@ -38,6 +47,26 @@ def parse_args():
         help="number of episodes to evaluate the agent")
     parser.add_argument("--checkpoint-dir", type=str, default="checkpoints",
         help="directory (relative to this script) to save model checkpoints in")
+    parser.add_argument("--solved-early-stop", type=lambda x: x.lower() in ['true', '1', 't', 'y', 'yes'], default=True,
+        help="if toggled, actually stop training once the solved criterion below "
+             "is met. The check, its logging, and the one-time solved.pt checkpoint "
+             "still happen either way -- this only gates the early `break`, so runs "
+             "meant to be plotted against each other on the same x-axis (fixed "
+             "--total-timesteps for every seed) can set this false and still see "
+             "where each seed crossed the threshold")
+    parser.add_argument("--solved-tolerance", type=float, default=5.0,
+        help="stop training once the agent's return is within this many reward "
+             "units of the oracle's optimal return (see algorithms/optimal_solver.py) "
+             "at every point of the fixed evaluation grid below")
+    parser.add_argument("--solved-grid-nx", type=int, default=5,
+        help="number of p_x0 points in the fixed grid the solved-check evaluates from")
+    parser.add_argument("--solved-grid-ny", type=int, default=5,
+        help="number of p_y0 points in the fixed grid the solved-check evaluates from")
+    parser.add_argument("--solved-consecutive", type=int, default=2,
+        help="require the solved criterion to hold for this many consecutive "
+             "eval passes in a row before actually stopping training -- guards "
+             "against stopping on a momentary crossing while the policy is "
+             "still moving")
 
     # Algorithm specific arguments
     parser.add_argument("--total-timesteps", type=int, default=500000,
@@ -52,10 +81,10 @@ def parse_args():
         help="the number of steps to run in each environment per policy rollout. "
              "128 rather than 256 halves the batch and so doubles the number of "
              "policy updates for the same sample budget, the same minibatch size "
-             "and (to within 0.5%) the same number of gradient steps")
+             "and (to within 0.5%%) the same number of gradient steps")
     parser.add_argument("--gamma", type=float, default=0.99,
         help="the discount factor gamma. 0.99, not the 0.999 the reward scale "
-             "was designed around: see PPO.md section 11.1")
+             "was designed around: see the thesis PPO chapter, 11.1")
     parser.add_argument("--gae-lambda", type=float, default=0.95,
         help="the lambda for the general advantage estimation")
     parser.add_argument("--num-minibatches", type=int, default=4,
@@ -66,7 +95,17 @@ def parse_args():
     parser.add_argument("--clip-coef", type=float, default=0.2,
         help="the surrogate clipping coefficient")
     parser.add_argument("--ent-coef", type=float, default=0.01,
-        help="coefficient of the entropy")
+        help="coefficient of the entropy. With --autotune-ent-coef, this is only the initial value")
+    parser.add_argument("--autotune-ent-coef", type=lambda x: x.lower() in ['true', '1', 't', 'y', 'yes'], default=True,
+        help="learn the entropy coefficient via SAC-style dual ascent toward a target entropy. On by default; pass --autotune-ent-coef false to hold --ent-coef fixed instead")
+    parser.add_argument("--target-entropy-frac", type=float, default=0.35,
+        help="target entropy as a fraction of the policy's max achievable entropy (log(action range) per dim); only used with --autotune-ent-coef")
+    parser.add_argument("--ent-coef-lr", type=float, default=3e-4,
+        help="learning rate for the entropy coefficient's own optimizer; only used with --autotune-ent-coef")
+    parser.add_argument("--ent-coef-min", type=float, default=1e-4,
+        help="lower clamp on the autotuned entropy coefficient; only used with --autotune-ent-coef")
+    parser.add_argument("--ent-coef-max", type=float, default=1.0,
+        help="upper clamp on the autotuned entropy coefficient; only used with --autotune-ent-coef")
     parser.add_argument("--vf-coef", type=float, default=0.5,
         help="coefficient of the value function")
     parser.add_argument("--max-grad-norm", type=float, default=0.5,
@@ -75,10 +114,6 @@ def parse_args():
         help="the critic's learning rate as a multiple of --learning-rate. The "
              "critic gets its own optimiser parameter group; 1.0 restores the "
              "single-rate behaviour")
-    parser.add_argument("--stall-patience", type=int, default=10,
-        help="warn after this many consecutive updates in which every finished "
-             "episode was a truncation (the stall optimum, PPO.md section 17.4). "
-             "0 disables the check")
     parser.add_argument("--target-kl", type=float, default=None,
         help="if set, stop an update early once approx_kl exceeds this. Off by default: clipping is then the only trust-region mechanism")
     args = parser.parse_args()
@@ -90,7 +125,21 @@ if __name__ == "__main__":
     args = parse_args()
     run_name = f"{args.exp_name}_{args.seed}_{int(time.time())}"
 
-    env_config = SlalomEnvConfig(width_profile=slalom_profile())
+    # --env-u-max: see the identically-named flag in script_ppo_mpc.py. This
+    # is the flat-PPO control arm of the reachability regime study
+    # (docs/reachability-regime-study.md): flat PPO has no goal space at all,
+    # so it isolates how much of the degradation at low u_max is the *task*
+    # getting harder rather than a hierarchy's goal interface failing.
+    # Defaults to None = the canonical environment, unchanged.
+    env_config = SlalomEnvConfig(
+        width_profile=slalom_profile(),
+        **({} if args.env_u_max is None else {"u_max": args.env_u_max}),
+    )
+    if args.env_u_max is not None:
+        print(f"REGIME STUDY: env u_max overridden to {env_config.u_max} "
+              f"(canonical {SlalomEnvConfig().u_max}); agility ratio rho = "
+              f"v_max/(u_max*T) with T=1.0s is "
+              f"{env_config.v_max / (env_config.u_max * 1.0):.2f}")
 
     if args.track:
         wandb.init(
@@ -121,6 +170,20 @@ if __name__ == "__main__":
     obs_low = eval_env.observation_space.low
     obs_high = eval_env.observation_space.high
 
+    # Solved-check setup: a fixed grid of initial conditions (not random
+    # draws), so the oracle's optimal return for each point is solved once
+    # here and reused on every later eval pass instead of being recomputed.
+    # Any MinTimeSolver infeasibility raises here, at startup, rather than
+    # mid-training.
+    solved_grid = spawn_grid(eval_env, args.solved_grid_nx, args.solved_grid_ny)
+    optimal_grid = precompute_optimal_grid(eval_env, solved_grid, solver=MinTimeSolver())
+    optimal_returns = np.array([r.total_return for _, r in optimal_grid])
+    print(f"Solved-check: precomputed optimal returns for {len(optimal_grid)} fixed initial "
+          f"conditions (mean={optimal_returns.mean():.1f}, min={optimal_returns.min():.1f}, "
+          f"max={optimal_returns.max():.1f}); solved-tolerance={args.solved_tolerance}")
+    consecutive_solved = 0
+    solved_checkpoint_saved = False
+
     # Agent and Buffer
     agent = PPOAgent(
         obs_dim=obs_dim,
@@ -140,7 +203,12 @@ if __name__ == "__main__":
         # observation map it was trained under.
         obs_low=obs_low,
         obs_high=obs_high,
-        device=device
+        device=device,
+        autotune_ent_coef=args.autotune_ent_coef,
+        target_entropy_frac=args.target_entropy_frac,
+        ent_coef_lr=args.ent_coef_lr,
+        ent_coef_min=args.ent_coef_min,
+        ent_coef_max=args.ent_coef_max,
     )
 
     # One base learning rate per parameter group (actor, then critic). The
@@ -171,7 +239,6 @@ if __name__ == "__main__":
 
     ep_reward = np.zeros(args.num_envs)
     ep_length = np.zeros(args.num_envs, dtype=np.int64)
-    stalled_updates = 0
 
     for update in range(1, num_updates + 1):
         # Linear LR decay: once the policy has converged a constant LR keeps
@@ -184,7 +251,8 @@ if __name__ == "__main__":
         completed_returns = []
         completed_lengths = []
         completed_successes = []
-        completed_collisions = []
+        completed_collision_counts = []
+        completed_collision_impacts = []
 
         for step in range(0, args.num_steps):
             global_step += args.num_envs
@@ -230,7 +298,8 @@ if __name__ == "__main__":
                 completed_returns.append(ep_reward[i])
                 completed_lengths.append(ep_length[i])
                 completed_successes.append(info["final_info"]["is_success"][i])
-                completed_collisions.append(info["final_info"]["collision"][i])
+                completed_collision_counts.append(int(info["final_info"]["collision_count"][i]))
+                completed_collision_impacts.extend(info["final_info"]["collision_impacts"][i])
                 ep_reward[i] = 0
                 ep_length[i] = 0
 
@@ -259,36 +328,19 @@ if __name__ == "__main__":
             mean_return = float(np.mean(completed_returns))
             mean_length = float(np.mean(completed_lengths))
             success_rate = float(np.mean(completed_successes))
-            collision_rate = float(np.mean(completed_collisions))
+            collision_count_mean = float(np.mean(completed_collision_counts))
             metrics["charts/episodic_return"] = mean_return
             metrics["charts/episodic_length"] = mean_length
             metrics["charts/success_rate"] = success_rate
-            metrics["charts/collision_rate"] = collision_rate
+            metrics["charts/collision_count_mean"] = collision_count_mean
             log_line += (f" return={mean_return:.1f} length={mean_length:.0f} "
-                         f"success_rate={success_rate:.2f} collision_rate={collision_rate:.2f} "
+                         f"success_rate={success_rate:.2f} collisions/ep={collision_count_mean:.2f} "
                          f"(n={len(completed_returns)})")
-
-            # Stall-trap detector. A few per cent of seeds fall into a local
-            # optimum in which the policy simply stops moving: every episode
-            # runs out the clock, so nothing terminates, the undiscounted
-            # return is exactly `max_steps * step_penalty` for every episode,
-            # and the batch's return distribution is constant. The advantages
-            # then carry no signal and the run never recovers -- the instance
-            # measured here sat there for 178k further steps. Detecting it is
-            # free, and an undetected stalled run silently poisons a results
-            # table, because its return is indistinguishable from a policy
-            # that crashes immediately (SLALOM_ENV section 8.2).
-            if not any(completed_successes) and not any(completed_collisions):
-                stalled_updates += 1
-            else:
-                stalled_updates = 0
-            if args.stall_patience and stalled_updates == args.stall_patience:
-                print(f"WARNING: every episode has ended in truncation for "
-                      f"{args.stall_patience} consecutive updates "
-                      f"(return={mean_return:.1f}). This run has almost "
-                      f"certainly entered the stall optimum and will not "
-                      f"recover on its own; restart with a different --seed.")
-        metrics["charts/stalled_updates"] = stalled_updates
+            if completed_collision_impacts:
+                # Individual per-contact penalties (not summed), so both the
+                # typical and the single worst contact this update are visible.
+                metrics["charts/collision_impact_mean"] = float(np.mean(completed_collision_impacts))
+                metrics["charts/collision_impact_worst"] = float(np.min(completed_collision_impacts))
         print(log_line)
 
         if args.track:
@@ -303,7 +355,8 @@ if __name__ == "__main__":
             eval_returns = []
             eval_lengths = []
             eval_successes = []
-            eval_collisions = []
+            eval_collision_counts = []
+            eval_collision_impacts = []
             for i in range(args.eval_episodes):
                 eval_obs, info_eval = eval_env.reset(seed=args.seed + i)
                 eval_ep_reward = 0
@@ -321,35 +374,78 @@ if __name__ == "__main__":
                 eval_returns.append(eval_ep_reward)
                 eval_lengths.append(eval_ep_length)
                 eval_successes.append(info_eval["is_success"])
-                eval_collisions.append(info_eval["collision"])
+                # collision_count/collision_impacts are cumulative over the
+                # whole episode (see SlalomEnv.step), so the last step's info
+                # already carries every contact the episode had.
+                eval_collision_counts.append(info_eval["collision_count"])
+                eval_collision_impacts.extend(info_eval["collision_impacts"])
 
             mean_eval_return = float(np.mean(eval_returns))
             success_rate = float(np.mean(eval_successes))
-            collision_rate = float(np.mean(eval_collisions))
+            collision_count_mean = float(np.mean(eval_collision_counts))
             print(f"Evaluation at update {update}: return={mean_eval_return:.2f}, length={np.mean(eval_lengths):.2f}, "
-                  f"success_rate={success_rate:.2f}, collision_rate={collision_rate:.2f}")
+                  f"success_rate={success_rate:.2f}, collisions/ep={collision_count_mean:.2f}")
+            eval_metrics = {
+                "eval/episodic_return": mean_eval_return,
+                "eval/episodic_length": np.mean(eval_lengths),
+                "eval/success_rate": success_rate,
+                "eval/collision_count_mean": collision_count_mean,
+            }
+            if eval_collision_impacts:
+                eval_metrics["eval/collision_impact_mean"] = float(np.mean(eval_collision_impacts))
+                eval_metrics["eval/collision_impact_worst"] = float(np.min(eval_collision_impacts))
             if args.track:
-                wandb.log({
-                    "eval/episodic_return": mean_eval_return,
-                    "eval/episodic_length": np.mean(eval_lengths),
-                    "eval/success_rate": success_rate,
-                    "eval/collision_rate": collision_rate,
-                }, step=global_step)
+                wandb.log(eval_metrics, step=global_step)
 
             if mean_eval_return > best_eval_return:
                 best_eval_return = mean_eval_return
                 agent.save(os.path.join(checkpoint_dir, "best.pt"))
 
+            # Solved-check: the same fixed grid, deterministic policy action
+            # (matching the random eval above) on every pass, compared
+            # point-by-point against the oracle's precomputed optimal return
+            # for that exact starting position -- see algorithms/solved_check.py.
+            def policy_fn(obs):
+                with torch.no_grad():
+                    obs_tensor = torch.tensor(agent.normalize_obs(obs), dtype=torch.float32).to(device)
+                    action, _, _, _ = agent.get_action_and_value(obs_tensor.unsqueeze(0), deterministic=True)
+                return action.cpu().numpy()[0]
+
+            solved_result = check_solved(lambda: policy_fn, eval_env, optimal_grid, args.solved_tolerance)
+            print(f"Solved-check at update {update}: solved={solved_result.solved} "
+                  f"worst_gap={solved_result.worst_gap:.2f} at "
+                  f"p_x0={solved_result.worst_point[0]:.2f} p_y0={solved_result.worst_point[1]:.2f} "
+                  f"(consecutive={consecutive_solved})")
+            if args.track:
+                wandb.log({
+                    "solved/is_solved": float(solved_result.solved),
+                    "solved/worst_gap": solved_result.worst_gap,
+                    "solved/mean_gap": float(solved_result.gaps.mean()),
+                }, step=global_step)
+
+            consecutive_solved = consecutive_solved + 1 if solved_result.solved else 0
+
             agent.actor.train()
             agent.critic.train()
 
+            if consecutive_solved >= args.solved_consecutive:
+                # Saved once, the first time the criterion holds, regardless
+                # of --solved-early-stop -- marks the moment the policy
+                # became near-optimal even on a run left to run to its full
+                # --total-timesteps budget for a coherent cross-seed plot.
+                if not solved_checkpoint_saved:
+                    print(f"Solved criterion held for {consecutive_solved} consecutive evals "
+                          f"(tolerance={args.solved_tolerance}) at global_step={global_step}.")
+                    agent.save(os.path.join(checkpoint_dir, "solved.pt"))
+                    solved_checkpoint_saved = True
+                    if args.track:
+                        wandb.log({"solved/first_solved_step": global_step}, step=global_step)
+                if args.solved_early_stop:
+                    print("--solved-early-stop is on -- stopping training early.")
+                    break
+
     agent.save(os.path.join(checkpoint_dir, "final.pt"))
     print(f"Saved checkpoints to {checkpoint_dir}")
-    if args.stall_patience and stalled_updates >= args.stall_patience:
-        print(f"WARNING: this run finished in the stall optimum "
-              f"({stalled_updates} consecutive truncation-only updates). Its "
-              f"return is not comparable with a converged run -- discard it or "
-              f"rerun with a different --seed.")
 
     eval_env.close()
     if args.track:

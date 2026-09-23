@@ -8,10 +8,12 @@ definitions -- and adds the ones specific to the hierarchy: the manager's
 derived gamma**c discount, the goal encoding, and the fact that the two heads
 are updated independently.
 
-See HRL/hPPO/hppo_explanation.md, and RL/PPO/PPO.md for the reasoning ported
+See HPPOAgent in algorithms/hppo/hppo.py, and the thesis write-up's PPO
+chapter (kept outside this repo), for the reasoning ported
 from there.
 """
 
+import math
 import os
 import tempfile
 
@@ -19,10 +21,17 @@ import numpy as np
 import pytest
 import torch
 
+from torch.distributions import Beta
+
 from hppo import (
     HPPOAgent,
+    ManagerActor,
     RolloutBuffer,
     RunningMeanStd,
+    ScaledBeta,
+    WorkerActor,
+    clipped_value_loss,
+    floor_normalize,
     normalize_goal,
     normalize_obs,
 )
@@ -30,6 +39,7 @@ from hppo import (
 OBS_DIM, GOAL_DIM, ACT_DIM = 4, 2, 2
 OBS_LOW = [-1.0, -2.0, -2.0, -2.0]
 OBS_HIGH = [11.0, 2.0, 2.0, 2.0]
+LOW, HIGH = torch.tensor(-1.0), torch.tensor(1.0)
 
 
 def _agent(**kwargs):
@@ -90,6 +100,61 @@ def test_a_fresh_goal_lands_on_the_worker_input_box():
     """The manager's action box is [-1, 1]^2, so a freshly issued goal occupies
     the same range as the normalized observation it is concatenated onto."""
     assert normalize_goal(np.array([10.0, -10.0]), 10.0) == pytest.approx([1.0, -1.0])
+
+
+# --------------------------------------------------------------------------
+# ScaledBeta: the change-of-variables corrections
+#
+# hppo.py carries its own copy of ScaledBeta rather than importing ppo.py's
+# (the two packages are independently importable flat modules) -- ported from
+# RL/PPO/tests/test_ppo.py so a bug introduced into this copy specifically
+# would actually be caught, rather than relying on flat PPO's suite to
+# exercise code this module duplicates instead of shares.
+# --------------------------------------------------------------------------
+
+def test_scaled_beta_density_integrates_to_one():
+    """The Jacobian correction in log_prob makes it a density on [-1, 1]."""
+    dist = ScaledBeta(torch.tensor([2.5]), torch.tensor([1.3]), low=LOW, high=HIGH)
+    xs = torch.linspace(-1 + 1e-6, 1 - 1e-6, 200001).unsqueeze(1)
+    density = dist.log_prob(xs).exp().squeeze(1)
+    assert torch.trapz(density, xs.squeeze(1)).item() == pytest.approx(1.0, abs=1e-4)
+
+
+def test_scaled_beta_entropy_matches_numeric_integration():
+    """The +log(scale) shift in entropy() matches -E[log p] of the scaled density."""
+    dist = ScaledBeta(torch.tensor([2.5]), torch.tensor([1.3]), low=LOW, high=HIGH)
+    xs = torch.linspace(-1 + 1e-6, 1 - 1e-6, 200001).unsqueeze(1)
+    logp = dist.log_prob(xs).squeeze(1)
+    numeric = -torch.trapz(logp.exp() * logp, xs.squeeze(1))
+    assert numeric.item() == pytest.approx(float(dist.entropy()), abs=1e-4)
+
+
+def test_scaled_beta_corrections_are_the_log_of_the_scale():
+    """Both corrections are exactly log(high - low) against the base Beta."""
+    alpha, beta = torch.tensor([2.5]), torch.tensor([1.3])
+    base, scaled = Beta(alpha, beta), ScaledBeta(alpha, beta, low=LOW, high=HIGH)
+    action = torch.tensor([0.4])
+    unscaled = (action - LOW) / (HIGH - LOW)
+    assert scaled.log_prob(action).item() == pytest.approx(
+        (base.log_prob(unscaled) - math.log(2.0)).item(), abs=1e-6)
+    assert float(scaled.entropy()) == pytest.approx(float(base.entropy()) + math.log(2.0), abs=1e-6)
+
+
+def test_scaled_beta_samples_are_inside_the_action_box():
+    """Support is the action box, so the env's action clip is a no-op."""
+    dist = ScaledBeta(torch.full((5000, 2), 1.7), torch.full((5000, 2), 3.1), low=LOW, high=HIGH)
+    samples = dist.sample()
+    assert samples.min() >= -1.0 and samples.max() <= 1.0
+
+
+def test_deterministic_sample_is_the_distribution_mean():
+    """Evaluation uses the mean, NOT the mode -- thesis PPO chapter, 4.5."""
+    alpha, beta = torch.tensor([2.5]), torch.tensor([1.3])
+    dist = ScaledBeta(alpha, beta, low=LOW, high=HIGH)
+    expected_mean = 2.0 * (alpha / (alpha + beta)) - 1.0
+    expected_mode = 2.0 * ((alpha - 1) / (alpha + beta - 2)) - 1.0
+    assert dist.deterministic_sample().item() == pytest.approx(expected_mean.item(), abs=1e-6)
+    assert dist.deterministic_sample().item() != pytest.approx(expected_mode.item(), abs=1e-3)
 
 
 # --------------------------------------------------------------------------
@@ -155,6 +220,67 @@ def test_gae_parameters_are_required():
 
 
 # --------------------------------------------------------------------------
+# Manager actor: the alpha, beta concentration cap
+# --------------------------------------------------------------------------
+
+def test_manager_actor_concentrations_never_exceed_cap():
+    """softplus(x) + 1 alone has no ceiling, so unlike the worker's identical
+    head, nothing stopped the manager's Beta from sharpening arbitrarily close
+    to a point mass -- which is what collapsed it on the slalom task (see the
+    MAX_CONCENTRATION comment on ManagerActor). Driving logits to +inf must
+    still saturate at the cap, not climb past it."""
+    actor = ManagerActor(OBS_DIM, GOAL_DIM)
+    with torch.no_grad():
+        for layer in actor.net:
+            if isinstance(layer, torch.nn.Linear):
+                layer.bias.fill_(50.0)  # drive softplus to ~50
+    alpha, beta = actor(torch.randn(64, OBS_DIM))
+    assert alpha.max().item() == pytest.approx(ManagerActor.MAX_CONCENTRATION)
+    assert beta.max().item() == pytest.approx(ManagerActor.MAX_CONCENTRATION)
+
+
+def test_manager_actor_concentrations_never_drop_below_one():
+    """The pre-existing floor (softplus >= 0, so alpha/beta >= 1) must survive
+    the clamp -- the cap should only ever bind from above."""
+    actor = ManagerActor(OBS_DIM, GOAL_DIM)
+    with torch.no_grad():
+        for layer in actor.net:
+            if isinstance(layer, torch.nn.Linear):
+                layer.bias.fill_(-50.0)  # drive softplus to ~0
+    alpha, beta = actor(torch.randn(64, OBS_DIM))
+    assert alpha.min().item() >= 1.0 and beta.min().item() >= 1.0
+
+
+# --------------------------------------------------------------------------
+# Worker actor: the plain softplus + 1 floor (no cap -- see ManagerActor's
+# MAX_CONCENTRATION docstring for why the manager alone needed one).
+# Architecturally identical to flat PPO's ActorNetwork (RL/PPO/tests/
+# test_ppo.py's test_actor_concentrations_never_drop_below_one/
+# test_actor_initial_policy_is_near_uniform), ported here because hppo.py's
+# WorkerActor is its own class, not a reuse of ActorNetwork.
+# --------------------------------------------------------------------------
+
+def test_worker_actor_concentrations_never_drop_below_one():
+    """softplus + 1 keeps the density bounded and unimodal for any logits."""
+    actor = WorkerActor(OBS_DIM, GOAL_DIM, ACT_DIM)
+    with torch.no_grad():
+        for layer in actor.net:
+            if isinstance(layer, torch.nn.Linear):
+                layer.bias.fill_(-50.0)  # drive softplus to ~0
+    alpha, beta = actor(torch.randn(64, OBS_DIM + GOAL_DIM))
+    assert alpha.min().item() >= 1.0 and beta.min().item() >= 1.0
+
+
+def test_worker_actor_initial_policy_is_near_uniform():
+    """std=0.01 output init gives alpha = beta = softplus(0) + 1, i.e. broad."""
+    torch.manual_seed(0)
+    alpha, beta = WorkerActor(OBS_DIM, GOAL_DIM, ACT_DIM)(torch.zeros(1, OBS_DIM + GOAL_DIM))
+    expected = math.log(2.0) + 1.0
+    assert alpha.flatten().tolist() == pytest.approx([expected] * ACT_DIM, abs=1e-4)
+    assert beta.flatten().tolist() == pytest.approx([expected] * ACT_DIM, abs=1e-4)
+
+
+# --------------------------------------------------------------------------
 # The two discounts
 # --------------------------------------------------------------------------
 
@@ -185,7 +311,7 @@ def test_agent_is_the_single_source_of_each_head_discount():
 
 
 def test_agent_default_discount_is_the_documented_one():
-    """The default must track each scenario's script_hppo.py's --gamma (PPO.md 11.1)."""
+    """The default must track each scenario's script_hppo.py's --gamma (PPO ch. 11.1)."""
     agent = HPPOAgent(OBS_DIM, GOAL_DIM, ACT_DIM, device="cpu")
     assert agent.gamma == pytest.approx(0.99)
 
@@ -199,6 +325,33 @@ def test_running_mean_std_count_is_capped_at_the_horizon():
     for _ in range(20):
         rms.update(torch.randn(64))
     assert rms.count <= 3 * 64
+
+
+def test_running_mean_std_tracks_batch_statistics():
+    """Ported from RL/PPO/tests/test_ppo.py: hppo.py's RunningMeanStd is its
+    own copy, not a reuse of ppo.py's, so this module's own suite needs to
+    verify the core mean/var recursion independently of the horizon-cap
+    behaviour the test above already covers."""
+    rms = RunningMeanStd()
+    x = torch.randn(4096) * 30 + 400
+    rms.update(x)
+    assert rms.mean == pytest.approx(float(x.mean()), rel=1e-3)
+    assert rms.std == pytest.approx(float(x.std(unbiased=False)), rel=1e-2)
+
+
+def test_running_mean_std_forgets_a_stale_regime():
+    """A capped estimator must migrate to a new return level; an uncapped one
+    lags -- this is the whole point of `horizon` (see RunningMeanStd's
+    docstring), and only the cap-hits-a-count test above was exercising it
+    before this was ported from RL/PPO/tests/test_ppo.py."""
+    capped, uncapped = RunningMeanStd(horizon=10), RunningMeanStd(horizon=10**9)
+    for _ in range(3):
+        capped.update(torch.full((2048,), -600.0))
+        uncapped.update(torch.full((2048,), -600.0))
+    for _ in range(15):
+        capped.update(torch.full((2048,), 400.0))
+        uncapped.update(torch.full((2048,), 400.0))
+    assert capped.mean > uncapped.mean
 
 
 def test_get_value_inverts_the_standardisation_for_both_heads():
@@ -283,9 +436,13 @@ def _prepared(head, agent=None, fill=None):
         buf = _filled_buffer(num_steps=32, obs_dim=OBS_DIM + GOAL_DIM, act_dim=ACT_DIM, fill=fill)
         forward = agent.worker_policy_forward
         compute = agent.compute_worker_returns_and_advantage
-    with torch.no_grad():
-        _, logprobs, _ = forward(buf.states[:buf.step], buf.actions[:buf.step])
-    buf.logprobs[:buf.step] = logprobs
+    # An empty buffer has nothing to seed logprobs from, and torch's `Beta`
+    # rejects a batch of size 0 outright (a distribution-validation quirk
+    # unrelated to the code under test here).
+    if buf.step > 0:
+        with torch.no_grad():
+            _, logprobs, _ = forward(buf.states[:buf.step], buf.actions[:buf.step])
+        buf.logprobs[:buf.step] = logprobs
     compute(buf, torch.tensor(0.0), 0.0)
     return agent, buf
 
@@ -314,6 +471,52 @@ def test_update_only_consumes_the_filled_prefix(head):
     assert update(buf, 4, 2)[f"{head}/batch_size"] == 9
 
 
+@pytest.mark.parametrize("head", ["manager", "worker"])
+def test_update_with_empty_batch_does_not_crash(head):
+    """A head's buffer can end a rollout with zero transitions: a rollout
+    short relative to manager_freq, or a run of environments that neither hit
+    a c-step boundary nor terminated. The update must degrade to a metrics-only
+    no-op rather than crash -- previously `approx_kls[-1]` indexed an empty
+    list here whenever target_kl was set. See
+    test_empty_batch_does_not_poison_ent_coef for the autotuning-specific
+    failure this same empty batch used to cause."""
+    agent, buf = _prepared(head, agent=_agent(target_kl=0.0, target_kl_manager=0.0), fill=0)
+    update = agent.update_manager if head == "manager" else agent.update_worker
+    metrics = update(buf, 8, 2)
+    assert metrics[f"{head}/batch_size"] == 0
+    assert metrics[f"{head}/update_epochs_ran"] == 0
+    assert math.isnan(metrics[f"{head}/loss_policy"])
+
+
+@pytest.mark.parametrize("head", ["manager", "worker"])
+def test_empty_batch_metrics_have_the_same_keys_as_a_real_update(head):
+    """Regression guard: it is easy to add a new metric to the non-empty path
+    (as adv_std_raw/approx_kl_max/ratio_max_dev were) and forget the empty-
+    batch short-circuit above it, leaving wandb.log fed inconsistent columns
+    across updates."""
+    agent, buf = _prepared(head)
+    empty_agent, empty_buf = _prepared(head, agent=_agent(), fill=0)
+    update = agent.update_manager if head == "manager" else agent.update_worker
+    empty_update = empty_agent.update_manager if head == "manager" else empty_agent.update_worker
+    assert set(update(buf, 8, 2)) == set(empty_update(empty_buf, 8, 2))
+
+
+@pytest.mark.parametrize("head", ["manager", "worker"])
+def test_empty_batch_does_not_poison_ent_coef(head):
+    """Regression test: an empty batch left `entropy_losses` empty, so
+    `mean_entropy = float(np.mean([]))` was nan; that nan flowed through the
+    dual-ascent step into `log_ent_coef`, and the clamp right after it cannot
+    recover a nan since every comparison against one is false. The result was
+    a permanently corrupted head for the rest of training, with no error
+    raised anywhere."""
+    agent, buf = _prepared(head, agent=_autotune_agent(), fill=0)
+    log_ent_coef = getattr(agent, f"log_ent_coef_{head}")
+    before = float(log_ent_coef.detach())
+    update = agent.update_manager if head == "manager" else agent.update_worker
+    update(buf, 8, 2)
+    assert float(log_ent_coef.detach()) == before
+
+
 def test_update_runs_every_epoch_when_target_kl_is_unset():
     agent, buf = _prepared("worker")
     assert agent.target_kl is None
@@ -325,17 +528,45 @@ def test_target_kl_stops_the_update_early():
     assert agent.update_worker(buf, 8, 10)["worker/update_epochs_ran"] == 1
 
 
+def test_target_kl_manager_stops_the_manager_update_early():
+    """The manager gets its own trust region, independent of --target-kl (the
+    worker's) -- see HPPOAgent's target_kl_manager and ManagerActor's
+    docstring for why the manager specifically needs one."""
+    agent, buf = _prepared("manager", agent=_agent(target_kl_manager=0.0))
+    assert agent.update_manager(buf, 8, 10)["manager/update_epochs_ran"] == 1
+
+
+def test_target_kl_manager_does_not_affect_the_worker():
+    """A manager-only trust region must not touch the worker's update -- the
+    two heads' target_kl are independent knobs, like their ent_coef."""
+    agent = _agent(target_kl_manager=0.0)
+    _, worker_buf = _prepared("worker", agent=agent)
+    assert agent.update_worker(worker_buf, 8, 10)["worker/update_epochs_ran"] == 10
+
+
+def test_worker_target_kl_does_not_affect_the_manager():
+    """And the reverse: --target-kl (the worker's) must not touch the
+    manager's update."""
+    agent = _agent(target_kl=0.0)
+    _, manager_buf = _prepared("manager", agent=agent)
+    assert agent.update_manager(manager_buf, 8, 10)["manager/update_epochs_ran"] == 10
+
+
 @pytest.mark.parametrize("head", ["manager", "worker"])
 def test_update_reports_the_expected_metrics(head):
+    """Autotuning is on by default, so the default agent's metrics include
+    {head}/ent_coef; see test_autotune_off_matches_todays_metrics_and_checkpoint_shape
+    for the metrics dict with autotuning explicitly disabled."""
     agent, buf = _prepared(head)
     update = agent.update_manager if head == "manager" else agent.update_worker
     metrics = update(buf, 8, 2)
     assert set(metrics) == {
         f"{head}/loss_policy", f"{head}/loss_value", f"{head}/entropy",
-        f"{head}/approx_kl", f"{head}/clipfrac", f"{head}/update_epochs_ran",
+        f"{head}/approx_kl", f"{head}/approx_kl_max", f"{head}/ratio_max_dev",
+        f"{head}/clipfrac", f"{head}/update_epochs_ran",
         f"{head}/value_bias", f"{head}/value_target_mean",
         f"{head}/value_target_std", f"{head}/explained_variance",
-        f"{head}/batch_size",
+        f"{head}/adv_std_raw", f"{head}/batch_size", f"{head}/ent_coef",
     }
     # np.mean over a float32 batch returns np.float32, which is not a float
     # and serialises awkwardly.
@@ -358,15 +589,310 @@ def test_update_changes_both_networks_of_the_head_and_neither_of_the_other():
 
 
 # --------------------------------------------------------------------------
+# Manager-collapse mitigations: value-loss clipping, advantage-std floor,
+# per-head ret_rms horizon (see ManagerActor's docstring for the hypothesis)
+# --------------------------------------------------------------------------
+
+def test_clipped_value_loss_matches_plain_mse_when_disabled():
+    """clip_vloss=False must reproduce the original, unclipped loss exactly
+    -- this is the default, so every run before this option existed depends
+    on it being a no-op."""
+    newvalue = torch.tensor([0.0, 5.0, -3.0])
+    old_value = torch.tensor([10.0, 10.0, 10.0])
+    target = torch.tensor([1.0, 1.0, 1.0])
+    expected = 0.5 * ((newvalue - target) ** 2).mean()
+    actual = clipped_value_loss(newvalue, old_value, target, clip_coef=0.2, clip_vloss=False)
+    assert torch.allclose(actual, expected)
+
+
+def test_clipped_value_loss_matches_unclipped_inside_the_trust_region():
+    """When newvalue is already within clip_coef of old_value, clipping has
+    nothing to bind on: clipped and unclipped candidates coincide."""
+    old_value = torch.tensor([10.0])
+    newvalue = old_value + 0.05  # inside clip_coef=0.2
+    target = torch.tensor([10.5])
+    expected = 0.5 * ((newvalue - target) ** 2).mean()
+    actual = clipped_value_loss(newvalue, old_value, target, clip_coef=0.2, clip_vloss=True)
+    assert torch.allclose(actual, expected)
+
+
+def test_clipped_value_loss_picks_the_clipped_candidate_when_it_scores_worse():
+    """newvalue has moved beyond clip_coef *and* toward target (a legitimate
+    improvement): the clipped candidate, pinned near the stale old_value,
+    scores worse than the unclipped one and must be the one used -- this is
+    the actual trust-region bite, not a no-op."""
+    old_value = torch.tensor([10.0])
+    target = torch.tensor([0.0])
+    newvalue = torch.tensor([8.0])  # moved 2.0 toward target, past clip_coef=0.2
+    unclipped_loss = 0.5 * ((newvalue - target) ** 2).mean()
+    actual = clipped_value_loss(newvalue, old_value, target, clip_coef=0.2, clip_vloss=True)
+    assert actual > unclipped_loss
+    v_clipped = old_value - 0.2  # clamp(8-10, -0.2, 0.2) == -0.2, so old_value + (-0.2)
+    expected = 0.5 * ((v_clipped - target) ** 2).mean()
+    assert torch.allclose(actual, expected)
+
+
+def test_clipped_value_loss_zero_gradient_beyond_the_clip_boundary():
+    """The actual protection clip_vloss buys: once the clipped candidate wins
+    the max() (previous test), its gradient w.r.t. newvalue is zero out there
+    -- clamp() is flat beyond the boundary -- so this update stops pushing
+    the critic any further in that direction."""
+    old_value = torch.tensor([10.0])
+    target = torch.tensor([0.0])
+    newvalue = torch.tensor([8.0], requires_grad=True)
+    loss = clipped_value_loss(newvalue, old_value, target, clip_coef=0.2, clip_vloss=True)
+    loss.backward()
+    assert newvalue.grad.item() == pytest.approx(0.0)
+
+
+def test_floor_normalize_matches_previous_behaviour_when_floor_is_zero():
+    """floor_frac=0.0 (the default) must reproduce the original single-batch
+    normalization exactly, whether or not an adv_rms is supplied."""
+    advantages = torch.tensor([1.0, -2.0, 3.0, 0.5])
+    expected = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+    normalized, raw_std = floor_normalize(advantages.clone(), RunningMeanStd(), 0.0)
+    assert torch.allclose(normalized, expected, atol=1e-6)
+    assert raw_std == pytest.approx(float(advantages.std()))
+
+
+def test_floor_normalize_floors_a_degenerate_batchs_std():
+    """A batch with an anomalously small std (the manager-collapse hypothesis:
+    near-identical trajectories once the policy is near-converged) must be
+    normalized against the floor, not its own near-zero std, or dividing by
+    it would amplify whatever noise is left into an oversized update."""
+    rms = RunningMeanStd()
+    rms.mean, rms.var = 0.0, 100.0  # multi-update history: std == 10.0
+    tiny = torch.tensor([1.0, 1.0001, 0.9999, 1.0])  # std ~= 4e-5
+    normalized, raw_std = floor_normalize(tiny, rms, floor_frac=0.5)
+    assert raw_std < 1e-3
+    expected = (tiny - tiny.mean()) / (0.5 * 10.0 + 1e-8)
+    assert torch.allclose(normalized, expected, atol=1e-4)
+
+
+def test_floor_normalize_leaves_a_healthy_batch_unfloored():
+    """A batch whose own std already exceeds the floor must be normalized
+    against its own std, unchanged from the un-floored behaviour -- the floor
+    only ever raises the denominator, never lowers it."""
+    rms = RunningMeanStd()
+    rms.mean, rms.var = 0.0, 1.0  # multi-update history: std == 1.0
+    advantages = torch.tensor([10.0, -20.0, 30.0, 5.0])  # std >> 0.5 * 1.0
+    normalized, raw_std = floor_normalize(advantages.clone(), rms, floor_frac=0.5)
+    expected = (advantages - advantages.mean()) / (raw_std + 1e-8)
+    assert torch.allclose(normalized, expected, atol=1e-5)
+
+
+def test_floor_normalize_updates_adv_rms_but_not_in_time_for_its_own_floor():
+    """Complements test_floor_normalize_floors_a_degenerate_batchs_std, which
+    shows a degenerate batch cannot lift its own floor. This shows the other
+    half: adv_rms is still updated with that batch, just *after* the floor
+    was computed from its pre-update state -- so the next call sees it, even
+    though this one did not."""
+    rms = RunningMeanStd()
+    rms.mean, rms.var, rms.count = 0.0, 100.0, 1000.0  # well-established std == 10.0
+    tiny = torch.tensor([1.0, 1.0001, 0.9999, 1.0])  # std ~= 4e-5
+    floor_normalize(tiny, rms, floor_frac=0.5)
+    # The tiny batch must have pulled the running std down for whatever
+    # checks it *after* this call -- proving it landed, not that it was
+    # silently dropped.
+    assert rms.std < 10.0
+
+
+def test_agent_gives_each_head_its_own_ret_rms_horizon():
+    """The manager's batch is ~manager_freq times smaller than the worker's
+    and more prone to a single anomalous rollout dominating a short-memory
+    estimate -- ret_rms_horizon_manager lets it be given a longer one
+    independently of the worker's."""
+    agent = _agent(ret_rms_horizon_manager=40, ret_rms_horizon_worker=10)
+    batch = torch.randn(64)
+    # Enough updates (> horizon, for both) that count is actually capped
+    # rather than still climbing -- 20 updates would leave the manager's
+    # count at a plain running total (20*64 < 40*64) and pass by accident.
+    for _ in range(100):
+        agent.manager_ret_rms.update(batch)
+        agent.worker_ret_rms.update(batch)
+    assert agent.manager_ret_rms.count == pytest.approx(40 * 64)
+    assert agent.worker_ret_rms.count == pytest.approx(10 * 64)
+
+
+def test_manager_update_reports_the_pre_normalization_advantage_std():
+    """adv_std_raw is the diagnostic the manager-collapse hypothesis says to
+    watch; it must reflect the buffer's own GAE advantages, not something
+    post-normalization or otherwise disconnected from them."""
+    agent, buf = _prepared("manager")
+    expected = float(buf.advantages[:buf.step].std())
+    metrics = agent.update_manager(buf, 8, 2)
+    assert metrics["manager/adv_std_raw"] == pytest.approx(expected, rel=1e-4)
+
+
+# --------------------------------------------------------------------------
+# Entropy autotuning (SAC-style dual ascent on log_ent_coef_manager/_worker)
+# --------------------------------------------------------------------------
+
+def _autotune_agent(target_entropy_manager=None, target_entropy_worker=None, **kwargs):
+    agent = _agent(autotune_ent_coef=True, **kwargs)
+    if target_entropy_manager is not None:
+        agent.target_entropy_manager = target_entropy_manager
+    if target_entropy_worker is not None:
+        agent.target_entropy_worker = target_entropy_worker
+    return agent
+
+
+def test_autotune_off_matches_todays_metrics_and_checkpoint_shape():
+    """Explicitly disabling autotuning must be unchanged from before
+    autotuning existed: no extra tensors, no new checkpoint keys, same
+    metrics dict for either head. Autotuning itself is on by default (see
+    test_update_reports_the_expected_metrics)."""
+    agent, buf = _prepared("worker", agent=_agent(autotune_ent_coef=False))
+    assert not agent.autotune_ent_coef
+    assert not hasattr(agent, "log_ent_coef_worker")
+    metrics = agent.update_worker(buf, 8, 2)
+    assert "worker/ent_coef" not in metrics
+
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "ckpt.pt")
+        agent.save(path)
+        checkpoint = torch.load(path, weights_only=False)
+    assert "manager_log_ent_coef" not in checkpoint
+    assert "worker_log_ent_coef" not in checkpoint
+
+
+@pytest.mark.parametrize("head", ["manager", "worker"])
+def test_ent_coef_rises_when_entropy_is_below_target(head):
+    """A target far above the policy's actual (bounded) entropy ceiling must
+    push that head's log_ent_coef, hence ent_coef, up."""
+    kwargs = {f"target_entropy_{head}": 10.0}
+    agent, buf = _prepared(head, agent=_autotune_agent(**kwargs))
+    log_ent_coef = getattr(agent, f"log_ent_coef_{head}")
+    before = float(log_ent_coef.detach().exp())
+    update = agent.update_manager if head == "manager" else agent.update_worker
+    metrics = update(buf, 8, 2)
+    assert metrics[f"{head}/ent_coef"] > before
+
+
+@pytest.mark.parametrize("head", ["manager", "worker"])
+def test_ent_coef_falls_when_entropy_is_above_target(head):
+    """A target far below the policy's entropy must push ent_coef down."""
+    kwargs = {f"target_entropy_{head}": -10.0}
+    agent, buf = _prepared(head, agent=_autotune_agent(**kwargs))
+    log_ent_coef = getattr(agent, f"log_ent_coef_{head}")
+    before = float(log_ent_coef.detach().exp())
+    update = agent.update_manager if head == "manager" else agent.update_worker
+    metrics = update(buf, 8, 2)
+    assert metrics[f"{head}/ent_coef"] < before
+
+
+@pytest.mark.parametrize("head", ["manager", "worker"])
+def test_log_ent_coef_is_clamped(head):
+    """A strongly-pushing target must not drive either head's ent_coef past
+    ent_coef_max -- PPO's entropy term shares one backward pass with
+    pg_loss/v_loss, so an unclamped coefficient could starve them."""
+    kwargs = {f"target_entropy_{head}": 100.0, "ent_coef_max": 0.02, "ent_coef_lr": 1.0}
+    agent, buf = _prepared(head, agent=_autotune_agent(**kwargs))
+    update = agent.update_manager if head == "manager" else agent.update_worker
+    for _ in range(20):
+        metrics = update(buf, 8, 2)
+        assert metrics[f"{head}/ent_coef"] <= 0.02 + 1e-8
+
+
+@pytest.mark.parametrize("head", ["manager", "worker"])
+def test_ent_coef_is_fixed_within_one_update_call(head):
+    """This batch is reused across update_epochs passes; the dual-ascent
+    optimizer must step exactly once per update_manager/update_worker call,
+    not once per minibatch, or the coefficient would drift mid-update."""
+    kwargs = {f"target_entropy_{head}": 10.0}
+    agent, buf = _prepared(head, agent=_autotune_agent(**kwargs))
+    ent_coef_optimizer = getattr(agent, f"ent_coef_optimizer_{head}")
+    update = agent.update_manager if head == "manager" else agent.update_worker
+
+    step_calls = []
+    original_step = ent_coef_optimizer.step
+
+    def counting_step(*args, **kwargs):
+        step_calls.append(1)
+        return original_step(*args, **kwargs)
+
+    ent_coef_optimizer.step = counting_step
+    update(buf, 8, 5)
+    assert len(step_calls) == 1
+
+
+def test_manager_and_worker_ent_coefs_are_independent():
+    """No accidental state sharing between the two heads' dual-ascent state:
+    driving one head's entropy far below target and the other's far above
+    must move their coefficients in opposite directions from the same agent."""
+    agent = _autotune_agent(target_entropy_manager=10.0, target_entropy_worker=-10.0)
+    _, manager_buf = _prepared("manager", agent=agent)
+    _, worker_buf = _prepared("worker", agent=agent)
+    manager_before = float(agent.log_ent_coef_manager.detach().exp())
+    worker_before = float(agent.log_ent_coef_worker.detach().exp())
+
+    manager_metrics = agent.update_manager(manager_buf, 8, 2)
+    worker_metrics = agent.update_worker(worker_buf, 8, 2)
+
+    assert manager_metrics["manager/ent_coef"] > manager_before
+    assert worker_metrics["worker/ent_coef"] < worker_before
+
+
+def test_autotune_checkpoint_round_trips():
+    """Both heads' log_ent_coef and optimiser state must survive a save/load
+    round trip, or a resumed autotuning run silently restarts from the
+    initial ent_coef instead of the value it had converged to."""
+    agent = _autotune_agent(max_goal_bound=10.0)
+    with torch.no_grad():
+        agent.log_ent_coef_manager.fill_(math.log(0.5))
+        agent.log_ent_coef_worker.fill_(math.log(0.2))
+
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "ckpt.pt")
+        agent.save(path)
+        reloaded = _autotune_agent()
+        reloaded.load(path)  # must not need weights_only=False
+
+    assert float(reloaded.log_ent_coef_manager.detach()) == pytest.approx(math.log(0.5), abs=1e-6)
+    assert float(reloaded.log_ent_coef_worker.detach()) == pytest.approx(math.log(0.2), abs=1e-6)
+
+
+def test_loading_autotuned_checkpoint_into_non_autotuning_agent_warns_and_folds_back(capsys):
+    """A checkpoint trained with autotuning, loaded into an agent constructed
+    without it, must fold each head's tuned value into a fixed ent_coef
+    rather than silently dropping it."""
+    agent = _autotune_agent()
+    with torch.no_grad():
+        agent.log_ent_coef_manager.fill_(math.log(0.3))
+        agent.log_ent_coef_worker.fill_(math.log(0.15))
+
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "ckpt.pt")
+        agent.save(path)
+        reloaded = _agent(autotune_ent_coef=False)
+        reloaded.load(path)  # must not raise
+
+    out = capsys.readouterr().out
+    assert "trained with autotune_ent_coef=True" in out
+    assert reloaded.ent_coef_manager == pytest.approx(0.3, abs=1e-6)
+    assert reloaded.ent_coef_worker == pytest.approx(0.15, abs=1e-6)
+
+
+# --------------------------------------------------------------------------
 # Optimiser parameter groups
 # --------------------------------------------------------------------------
 
 def test_optimisers_split_actor_and_critic_into_separate_groups():
+    """Every parameter must still be covered by exactly one group -- ported
+    from RL/PPO/tests/test_ppo.py's id()-set check, absent here before this."""
     agent = _agent(lr_manager=1e-3, lr_worker=2e-3, critic_lr_mult=3.0)
-    for optimizer, base in ((agent.manager_optimizer, 1e-3), (agent.worker_optimizer, 2e-3)):
+    for optimizer, base, actor, critic in (
+        (agent.manager_optimizer, 1e-3, agent.manager_actor, agent.manager_critic),
+        (agent.worker_optimizer, 2e-3, agent.worker_actor, agent.worker_critic),
+    ):
         assert len(optimizer.param_groups) == 2
         assert optimizer.param_groups[0]["lr"] == pytest.approx(base)
         assert optimizer.param_groups[1]["lr"] == pytest.approx(base * 3.0)
+
+        actor_ids = {id(p) for p in actor.parameters()}
+        critic_ids = {id(p) for p in critic.parameters()}
+        assert {id(p) for p in optimizer.param_groups[0]["params"]} == actor_ids
+        assert {id(p) for p in optimizer.param_groups[1]["params"]} == critic_ids
 
 
 def test_critic_lr_mult_of_one_restores_a_single_rate():
@@ -387,3 +913,37 @@ def test_annealing_every_group_keeps_the_critic_ratio():
         lrs = [group["lr"] for group in optimizer.param_groups]
         assert lrs[1] / lrs[0] == pytest.approx(3.0)
         assert lrs[0] == pytest.approx(5e-4)
+
+
+def test_load_tolerates_a_single_group_optimiser_state(capsys):
+    """Checkpoints written before each head had its own critic parameter
+    group hold a single-group optimiser state, which Adam refuses to load
+    into the two-group optimisers built above -- `load` must warn and keep
+    the weights rather than raise. Ported from RL/PPO/tests/test_ppo.py:
+    hppo.py's `load` has an identically-shaped guard for both optimisers,
+    but neither exercised it before this."""
+    import torch.optim as optim
+
+    old = _agent()
+    old.manager_optimizer = optim.Adam(
+        list(old.manager_actor.parameters()) + list(old.manager_critic.parameters()),
+        lr=3e-4, eps=1e-5
+    )
+    old.worker_optimizer = optim.Adam(
+        list(old.worker_actor.parameters()) + list(old.worker_critic.parameters()),
+        lr=3e-4, eps=1e-5
+    )
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "old.pt")
+        old.save(path)
+
+        new = _agent(critic_lr_mult=3.0)
+        new.load(path)  # must not raise
+
+    assert "predates the two-group optimisers" in capsys.readouterr().out
+    for a, b in zip(old.manager_actor.parameters(), new.manager_actor.parameters()):
+        assert torch.allclose(a, b)
+    for a, b in zip(old.worker_critic.parameters(), new.worker_critic.parameters()):
+        assert torch.allclose(a, b)
+    # the ratio survives a load that discarded the optimiser state
+    assert [g["lr"] for g in new.manager_optimizer.param_groups] == pytest.approx([3e-4, 9e-4])

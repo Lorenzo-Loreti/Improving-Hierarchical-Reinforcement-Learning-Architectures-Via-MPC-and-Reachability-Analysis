@@ -13,6 +13,7 @@ outputs instead of the pre-update values that actually produced the
 advantages.
 """
 
+import math
 import os
 import tempfile
 
@@ -26,6 +27,8 @@ from ppo_mpc import (
     PPOMPCAgent,
     RunningMeanStd,
     ScaledBeta,
+    clipped_value_loss,
+    floor_normalize,
     normalize_obs,
 )
 
@@ -307,9 +310,9 @@ def test_annealing_every_group_keeps_the_critic_ratio():
 # update_manager()
 # --------------------------------------------------------------------------
 
-def _prepared_agent_and_buffer():
-    agent = _agent()
-    buf = _filled_buffer(num_steps=8)
+def _prepared_agent_and_buffer(agent=None, num_steps=8):
+    agent = agent or _agent()
+    buf = _filled_buffer(num_steps=num_steps)
     with torch.no_grad():
         _, logprobs, _ = agent.manager_policy_forward(buf.states, buf.actions)
     buf.logprobs = logprobs
@@ -334,13 +337,18 @@ def test_explained_variance_uses_pre_update_values():
 
 
 def test_update_manager_reports_the_expected_metrics():
+    """Autotuning is on by default, so the default agent's metrics include
+    manager/ent_coef; see test_autotune_off_matches_todays_metrics_and_checkpoint_shape
+    for the metrics dict with autotuning explicitly disabled."""
     agent, buf = _prepared_agent_and_buffer()
     metrics = agent.update_manager(buf, minibatch_size=8, update_epochs=2)
     assert set(metrics) == {
         "manager/loss_policy", "manager/loss_value", "manager/entropy",
-        "manager/approx_kl", "manager/clipfrac", "manager/value_bias",
+        "manager/approx_kl", "manager/approx_kl_max", "manager/ratio_max_dev",
+        "manager/clipfrac", "manager/update_epochs_ran", "manager/value_bias",
         "manager/value_target_mean", "manager/value_target_std",
-        "manager/explained_variance",
+        "manager/explained_variance", "manager/adv_std_raw",
+        "manager/batch_size", "manager/ent_coef",
     }
     assert all(isinstance(v, float) for v in metrics.values())
 
@@ -367,6 +375,282 @@ def test_update_manager_handles_a_partially_filled_buffer():
     assert np.isfinite(metrics["manager/loss_value"])
 
 
+def test_update_manager_handles_an_empty_buffer():
+    """The manager's buffer can end a rollout with zero transitions: a
+    rollout short relative to manager_freq, or a run of environments that
+    neither hit a c-step boundary nor terminated. The update must degrade to
+    a metrics-only no-op rather than crash. See
+    test_empty_batch_does_not_poison_ent_coef for the autotuning-specific
+    failure this same empty batch used to cause."""
+    agent = _agent()
+    buf = _filled_buffer(num_steps=8, fill=0)
+    agent.compute_manager_returns_and_advantage(buf, 0.0, 0.0)
+    metrics = agent.update_manager(buf, minibatch_size=8, update_epochs=2)
+    assert math.isnan(metrics["manager/loss_policy"])
+
+
+def test_empty_batch_does_not_poison_ent_coef():
+    """Regression test: an empty batch left `entropy_losses` empty, so
+    `mean_entropy = float(np.mean([]))` was nan; that nan flowed through the
+    dual-ascent step into `log_ent_coef`, and the clamp right after it cannot
+    recover a nan since every comparison against one is false. The result was
+    a permanently corrupted manager for the rest of training, with no error
+    raised anywhere."""
+    agent = _agent(autotune_ent_coef=True)
+    buf = _filled_buffer(num_steps=8, fill=0)
+    agent.compute_manager_returns_and_advantage(buf, 0.0, 0.0)
+    before = float(agent.log_ent_coef.detach())
+    agent.update_manager(buf, minibatch_size=8, update_epochs=2)
+    assert float(agent.log_ent_coef.detach()) == before
+
+
+def test_empty_batch_does_not_poison_value_target_stats():
+    """Same failure mode as test_empty_batch_does_not_poison_ent_coef, but for
+    manager_ret_rms: RunningMeanStd.update() on an empty batch produces
+    `delta * 0 / tot_count`, and `nan * 0` is nan, not 0, so the running mean
+    would be permanently corrupted too if the empty batch reached it."""
+    agent = _agent()
+    buf = _filled_buffer(num_steps=8, fill=0)
+    agent.compute_manager_returns_and_advantage(buf, 0.0, 0.0)
+    mean_before, std_before = agent.manager_ret_rms.mean, agent.manager_ret_rms.std
+    agent.update_manager(buf, minibatch_size=8, update_epochs=2)
+    assert agent.manager_ret_rms.mean == mean_before
+    assert agent.manager_ret_rms.std == std_before
+
+
+def test_empty_batch_metrics_have_the_same_keys_as_a_real_update():
+    """Regression guard: it is easy to add a new metric to the non-empty path
+    (as adv_std_raw/approx_kl_max/ratio_max_dev were, ported from hppo) and
+    forget the empty-batch short-circuit above it, leaving wandb.log fed
+    inconsistent columns across updates."""
+    agent, buf = _prepared_agent_and_buffer()
+    empty_agent = _agent()
+    empty_buf = _filled_buffer(num_steps=8, fill=0)
+    empty_agent.compute_manager_returns_and_advantage(empty_buf, 0.0, 0.0)
+    real_metrics = agent.update_manager(buf, minibatch_size=8, update_epochs=2)
+    empty_metrics = empty_agent.update_manager(empty_buf, minibatch_size=8, update_epochs=2)
+    assert set(real_metrics) == set(empty_metrics)
+
+
+# --------------------------------------------------------------------------
+# Manager-collapse mitigations, ported from HPPOAgent in ../hppo/hppo.py
+# (see ManagerActor's docstring for the hypothesis and the 6-seed slalom
+# ablation this module's defaults are extending from)
+# --------------------------------------------------------------------------
+
+def test_target_kl_manager_stops_the_update_early():
+    """4 minibatches/epoch (32/8), not 1 (8/8): with a single minibatch per
+    epoch the drift from epoch 1's own gradient step is only visible when
+    epoch 2's forward pass runs, so target_kl=0.0 would stop after 2 epochs
+    instead of 1 -- still "early", but a less direct check of the mechanism."""
+    agent, buf = _prepared_agent_and_buffer(_agent(target_kl_manager=0.0), num_steps=32)
+    assert agent.update_manager(buf, minibatch_size=8, update_epochs=10)["manager/update_epochs_ran"] == 1
+
+
+def test_update_runs_every_epoch_when_target_kl_manager_is_unset():
+    agent, buf = _prepared_agent_and_buffer()
+    assert agent.target_kl_manager is None
+    assert agent.update_manager(buf, minibatch_size=8, update_epochs=10)["manager/update_epochs_ran"] == 10
+
+
+def test_clipped_value_loss_matches_plain_mse_when_disabled():
+    newvalue = torch.tensor([0.0, 5.0, -3.0])
+    old_value = torch.tensor([10.0, 10.0, 10.0])
+    target = torch.tensor([1.0, 1.0, 1.0])
+    expected = 0.5 * ((newvalue - target) ** 2).mean()
+    actual = clipped_value_loss(newvalue, old_value, target, clip_coef=0.2, clip_vloss=False)
+    assert torch.allclose(actual, expected)
+
+
+def test_clipped_value_loss_matches_unclipped_inside_the_trust_region():
+    old_value = torch.tensor([10.0])
+    newvalue = old_value + 0.05  # inside clip_coef=0.2
+    target = torch.tensor([10.5])
+    expected = 0.5 * ((newvalue - target) ** 2).mean()
+    actual = clipped_value_loss(newvalue, old_value, target, clip_coef=0.2, clip_vloss=True)
+    assert torch.allclose(actual, expected)
+
+
+def test_clipped_value_loss_picks_the_clipped_candidate_when_it_scores_worse():
+    """newvalue has moved beyond clip_coef *and* toward target (a legitimate
+    improvement): the clipped candidate, pinned near the stale old_value,
+    scores worse than the unclipped one and must be the one used."""
+    old_value = torch.tensor([10.0])
+    target = torch.tensor([0.0])
+    newvalue = torch.tensor([8.0])  # moved 2.0 toward target, past clip_coef=0.2
+    unclipped_loss = 0.5 * ((newvalue - target) ** 2).mean()
+    actual = clipped_value_loss(newvalue, old_value, target, clip_coef=0.2, clip_vloss=True)
+    assert actual > unclipped_loss
+    v_clipped = old_value - 0.2  # clamp(8-10, -0.2, 0.2) == -0.2
+    expected = 0.5 * ((v_clipped - target) ** 2).mean()
+    assert torch.allclose(actual, expected)
+
+
+def test_clipped_value_loss_zero_gradient_beyond_the_clip_boundary():
+    old_value = torch.tensor([10.0])
+    target = torch.tensor([0.0])
+    newvalue = torch.tensor([8.0], requires_grad=True)
+    loss = clipped_value_loss(newvalue, old_value, target, clip_coef=0.2, clip_vloss=True)
+    loss.backward()
+    assert newvalue.grad.item() == pytest.approx(0.0)
+
+
+def test_floor_normalize_matches_previous_behaviour_when_floor_is_zero():
+    advantages = torch.tensor([1.0, -2.0, 3.0, 0.5])
+    expected = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+    normalized, raw_std = floor_normalize(advantages.clone(), RunningMeanStd(), 0.0)
+    assert torch.allclose(normalized, expected, atol=1e-6)
+    assert raw_std == pytest.approx(float(advantages.std()))
+
+
+def test_floor_normalize_floors_a_degenerate_batchs_std():
+    rms = RunningMeanStd()
+    rms.mean, rms.var = 0.0, 100.0  # multi-update history: std == 10.0
+    tiny = torch.tensor([1.0, 1.0001, 0.9999, 1.0])  # std ~= 4e-5
+    normalized, raw_std = floor_normalize(tiny, rms, floor_frac=0.5)
+    assert raw_std < 1e-3
+    expected = (tiny - tiny.mean()) / (0.5 * 10.0 + 1e-8)
+    assert torch.allclose(normalized, expected, atol=1e-4)
+
+
+def test_floor_normalize_leaves_a_healthy_batch_unfloored():
+    rms = RunningMeanStd()
+    rms.mean, rms.var = 0.0, 1.0  # multi-update history: std == 1.0
+    advantages = torch.tensor([10.0, -20.0, 30.0, 5.0])  # std >> 0.5 * 1.0
+    normalized, raw_std = floor_normalize(advantages.clone(), rms, floor_frac=0.5)
+    expected = (advantages - advantages.mean()) / (raw_std + 1e-8)
+    assert torch.allclose(normalized, expected, atol=1e-5)
+
+
+def test_floor_normalize_updates_adv_rms_but_not_in_time_for_its_own_floor():
+    rms = RunningMeanStd()
+    rms.mean, rms.var, rms.count = 0.0, 100.0, 1000.0  # well-established std == 10.0
+    tiny = torch.tensor([1.0, 1.0001, 0.9999, 1.0])
+    floor_normalize(tiny, rms, floor_frac=0.5)
+    assert rms.std < 10.0
+
+
+def test_agent_customizes_the_manager_ret_rms_horizon():
+    agent = _agent(ret_rms_horizon_manager=40)
+    batch = torch.randn(64)
+    for _ in range(100):  # > horizon, so count is actually capped, not still climbing
+        agent.manager_ret_rms.update(batch)
+    assert agent.manager_ret_rms.count == pytest.approx(40 * 64)
+
+
+def test_update_manager_reports_the_pre_normalization_advantage_std():
+    agent, buf = _prepared_agent_and_buffer()
+    expected = float(buf.advantages[:buf.step].std())
+    metrics = agent.update_manager(buf, minibatch_size=8, update_epochs=2)
+    assert metrics["manager/adv_std_raw"] == pytest.approx(expected, rel=1e-4)
+
+
+# --------------------------------------------------------------------------
+# Entropy autotuning (SAC-style dual ascent on log_ent_coef)
+# --------------------------------------------------------------------------
+
+def _autotuning_prepared(target_entropy, **agent_kwargs):
+    agent = _agent(autotune_ent_coef=True, **agent_kwargs)
+    agent.target_entropy = target_entropy
+    buf = _filled_buffer(num_steps=8)
+    with torch.no_grad():
+        _, logprobs, _ = agent.manager_policy_forward(buf.states, buf.actions)
+    buf.logprobs = logprobs
+    agent.compute_manager_returns_and_advantage(buf, 0.0, 0.0)
+    return agent, buf
+
+
+def test_autotune_off_matches_todays_metrics_and_checkpoint_shape():
+    """Explicitly disabling autotuning must be unchanged from before
+    autotuning existed: no extra tensors, no new checkpoint keys, same
+    metrics dict. Autotuning itself is on by default (see
+    test_update_manager_reports_the_expected_metrics)."""
+    agent, buf = _prepared_agent_and_buffer(_agent(autotune_ent_coef=False))
+    assert not agent.autotune_ent_coef
+    assert not hasattr(agent, "log_ent_coef")
+    metrics = agent.update_manager(buf, minibatch_size=8, update_epochs=2)
+    assert "manager/ent_coef" not in metrics
+
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "ckpt.pt")
+        agent.save(path)
+        checkpoint = torch.load(path, weights_only=False)
+    assert "manager_log_ent_coef" not in checkpoint
+
+
+def test_ent_coef_rises_when_entropy_is_below_target():
+    """A target far above the policy's actual (bounded) entropy ceiling must
+    push log_ent_coef, hence ent_coef, up."""
+    agent, buf = _autotuning_prepared(target_entropy=10.0)
+    before = float(agent.log_ent_coef.detach().exp())
+    metrics = agent.update_manager(buf, minibatch_size=8, update_epochs=2)
+    assert metrics["manager/ent_coef"] > before
+
+
+def test_ent_coef_falls_when_entropy_is_above_target():
+    """A target far below the policy's entropy must push ent_coef down."""
+    agent, buf = _autotuning_prepared(target_entropy=-10.0)
+    before = float(agent.log_ent_coef.detach().exp())
+    metrics = agent.update_manager(buf, minibatch_size=8, update_epochs=2)
+    assert metrics["manager/ent_coef"] < before
+
+
+def test_log_ent_coef_is_clamped():
+    """A strongly-pushing target must not drive ent_coef past ent_coef_max --
+    the entropy term shares one backward pass with pg_loss/v_loss, so an
+    unclamped coefficient could starve them of gradient signal."""
+    agent, buf = _autotuning_prepared(target_entropy=100.0, ent_coef_max=0.02, ent_coef_lr=1.0)
+    for _ in range(20):
+        metrics = agent.update_manager(buf, minibatch_size=8, update_epochs=2)
+        assert metrics["manager/ent_coef"] <= 0.02 + 1e-8
+
+
+def test_ent_coef_is_fixed_within_one_update_call():
+    """This batch is reused across update_epochs passes; the dual-ascent
+    optimizer must step exactly once per update_manager call, not once per
+    minibatch, or the coefficient would drift mid-update."""
+    agent, buf = _autotuning_prepared(target_entropy=10.0)
+    step_calls = []
+    original_step = agent.ent_coef_optimizer.step
+
+    def counting_step(*args, **kwargs):
+        step_calls.append(1)
+        return original_step(*args, **kwargs)
+
+    agent.ent_coef_optimizer.step = counting_step
+    agent.update_manager(buf, minibatch_size=8, update_epochs=5)
+    assert len(step_calls) == 1
+
+
+def test_autotune_checkpoint_round_trips():
+    agent = _agent(autotune_ent_coef=True)
+    with torch.no_grad():
+        agent.log_ent_coef.fill_(math.log(0.5))
+
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "ckpt.pt")
+        agent.save(path)
+        reloaded = _agent(autotune_ent_coef=True)
+        reloaded.load(path)  # must not need weights_only=False
+
+    assert float(reloaded.log_ent_coef.detach()) == pytest.approx(math.log(0.5), abs=1e-6)
+
+
+def test_loading_autotuned_checkpoint_into_non_autotuning_agent_warns_and_folds_back(capsys):
+    agent = _agent(autotune_ent_coef=True)
+    with torch.no_grad():
+        agent.log_ent_coef.fill_(math.log(0.3))
+
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "ckpt.pt")
+        agent.save(path)
+        reloaded = _agent(autotune_ent_coef=False)
+        reloaded.load(path)  # must not raise
+
+    assert "trained with autotune_ent_coef=True" in capsys.readouterr().out
+    assert reloaded.ent_coef_manager == pytest.approx(0.3, abs=1e-6)
+
+
 # --------------------------------------------------------------------------
 # Defaults match the training script (each scenario's script_ppo_mpc.py)
 # --------------------------------------------------------------------------
@@ -379,6 +663,11 @@ def test_agent_defaults_match_the_training_script():
     assert agent.gamma == 0.99
     assert agent.manager_freq == 10
     assert agent.ent_coef_manager == pytest.approx(0.01)
+    # clip_vloss defaults on here (unlike HPPOAgent's own default) -- see
+    # ManagerActor's docstring for why.
+    assert agent.clip_vloss is True
+    assert agent.target_kl_manager is None
+    assert agent.adv_std_floor_frac == pytest.approx(0.0)
 
 
 # --------------------------------------------------------------------------
@@ -397,3 +686,31 @@ def test_manager_actor_output_shapes():
     assert alpha.shape == (5, GOAL_DIM)
     assert beta.shape == (5, GOAL_DIM)
     assert (alpha >= 1.0).all() and (beta >= 1.0).all()
+
+
+def test_manager_actor_concentrations_never_exceed_cap():
+    """softplus(x) + 1 alone has no ceiling, so nothing stops the manager's
+    Beta from sharpening arbitrarily close to a point mass -- which is what
+    collapsed HPPO's manager on the slalom task (see the MAX_CONCENTRATION
+    comment on ManagerActor). Driving logits to +inf must still saturate at
+    the cap, not climb past it."""
+    actor = ManagerActor(OBS_DIM, GOAL_DIM)
+    with torch.no_grad():
+        for layer in actor.net:
+            if isinstance(layer, torch.nn.Linear):
+                layer.bias.fill_(50.0)  # drive softplus to ~50
+    alpha, beta = actor(torch.randn(64, OBS_DIM))
+    assert alpha.max().item() == pytest.approx(ManagerActor.MAX_CONCENTRATION)
+    assert beta.max().item() == pytest.approx(ManagerActor.MAX_CONCENTRATION)
+
+
+def test_manager_actor_concentrations_never_drop_below_one():
+    """The pre-existing floor (softplus >= 0, so alpha/beta >= 1) must survive
+    the clamp -- the cap should only ever bind from above."""
+    actor = ManagerActor(OBS_DIM, GOAL_DIM)
+    with torch.no_grad():
+        for layer in actor.net:
+            if isinstance(layer, torch.nn.Linear):
+                layer.bias.fill_(-50.0)  # drive softplus to ~0
+    alpha, beta = actor(torch.randn(64, OBS_DIM))
+    assert alpha.min().item() >= 1.0 and beta.min().item() >= 1.0

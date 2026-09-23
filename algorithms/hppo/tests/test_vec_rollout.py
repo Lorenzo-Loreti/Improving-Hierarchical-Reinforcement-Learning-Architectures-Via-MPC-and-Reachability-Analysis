@@ -11,7 +11,7 @@ of the right shape, and training would just be quietly worse.
 The manager's buffer is the one with teeth. Its columns are *ragged*: an
 environment stores a transition every `manager_freq` steps or whenever its
 episode ends, and no two environments agree on when that is. See section 8 of
-hppo_explanation.md.
+HPPOAgent's own docstrings in algorithms/hppo/hppo.py.
 """
 
 import numpy as np
@@ -251,7 +251,14 @@ def test_update_consumes_a_vectorized_buffer(head):
                     torch.randn(4), torch.randn(4), torch.randn(4), torch.zeros(4))
         buf.compute_returns_and_advantage(torch.zeros(4), torch.zeros(4), GAMMA, LAM)
         metrics = agent.update_worker(buf, minibatch_size=8, update_epochs=2)
-    assert metrics[f"{head}/batch_size"] == buf.total_steps if head == "manager" else True
+    # Parenthesized explicitly: `A == B if cond else True` parses as
+    # `(A == B) if cond else True`, so an unparenthesized version silently
+    # never checks anything for the worker branch (`else True` always wins)
+    # -- `ManagerVecRolloutBuffer` exposes `total_steps`, `VecRolloutBuffer`
+    # (the worker's buffer) exposes `batch_size` instead, so the two heads
+    # need different attributes compared here.
+    expected_batch_size = buf.total_steps if head == "manager" else buf.batch_size
+    assert metrics[f"{head}/batch_size"] == expected_batch_size
     assert np.isfinite(metrics[f"{head}/loss_policy"])
     assert np.isfinite(metrics[f"{head}/explained_variance"])
 

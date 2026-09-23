@@ -59,7 +59,7 @@ class MPCWorker:
         # bound this profile ever allows -- while the position-specific,
         # possibly tighter bound is looked up and applied fresh on every
         # solve (`_solve_osqp`/`_solve_cvxpy`), never baked in statically.
-        # See the scenario's ENV.md section 3 for why this is piecewise-constant
+        # See the scenario's ENVIRONMENT.md for why this is piecewise-constant
         # rather than a continuous taper: p_x is itself a decision variable
         # inside the horizon, so the bound applied to a whole solve can only
         # be as fresh as "whichever segment the *current, measured* p_x is

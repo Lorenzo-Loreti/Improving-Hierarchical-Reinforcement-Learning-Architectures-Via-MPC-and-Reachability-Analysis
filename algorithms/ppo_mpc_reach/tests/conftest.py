@@ -5,6 +5,9 @@ import sys
 # by bare name.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+# algorithms/, for the flat `common` module `ppo_mpc_reach.py` itself imports.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+
 # `ppo_mpc_reach.py` needs `envs.width_profile` (WidthSegment/WidthProfile), which
 # is identical across scenarios, so either scenario's `envs` package works
 # here -- tunnel is picked arbitrarily.

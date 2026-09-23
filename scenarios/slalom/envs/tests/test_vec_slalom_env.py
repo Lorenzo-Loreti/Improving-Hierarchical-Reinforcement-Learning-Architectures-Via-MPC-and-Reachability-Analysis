@@ -81,15 +81,16 @@ def test_vec_env_matches_single_env_dynamics_with_progress_shaping():
                 env.state = vec_env.states[i].copy()
 
 
-def test_vec_env_matches_single_env_collision_impact_and_refund():
+def test_vec_env_matches_single_env_collision_impact():
     """Same equivalence check as
-    test_vec_env_matches_single_env_dynamics_zero_noise, with
-    impact_penalty_coef != 0 -- the batched collision reward (impact term +
-    refund of the already-accumulated step_penalty) must agree with the
-    single-env implementation row by row, including for rows that collide
-    several steps into the rollout."""
+    test_vec_env_matches_single_env_dynamics_zero_noise, focused on wall
+    contact -- the batched per-contact reward (contact_penalty) must agree
+    with the single-env implementation row by row, including rows that
+    bounce off the wall several times over the rollout (a contact no longer
+    ends the episode, so both implementations must also keep applying the
+    same clamp-and-absorb physics in lockstep without an explicit reset)."""
     config = SlalomEnvConfig(
-        sigma_p=0.0, sigma_v=0.0, width_profile=slalom_profile(), impact_penalty_coef=4.0
+        sigma_p=0.0, sigma_v=0.0, width_profile=slalom_profile()
     )
     num_envs = 5
 
@@ -106,15 +107,15 @@ def test_vec_env_matches_single_env_collision_impact_and_refund():
     saw_collision = False
     for _ in range(30):
         actions = rng.uniform(-1.0, 1.0, size=(num_envs, 2)).astype(np.float32)
-        _, vec_rewards, vec_term, vec_trunc, vec_info = vec_env.step(actions)
+        _, vec_rewards, vec_term, vec_trunc, _ = vec_env.step(actions)
 
         for i, env in enumerate(single_envs):
-            _, reward, terminated, truncated, _ = env.step(actions[i])
+            _, reward, terminated, truncated, info = env.step(actions[i])
             assert vec_rewards[i] == pytest.approx(reward, abs=1e-4)
+            saw_collision = saw_collision or bool(info["collision"])
             if terminated or truncated:
                 assert vec_term[i] == terminated
                 assert vec_trunc[i] == truncated
-                saw_collision = saw_collision or bool(vec_info["final_info"]["collision"][i])
                 env.reset(seed=None)
                 env.state = vec_env.states[i].copy()
 
@@ -122,9 +123,9 @@ def test_vec_env_matches_single_env_collision_impact_and_refund():
 
 
 def test_vec_env_progress_shaping_uses_terminal_px_not_post_reset_px():
-    """Regression guard for the exact aliasing trap already documented in
-    SLALOM_ENV.md Sec 14.3 (info["distance_to_goal"] previously leaked the
-    post-reset row's value on a done row): the progress-shaping term must be
+    """Regression guard for an aliasing trap (info["distance_to_goal"]
+    previously leaked the post-reset row's value on a done row): the
+    progress-shaping term must be
     computed from each row's terminal p_x, not the freshly-sampled
     next-episode p_x that _sample_initial writes in place after done rows
     are identified."""
@@ -194,10 +195,15 @@ def test_vec_env_collision_is_position_dependent_per_row():
     # Row 0: x=4.5, inside gate 1 (opening y in [0.25, 1.75]) -- y=1.9 collides.
     # Row 1: x=0.0, full-width entry segment -- the same y=1.9 is safe.
     vec_env.states = np.array([[4.5, 1.9, 0.0, 0.0], [0.0, 1.9, 0.0, 0.0]], dtype=np.float32)
-    _, rewards, terminated, _, info = vec_env.step(np.zeros((2, 2), dtype=np.float32))
+    obs, rewards, terminated, _, info = vec_env.step(np.zeros((2, 2), dtype=np.float32))
 
-    assert terminated[0] and info["final_info"]["collision"][0]
-    assert rewards[0] == config.collision_reward
+    assert not terminated[0] and info["final_info"]["collision"][0]
+    y_lo, y_hi = config.width_profile.bounds_at(4.5)
+    assert obs[0, 1] == pytest.approx(y_hi)
+    assert obs[0, 3] == 0.0
+    expected0 = config.step_penalty + config.contact_penalty  # v_y starts at 0
+    assert rewards[0] == pytest.approx(expected0)
+
     assert not terminated[1] and not info["final_info"]["collision"][1]
 
 
@@ -214,14 +220,21 @@ def test_final_observation_reconstructs_a_physically_continuous_trajectory():
     pre-reset state has to come from `info["final_observation"]`.
 
     Asserted as a physical bound: one step cannot move the vehicle further than
-    v_max * dt (plus a noise allowance), whatever the policy does.
+    v_max * dt plus the position kick a full-magnitude action itself
+    contributes (0.5 * u_max * dt**2, from the LTI's B matrix) on each axis,
+    whatever the policy does. x and y are actuated independently, so the
+    worst-case *Euclidean* displacement compared against below is that
+    per-axis bound scaled by sqrt(2), not the per-axis bound itself. A wall
+    contact does not loosen this bound either -- it only clamps p_y back to
+    the boundary, never past it.
     """
     config = SlalomEnvConfig(sigma_p=0.0, sigma_v=0.0)
     num_envs = 8
     vec_env = SlalomVecEnv(num_envs=num_envs, config=config)
     obs, _ = vec_env.reset(seed=0)
     rng = np.random.default_rng(0)
-    bound = config.v_max * config.dt + 1e-6
+    per_axis_bound = config.v_max * config.dt + 0.5 * config.u_max * config.dt**2
+    bound = np.sqrt(2) * per_axis_bound + 1e-6
 
     worst_reconstructed = 0.0
     worst_naive = 0.0
@@ -248,3 +261,68 @@ def test_final_observation_reconstructs_a_physically_continuous_trajectory():
         f"moved {worst_reconstructed:.4f} m against a bound of {bound:.4f} m")
     # And the naive version really is broken, so this test cannot pass vacuously.
     assert worst_naive > bound
+
+
+def test_vec_env_collision_count_and_impacts_track_each_contact():
+    """Per-row analogue of
+    test_slalom_env.py::test_collision_count_and_impacts_accumulate_over_episode:
+    collision_count and collision_impacts[i] must track every contact for row
+    i independently, not just the most recent one, and collision_impacts
+    holds each contact's own penalty rather than a running sum."""
+    config = SlalomEnvConfig(sigma_p=0.0, sigma_v=0.0, tunnel_width=4.0, max_steps=5)
+    vec_env = SlalomVecEnv(num_envs=2, config=config)
+    vec_env.reset(seed=0)
+
+    vec_env.states = np.array(
+        [[1.0, config.tunnel_width / 2.0 - 1e-4, 0.0, 1.0], [1.0, 0.0, 0.0, 0.0]],
+        dtype=np.float32,
+    )
+    actions = np.array([[0.0, 1.0], [0.0, 0.0]], dtype=np.float32)
+    _, _, _, _, info1 = vec_env.step(actions)
+    assert info1["final_info"]["collision_count"][0] == 1
+    assert len(info1["final_info"]["collision_impacts"][0]) == 1
+    assert info1["final_info"]["collision_count"][1] == 0
+    assert info1["final_info"]["collision_impacts"][1] == []
+
+    # v_y in row 0 was zeroed by the first bounce -- nudge it back into the
+    # wall for a second, independent contact.
+    vec_env.states[0, 1] = config.tunnel_width / 2.0 - 1e-4
+    vec_env.states[0, 3] = 1.0
+    _, _, _, _, info2 = vec_env.step(actions)
+    assert info2["final_info"]["collision_count"][0] == 2
+    assert len(info2["final_info"]["collision_impacts"][0]) == 2
+    assert info2["final_info"]["collision_impacts"][0][0] == pytest.approx(
+        info1["final_info"]["collision_impacts"][0][0]
+    )
+
+
+def test_vec_env_collision_bookkeeping_resets_per_row_on_autoreset():
+    """The per-row count/impacts must be snapshotted into final_info *before*
+    _sample_initial clears them for the row's next episode -- so the same
+    step()'s final_info still shows the finished episode's contacts, while
+    the internal counters are already reset for what comes next."""
+    config = SlalomEnvConfig(sigma_p=0.0, sigma_v=0.0, tunnel_length=10.0, tunnel_width=4.0, max_steps=1000)
+    vec_env = SlalomVecEnv(num_envs=2, config=config)
+    vec_env.reset(seed=0)
+
+    # Row 0 takes a wall contact, then a few steps later reaches the goal and
+    # auto-resets; row 1 is inert throughout.
+    vec_env.states = np.array(
+        [[1.0, config.tunnel_width / 2.0 - 1e-4, 0.0, 1.0], [0.0, 0.0, 0.0, 0.0]],
+        dtype=np.float32,
+    )
+    contact_action = np.array([[0.0, 1.0], [0.0, 0.0]], dtype=np.float32)
+    _, _, _, _, info = vec_env.step(contact_action)
+    assert info["final_info"]["collision_count"][0] == 1
+
+    vec_env.states[0] = [10.0 - 1e-4, 0.0, vec_env.v_max, 0.0]
+    goal_action = np.array([[vec_env.u_max, 0.0], [0.0, 0.0]], dtype=np.float32)
+    _, _, terminated, _, info = vec_env.step(goal_action)
+    assert terminated[0]
+    # The terminal snapshot still reflects the just-finished episode...
+    assert info["final_info"]["collision_count"][0] == 1
+
+    # ...but the auto-reset already ran inside that same step() call, so the
+    # counters for row 0's fresh episode read cleared right away.
+    assert vec_env._collision_counts[0] == 0
+    assert vec_env._collision_impacts[0] == []

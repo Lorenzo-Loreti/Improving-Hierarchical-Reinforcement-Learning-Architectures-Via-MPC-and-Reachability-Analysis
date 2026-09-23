@@ -4,107 +4,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from torch.distributions import Beta
 import numpy as np
 
-def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
-    torch.nn.init.orthogonal_(layer.weight, std)
-    torch.nn.init.constant_(layer.bias, bias_const)
-    return layer
-
-
-def normalize_obs(obs, low, high):
-    """Map physical [low, high] observation bounds to [-1, 1].
-
-    Ported from RL/PPO/ppo.py. The environment's observation bounds are fixed
-    and hard-enforced by the env, so there is nothing to estimate: the map is
-    exact, exactly invertible, and needs no running statistics to keep in sync
-    between training and evaluation. Raw p_x spans [-1, 11] while v_y spans
-    [-2, 2] -- a 3x difference in dynamic range feeding the first linear layer,
-    and both the manager and the worker see it.
-
-    Canonical definition. `HPPOAgent` stores the bounds it was built with and
-    exposes this as a method, so a reloaded checkpoint carries its own
-    observation map instead of depending on the caller to reproduce it.
-    """
-    return 2.0 * (obs - low) / (high - low) - 1.0
-
-
-def normalize_goal(goal, max_goal_bound):
-    """Map a physical goal displacement to the manager's own [-1, 1] action box.
-
-    The hierarchy's second scale disparity, and the one flat PPO has no
-    analogue of: the manager emits a normalized goal in [-1, 1]^2, the rollout
-    scales it by `max_goal_bound` to get a physical displacement in metres, and
-    the *worker* is then fed that physical vector concatenated onto its
-    observation. Un-normalized, the goal half of the worker's input spans
-    [-10, 10] against an observation half that spans [-1, 1] after the map
-    above -- a 10x disparity introduced by the very normalization that removed
-    the observation's own.
-
-    Dividing by the same bound the manager's action was multiplied by puts the
-    goal back in [-1, 1] and makes the round trip exact. Note that the goal
-    decays as the agent moves toward it (each scenario's script_hppo.py), so a partially
-    consumed goal sits strictly inside the box; only a fresh one sits on it.
-    """
-    return goal / max_goal_bound
-
-class ScaledBeta:
-    def __init__(self, alpha, beta, low=-1.0, high=1.0):
-        self.dist = Beta(alpha, beta)
-        self.low = low
-        self.scale = high - low
-
-    def sample(self):
-        return self.dist.sample() * self.scale + self.low
-
-    def deterministic_sample(self):
-        # Mean of Beta distribution is alpha / (alpha + beta)
-        mean = self.dist.concentration1 / (self.dist.concentration1 + self.dist.concentration0)
-        return mean * self.scale + self.low
-
-    def log_prob(self, action):
-        # Unscale action back to [0, 1]
-        unscaled_action = (action - self.low) / self.scale
-        unscaled_action = torch.clamp(unscaled_action, 1e-5, 1.0 - 1e-5)
-        # Apply log determinant of Jacobian correction
-        return self.dist.log_prob(unscaled_action) - torch.log(self.scale)
-
-    def entropy(self):
-        # Apply entropy shift correction
-        return self.dist.entropy() + torch.log(self.scale)
-
-class ManagerActor(nn.Module):
-    def __init__(self, obs_dim, goal_dim):
-        super().__init__()
-        self.goal_dim = goal_dim
-        self.net = nn.Sequential(
-            layer_init(nn.Linear(obs_dim, 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, goal_dim * 2), std=0.01)
-        )
-
-    def forward(self, obs):
-        x = self.net(obs)
-        alpha = F.softplus(x[..., :self.goal_dim]) + 1.0
-        beta = F.softplus(x[..., self.goal_dim:]) + 1.0
-        return alpha, beta
-
-class ManagerCritic(nn.Module):
-    def __init__(self, obs_dim):
-        super().__init__()
-        self.net = nn.Sequential(
-            layer_init(nn.Linear(obs_dim, 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, 1), std=1.0)
-        )
-
-    def forward(self, obs):
-        return self.net(obs)
+from common import (
+    layer_init, normalize_obs, normalize_goal, clipped_value_loss,
+    floor_normalize, ScaledBeta, RunningMeanStd, ManagerActor, ManagerCritic,
+)
 
 class WorkerActor(nn.Module):
     def __init__(self, obs_dim, goal_dim, act_dim):
@@ -138,63 +43,6 @@ class WorkerCritic(nn.Module):
 
     def forward(self, obs_goal):
         return self.net(obs_goal)
-
-
-class RunningMeanStd:
-    """Chan et al. parallel running mean/variance, used to normalize a critic's
-    regression targets. Ported from RL/PPO/ppo.py.
-
-    The manager is the head that needs it. Its reward is the discounted sum of
-    the environment's own reward over a c-step segment, so its returns inherit
-    the raw +-500 terminal scale -- O(400) targets for a freshly initialized
-    critic that outputs ~0 and can move each weight by at most `lr` per step.
-    The climb costs more gradient steps than a run provides, and the critic
-    ends up correlated with the true value but hundreds of units biased.
-
-    The worker's intrinsic reward (progress toward the goal, O(0.1) per step)
-    produces targets that are already well scaled, so there the same machinery
-    is close to a no-op. It is applied to both heads anyway: an identity
-    transform costs one multiply, and having the two heads differ in the space
-    their critic regresses in is exactly the kind of asymmetry that makes their
-    metrics incomparable.
-    """
-
-    def __init__(self, epsilon=1e-4, horizon=10):
-        self.mean = 0.0
-        self.var = 1.0
-        self.count = epsilon
-        # Cap the effective sample count at `horizon` batches so the statistics
-        # track the *current* return distribution. With an unbounded count the
-        # early-training transient permanently inflates the variance, and late
-        # targets get squeezed into a narrow band -- a milder rerun of the
-        # scale problem this class exists to prevent.
-        self.horizon = horizon
-
-    def update(self, x):
-        batch_mean = float(x.mean())
-        batch_var = float(x.var(unbiased=False))
-        batch_count = x.numel()
-
-        delta = batch_mean - self.mean
-        tot_count = self.count + batch_count
-
-        self.mean += delta * batch_count / tot_count
-        m_a = self.var * self.count
-        m_b = batch_var * batch_count
-        self.var = (m_a + m_b + delta**2 * self.count * batch_count / tot_count) / tot_count
-        self.count = min(tot_count, self.horizon * batch_count)
-
-    @property
-    def std(self):
-        return math.sqrt(self.var) + 1e-8
-
-    def state_dict(self):
-        return {"mean": self.mean, "var": self.var, "count": self.count}
-
-    def load_state_dict(self, state):
-        self.mean = state["mean"]
-        self.var = state["var"]
-        self.count = state["count"]
 
 
 class RolloutBuffer:
@@ -523,7 +371,8 @@ class HPPOAgent:
     # batch collapses, and explained_variance collapses with it. The advantages
     # that survive are then mostly critic error, which the batch-level
     # normalisation in the update rescales straight back to unit variance. See
-    # RL/PPO/PPO.md section 11.1. That measurement is flat PPO's, not this
+    # the thesis PPO chapter, section 11.1 (kept outside this repo). That
+    # measurement is flat PPO's, not this
     # hierarchy's; it is the reason for the change, not evidence about hPPO.
     #
     # `gamma` is the *environment-step* discount. The manager's own discount is
@@ -541,7 +390,12 @@ class HPPOAgent:
                  ent_coef_manager=0.01, ent_coef_worker=0.01,
                  vf_coef=0.5, max_grad_norm=0.5, target_kl=None,
                  obs_low=None, obs_high=None, max_goal_bound=10.0,
-                 critic_lr_mult=3.0, device="cpu"):
+                 critic_lr_mult=3.0, device="cpu",
+                 autotune_ent_coef=True, target_entropy_frac=0.35, ent_coef_lr=3e-4,
+                 ent_coef_min=1e-4, ent_coef_max=1.0,
+                 target_kl_manager=None, clip_vloss=False,
+                 adv_std_floor_frac=0.0,
+                 ret_rms_horizon_manager=10, ret_rms_horizon_worker=10):
         self.gamma = gamma
         self.manager_freq = manager_freq
         self.gamma_worker = gamma
@@ -552,7 +406,26 @@ class HPPOAgent:
         self.ent_coef_worker = ent_coef_worker
         self.vf_coef = vf_coef
         self.max_grad_norm = max_grad_norm
+        # `target_kl` is the worker's trust-region cap; the manager gets its
+        # own via `target_kl_manager`. No recorded run has ever set the old
+        # shared `target_kl` to non-None, so splitting it this way changes no
+        # existing run's behaviour -- see the manager
+        # collapse investigation for why the manager specifically needs one:
+        # its batch is small and correlated enough that clipping alone does
+        # not stop a single epoch from moving the policy far in one update.
         self.target_kl = target_kl
+        self.target_kl_manager = target_kl_manager
+        # PPO2/CleanRL-style value clipping: clip the critic's new prediction
+        # to within `clip_coef` of its pre-update one before scoring the loss,
+        # so one update cannot move the critic arbitrarily far on a noisy
+        # batch. Shared across heads rather than split, like `clip_vloss`
+        # itself -- see _update_head.
+        self.clip_vloss = clip_vloss
+        # Floor on the advantage-normalisation denominator, as a fraction of
+        # each head's own multi-update running std (see `manager_adv_rms` /
+        # `worker_adv_rms` below). 0.0 reproduces the exact previous
+        # behaviour (divide by this batch's own std alone).
+        self.adv_std_floor_frac = adv_std_floor_frac
         self.device = device
 
         self.manager_limit_low = torch.tensor(-1.0, dtype=torch.float32, device=device)
@@ -560,6 +433,30 @@ class HPPOAgent:
 
         self.worker_limit_low = torch.tensor(worker_act_limit_low, dtype=torch.float32, device=device)
         self.worker_limit_high = torch.tensor(worker_act_limit_high, dtype=torch.float32, device=device)
+
+        # Entropy autotuning: one flag turns it on for both heads, but each
+        # head gets its own log_ent_coef/target_entropy/optimizer, since the
+        # manager (goal_dim, fixed [-1, 1] box) and worker (act_dim, scenario
+        # action box) have unrelated action dimensionalities and scales. See
+        # PPOAgent in ../ppo/ppo.py for why target_entropy is scaled by
+        # log(scale) rather than SAC's usual -act_dim (bounded ScaledBeta
+        # support, not an unbounded Gaussian).
+        self.autotune_ent_coef = autotune_ent_coef
+        self.ent_coef_min = ent_coef_min
+        self.ent_coef_max = ent_coef_max
+        if autotune_ent_coef:
+            self.target_entropy_manager = goal_dim * target_entropy_frac * math.log(2.0)
+            self.log_ent_coef_manager = torch.tensor(
+                math.log(ent_coef_manager), requires_grad=True, device=device
+            )
+            self.ent_coef_optimizer_manager = optim.Adam([self.log_ent_coef_manager], lr=ent_coef_lr)
+
+            worker_scale = worker_act_limit_high - worker_act_limit_low
+            self.target_entropy_worker = act_dim * target_entropy_frac * math.log(worker_scale)
+            self.log_ent_coef_worker = torch.tensor(
+                math.log(ent_coef_worker), requires_grad=True, device=device
+            )
+            self.ent_coef_optimizer_worker = optim.Adam([self.log_ent_coef_worker], lr=ent_coef_lr)
 
         # Observation and goal bounds travel with the agent so that `save()`
         # produces a self-describing checkpoint. Without them a reloaded
@@ -571,7 +468,11 @@ class HPPOAgent:
         self.obs_high = None if obs_high is None else np.asarray(obs_high, dtype=np.float32).ravel()
         self.max_goal_bound = max_goal_bound
 
-        # Manager
+        # Manager. ManagerActor's docstring (algorithms/common.py) is this
+        # codebase's canonical writeup of the manager-collapse investigation
+        # (MAX_CONCENTRATION, clip_vloss, adv_std_floor_frac and why each
+        # was or wasn't adopted) -- referenced by name rather than repeated
+        # in every algorithm that shares this network.
         self.manager_actor = ManagerActor(obs_dim, goal_dim).to(device)
         self.manager_critic = ManagerCritic(obs_dim).to(device)
 
@@ -580,9 +481,35 @@ class HPPOAgent:
         self.worker_critic = WorkerCritic(obs_dim, goal_dim).to(device)
 
         # Each critic learns in standardized-return space; these statistics map
-        # its output back to the raw reward scale that GAE works in.
-        self.manager_ret_rms = RunningMeanStd()
-        self.worker_ret_rms = RunningMeanStd()
+        # its output back to the raw reward scale that GAE works in. Horizon is
+        # per head: the manager's batch is ~manager_freq times smaller and
+        # more prone to a single anomalous rollout dominating a short-memory
+        # estimate, so it can be given a longer one independently of the
+        # worker's.
+        #
+        # The manager is the head that actually needs the normalization: its
+        # reward is the discounted sum of the environment's own reward over a
+        # c-step segment, so its returns inherit the raw +-500 terminal scale
+        # (O(400) targets) against a freshly initialized critic that outputs
+        # ~0 -- see RunningMeanStd's docstring (algorithms/common.py) for why
+        # that gap matters. The worker's intrinsic reward (progress toward
+        # the goal, O(0.1) per step) is already well scaled, so there this is
+        # close to a no-op; it is applied to both heads anyway so they never
+        # differ in the space their critic regresses in, which would make
+        # their metrics incomparable.
+        self.manager_ret_rms = RunningMeanStd(horizon=ret_rms_horizon_manager)
+        self.worker_ret_rms = RunningMeanStd(horizon=ret_rms_horizon_worker)
+
+        # Multi-update running std of each head's raw (pre-normalization)
+        # advantages, used only as a floor under the batch's own std (see
+        # `adv_std_floor_frac` and _update_head) -- not persisted in
+        # save()/load(), since it is a pure training-time stabilizer with no
+        # --resume path that would need it. Built unconditionally rather than
+        # only when adv_std_floor_frac > 0: it is cheap to update and this
+        # avoids a None-vs-object branch on every call to update_manager/
+        # update_worker.
+        self.manager_adv_rms = RunningMeanStd()
+        self.worker_adv_rms = RunningMeanStd()
 
         # Two parameter groups per head, so each critic can run at a higher
         # learning rate than its actor. The critic is the binding constraint
@@ -700,7 +627,7 @@ class HPPOAgent:
     # --- persistence ------------------------------------------------------
 
     def save(self, path):
-        torch.save({
+        checkpoint = {
             "manager_actor": self.manager_actor.state_dict(),
             "manager_critic": self.manager_critic.state_dict(),
             "worker_actor": self.worker_actor.state_dict(),
@@ -719,7 +646,13 @@ class HPPOAgent:
             # different controller, and it also fixes the manager's discount.
             # Saved so an evaluation script cannot get it wrong.
             "manager_freq": self.manager_freq,
-        }, path)
+        }
+        if self.autotune_ent_coef:
+            checkpoint["manager_log_ent_coef"] = float(self.log_ent_coef_manager.detach())
+            checkpoint["worker_log_ent_coef"] = float(self.log_ent_coef_worker.detach())
+            checkpoint["manager_ent_coef_optimizer"] = self.ent_coef_optimizer_manager.state_dict()
+            checkpoint["worker_ent_coef_optimizer"] = self.ent_coef_optimizer_worker.state_dict()
+        torch.save(checkpoint, path)
 
     def load(self, path):
         checkpoint = torch.load(path, map_location=self.device)
@@ -736,7 +669,7 @@ class HPPOAgent:
         try:
             self.manager_optimizer.load_state_dict(checkpoint["manager_optimizer"])
             self.worker_optimizer.load_state_dict(checkpoint["worker_optimizer"])
-        except ValueError:
+        except (ValueError, KeyError):
             print(f"warning: {path} predates the two-group optimisers; actor and "
                   "critic weights loaded, optimiser state discarded")
         if "manager_ret_rms" in checkpoint:
@@ -753,11 +686,52 @@ class HPPOAgent:
         if checkpoint.get("manager_freq") is not None:
             self.manager_freq = checkpoint["manager_freq"]
             self.gamma_manager = self.gamma ** self.manager_freq
+        # Guarded the same way as the optimisers above: a checkpoint trained
+        # with autotune_ent_coef=True loads its tuned value into an agent
+        # built the same way, or folds back to a fixed scalar for one that
+        # wasn't, rather than silently dropping it either way.
+        if checkpoint.get("manager_log_ent_coef") is not None:
+            if self.autotune_ent_coef:
+                with torch.no_grad():
+                    self.log_ent_coef_manager.copy_(
+                        torch.tensor(checkpoint["manager_log_ent_coef"], device=self.device)
+                    )
+                try:
+                    self.ent_coef_optimizer_manager.load_state_dict(
+                        checkpoint["manager_ent_coef_optimizer"]
+                    )
+                except (ValueError, KeyError):
+                    print(f"warning: {path} has no usable manager ent_coef optimiser "
+                          "state; log_ent_coef loaded, optimiser state discarded")
+            else:
+                self.ent_coef_manager = math.exp(checkpoint["manager_log_ent_coef"])
+                print(f"warning: {path} was trained with autotune_ent_coef=True; loaded "
+                      f"manager as a fixed ent_coef={self.ent_coef_manager:.6g} instead")
+        if checkpoint.get("worker_log_ent_coef") is not None:
+            if self.autotune_ent_coef:
+                with torch.no_grad():
+                    self.log_ent_coef_worker.copy_(
+                        torch.tensor(checkpoint["worker_log_ent_coef"], device=self.device)
+                    )
+                try:
+                    self.ent_coef_optimizer_worker.load_state_dict(
+                        checkpoint["worker_ent_coef_optimizer"]
+                    )
+                except (ValueError, KeyError):
+                    print(f"warning: {path} has no usable worker ent_coef optimiser "
+                          "state; log_ent_coef loaded, optimiser state discarded")
+            else:
+                self.ent_coef_worker = math.exp(checkpoint["worker_log_ent_coef"])
+                print(f"warning: {path} was trained with autotune_ent_coef=True; loaded "
+                      f"worker as a fixed ent_coef={self.ent_coef_worker:.6g} instead")
 
     # --- update -----------------------------------------------------------
 
     def _update_head(self, buffer, minibatch_size, update_epochs, policy_forward,
-                     actor, critic, optimizer, ent_coef, ret_rms, prefix):
+                     actor, critic, optimizer, ent_coef, ret_rms, prefix,
+                     log_ent_coef=None, ent_coef_optimizer=None, target_entropy=None,
+                     target_kl=None, clip_vloss=False, adv_rms=None,
+                     adv_std_floor_frac=0.0):
         """One PPO update for a single head.
 
         The manager and the worker run the identical algorithm over their own
@@ -765,9 +739,52 @@ class HPPOAgent:
         to be two near-identical 60-line bodies, which is how the
         value-normalisation and pre-update explained-variance fixes below would
         have landed in one and not the other.
+
+        `log_ent_coef`/`ent_coef_optimizer`/`target_entropy` are only passed
+        when this head is autotuning, in which case `ent_coef` is ignored in
+        favour of `exp(log_ent_coef)` (see ent_coef_value below). Left None,
+        behaviour is identical to before this option existed: the bare
+        `ent_coef` float is used throughout.
+
+        `target_kl`, `clip_vloss`, and `adv_rms`/`adv_std_floor_frac` are the
+        manager-collapse mitigations under test (see ManagerActor's docstring):
+        a per-head trust region, PPO2-style value-loss clipping, and a floor
+        under the advantage-normalisation denominator. Each defaults to the
+        previous behaviour (no trust region, no clipping, plain batch-std
+        normalisation) so an unmodified caller sees no change.
         """
         states, actions, logprobs, returns, advantages = buffer.get()
         batch_size = states.shape[0]
+
+        if batch_size == 0:
+            # This head picked up zero transitions this rollout -- possible
+            # for the manager on a short rollout relative to manager_freq, or
+            # any run of environments that neither hit a c-step boundary nor
+            # terminated. There is no gradient to take and no entropy/KL
+            # statistics to compute, so skip the update entirely: falling
+            # through would mean() over empty tensors into NaN below, and,
+            # worse, feed that NaN into the entropy dual-ascent step, which
+            # permanently overwrites log_ent_coef with NaN (clamp_ does not
+            # recover a NaN, since every comparison against it is false).
+            metrics = {
+                f"{prefix}/loss_policy": float("nan"),
+                f"{prefix}/loss_value": float("nan"),
+                f"{prefix}/entropy": float("nan"),
+                f"{prefix}/approx_kl": float("nan"),
+                f"{prefix}/approx_kl_max": float("nan"),
+                f"{prefix}/ratio_max_dev": float("nan"),
+                f"{prefix}/clipfrac": float("nan"),
+                f"{prefix}/update_epochs_ran": 0.0,
+                f"{prefix}/value_bias": float("nan"),
+                f"{prefix}/value_target_mean": float(ret_rms.mean),
+                f"{prefix}/value_target_std": float(ret_rms.std),
+                f"{prefix}/explained_variance": float("nan"),
+                f"{prefix}/adv_std_raw": float("nan"),
+                f"{prefix}/batch_size": 0.0,
+            }
+            if log_ent_coef is not None:
+                metrics[f"{prefix}/ent_coef"] = float(log_ent_coef.detach().exp())
+            return metrics
 
         # Pre-update value predictions, on the raw reward scale. These are the
         # estimates that actually produced the advantages, which is what
@@ -783,18 +800,38 @@ class HPPOAgent:
         # only the buffer knows how to line it up with what `get()` returned.
         values = buffer.get_values()
 
-        # Advantage normalization
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        # Advantage normalization -- see floor_normalize for what `adv_rms`/
+        # `adv_std_floor_frac` change and why. `adv_std_raw` (the batch's own,
+        # pre-floor std) is logged regardless: it is the quantity the
+        # manager-collapse hypothesis (see ManagerActor's docstring) says
+        # should crater right around a bad update.
+        advantages, adv_std_raw = floor_normalize(advantages, adv_rms, adv_std_floor_frac)
 
         # Value-target normalization: refresh the running statistics on this
         # batch's returns, then regress the critic on standardized targets.
         # `get_*_value` undoes this so GAE keeps working on the raw scale.
         ret_rms.update(returns)
         norm_returns = (returns - ret_rms.mean) / ret_rms.std
+        # Pre-update predictions, re-expressed in the same standardized space
+        # as `newvalue` below, for `clip_vloss`. Approximate: it re-derives
+        # them from the raw-scale `values` using this update's just-refreshed
+        # ret_rms rather than whatever stats were live when they were
+        # collected, in exchange for not carrying a second, already-
+        # standardized copy through the buffer. Unused when clip_vloss=False.
+        old_values_norm = (values - ret_rms.mean) / ret_rms.std
 
         clipfracs = []
         pg_losses, v_losses, entropy_losses, approx_kls = [], [], [], []
+        ratio_max_dev = 0.0
         epochs_ran = 0
+
+        # Held fixed for every epoch/minibatch below, even when autotuning:
+        # this batch gets reused across update_epochs passes, so a coefficient
+        # that moved mid-update would mean epoch 1 and epoch 10 are optimizing
+        # different surrogate objectives. See PPOAgent.update in ../ppo/ppo.py.
+        ent_coef_value = (
+            float(log_ent_coef.detach().exp()) if log_ent_coef is not None else ent_coef
+        )
 
         for epoch in range(update_epochs):
             epochs_ran += 1
@@ -813,6 +850,7 @@ class HPPOAgent:
                     # calculate approx_kl http://joschu.net/blog/kl-approx.html
                     approx_kl = ((ratio - 1) - logratio).mean()
                     clipfracs += [((ratio - 1.0).abs() > self.clip_coef).float().mean().item()]
+                    ratio_max_dev = max(ratio_max_dev, (ratio - 1.0).abs().max().item())
 
                 mb_advantages = advantages[mb_inds]
 
@@ -821,14 +859,18 @@ class HPPOAgent:
                 pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - self.clip_coef, 1 + self.clip_coef)
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-                # Value loss
-                v_loss = 0.5 * ((newvalue - norm_returns[mb_inds]) ** 2).mean()
+                # Value loss -- see clipped_value_loss for what `clip_vloss`
+                # changes and why.
+                v_loss = clipped_value_loss(
+                    newvalue, old_values_norm[mb_inds], norm_returns[mb_inds],
+                    self.clip_coef, clip_vloss
+                )
 
                 # Entropy loss
                 entropy_loss = entropy.mean()
 
                 # Total loss
-                loss = pg_loss - ent_coef * entropy_loss + v_loss * self.vf_coef
+                loss = pg_loss - ent_coef_value * entropy_loss + v_loss * self.vf_coef
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -849,9 +891,26 @@ class HPPOAgent:
             # Optional trust-region backstop. Off by default (target_kl=None),
             # in which case all `update_epochs` always run and clipping is the
             # only mechanism keeping the update near the sampling policy -- so
-            # do not describe such runs as KL-constrained.
-            if self.target_kl is not None and approx_kls[-1] > self.target_kl:
+            # do not describe such runs as KL-constrained. Passed in per call
+            # (update_manager/update_worker each supply their own head's
+            # value) rather than read off `self.target_kl`, since the manager
+            # and worker need independent trust regions -- see
+            # `target_kl_manager` on the agent.
+            if target_kl is not None and approx_kls[-1] > target_kl:
                 break
+
+        # One dual-ascent step per _update_head call (not per minibatch -- see
+        # ent_coef_value above), using this update's mean entropy. If that's
+        # below target_entropy, this pushes log_ent_coef up, raising
+        # ent_coef_value next update; above target, it falls.
+        if log_ent_coef is not None:
+            mean_entropy = float(np.mean(entropy_losses))
+            ent_coef_loss = log_ent_coef * (mean_entropy - target_entropy)
+            ent_coef_optimizer.zero_grad()
+            ent_coef_loss.backward()
+            ent_coef_optimizer.step()
+            with torch.no_grad():
+                log_ent_coef.clamp_(math.log(self.ent_coef_min), math.log(self.ent_coef_max))
 
         # Values are compared on the raw return scale, so explained_variance
         # stays comparable across runs with and without value normalization.
@@ -860,11 +919,16 @@ class HPPOAgent:
         var_y = np.var(returns_np)
         explained_var = np.nan if var_y == 0 else 1 - np.var(returns_np - values_np) / var_y
 
-        return {
+        metrics = {
             f"{prefix}/loss_policy": float(np.mean(pg_losses)),
             f"{prefix}/loss_value": float(np.mean(v_losses)),
             f"{prefix}/entropy": float(np.mean(entropy_losses)),
             f"{prefix}/approx_kl": float(np.mean(approx_kls)),
+            # Worst single minibatch/epoch of this update, not just the mean
+            # -- a collapse can be one bad epoch inside an otherwise unremarkable
+            # update, which averaging over all of them would hide.
+            f"{prefix}/approx_kl_max": float(np.max(approx_kls)),
+            f"{prefix}/ratio_max_dev": float(ratio_max_dev),
             f"{prefix}/clipfrac": float(np.mean(clipfracs)),
             # Epochs actually run; below update_epochs only when target_kl fired.
             f"{prefix}/update_epochs_ran": float(epochs_ran),
@@ -877,11 +941,18 @@ class HPPOAgent:
             # float() not just for tidiness: np.var over a float32 batch returns
             # np.float32, which is not a Python float and serialises awkwardly.
             f"{prefix}/explained_variance": float(explained_var),
+            # Pre-normalization advantage std -- the manager-collapse
+            # hypothesis under test says this should crater right around a
+            # bad update (see ManagerActor's docstring and `adv_std_floor_frac`).
+            f"{prefix}/adv_std_raw": adv_std_raw,
             # The two heads see different batch sizes off the same rollout
             # (the manager's is ~c times smaller), and the manager's varies
             # with how many episodes ended early. Logged rather than inferred.
             f"{prefix}/batch_size": float(batch_size),
         }
+        if log_ent_coef is not None:
+            metrics[f"{prefix}/ent_coef"] = float(log_ent_coef.detach().exp())
+        return metrics
 
     def update_manager(self, buffer, minibatch_size, update_epochs):
         return self._update_head(
@@ -893,6 +964,13 @@ class HPPOAgent:
             ent_coef=self.ent_coef_manager,
             ret_rms=self.manager_ret_rms,
             prefix="manager",
+            log_ent_coef=self.log_ent_coef_manager if self.autotune_ent_coef else None,
+            ent_coef_optimizer=self.ent_coef_optimizer_manager if self.autotune_ent_coef else None,
+            target_entropy=self.target_entropy_manager if self.autotune_ent_coef else None,
+            target_kl=self.target_kl_manager,
+            clip_vloss=self.clip_vloss,
+            adv_rms=self.manager_adv_rms,
+            adv_std_floor_frac=self.adv_std_floor_frac,
         )
 
     def update_worker(self, buffer, minibatch_size, update_epochs):
@@ -908,4 +986,11 @@ class HPPOAgent:
             ent_coef=self.ent_coef_worker,
             ret_rms=self.worker_ret_rms,
             prefix="worker",
+            log_ent_coef=self.log_ent_coef_worker if self.autotune_ent_coef else None,
+            ent_coef_optimizer=self.ent_coef_optimizer_worker if self.autotune_ent_coef else None,
+            target_entropy=self.target_entropy_worker if self.autotune_ent_coef else None,
+            target_kl=self.target_kl,
+            clip_vloss=self.clip_vloss,
+            adv_rms=self.worker_adv_rms,
+            adv_std_floor_frac=self.adv_std_floor_frac,
         )

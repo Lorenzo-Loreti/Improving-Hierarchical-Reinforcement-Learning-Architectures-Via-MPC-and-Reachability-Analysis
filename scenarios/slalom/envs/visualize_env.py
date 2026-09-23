@@ -6,7 +6,7 @@ SlalomEnvConfig -- built purely from `config` + `width_profile`, no
 ever draws flat walls at +-tunnel_width/2, this traces the actual
 per-segment `WidthProfile` bounds, so the two gates are visible.
 
-Usage (from the `Slalom_PPO_NoNoise` project root):
+Usage (from scenarios/slalom/, so `envs` resolves as a package):
     python -m envs.visualize_env
     python -m envs.visualize_env --tunnel-length 12 --output envs/env_layout.png
 """
@@ -23,7 +23,7 @@ from .width_profile import slalom_profile
 def resolve_profile(config: SlalomEnvConfig):
     """Mirrors SlalomEnv's own fallback: an explicit `config.width_profile`
     wins, otherwise fall back to `slalom_profile` (the profile every real
-    training run in this project actually uses -- see script_slalom_ppo.py)."""
+    training run in this project actually uses -- see scripts/script_ppo.py)."""
     if config.width_profile is not None:
         return config.width_profile
     return slalom_profile(
@@ -91,7 +91,7 @@ def plot_env(config: SlalomEnvConfig, ax=None):
         f"dt={config.dt}   v_max={config.v_max}   u_max={config.u_max}   "
         f"sigma_p={config.sigma_p}   sigma_v={config.sigma_v}\n"
         f"max_steps={config.max_steps}   step_penalty={config.step_penalty}   "
-        f"goal_reward={config.goal_reward}   collision_reward={config.collision_reward}   "
+        f"goal_reward={config.goal_reward}   contact_penalty={config.contact_penalty}   "
         f"progress_reward_coef={config.progress_reward_coef}"
     )
     ax.figure.subplots_adjust(bottom=0.26)

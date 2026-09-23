@@ -10,39 +10,41 @@ class SlalomEnvConfig:
     dt: float = 0.1
     tunnel_length: float = 10.0
     tunnel_width: float = 4.0
-    v_max: float = 5.0
+    v_max: float = 1.2
     u_max: float = 2.5
     sigma_p: float = 0.0
     sigma_v: float = 0.0
-    max_steps: int = 500
+    max_steps: int = 200
 
     step_penalty: float = -1.0
-    # -500 made a collision worse than running out the clock with partial
-    # progress, so both flat PPO and hPPO converged to a risk-averse
-    # "advance a bit, then idle" policy that never attempts the gates --
-    # 0% success across every seed and budget tested (see hppo_explanation.md
-    # stall-optimum discussion). -150 keeps collisions clearly undesirable
-    # while making an honest attempt worth the risk in expectation; combined
-    # with impact_penalty_coef (unchanged) still discouraging reckless
-    # high-speed impacts specifically. Below about -100 the balance instead
-    # favours a "rush and crash" policy, and above about -250 it reverts to
-    # the original idle trap -- this is empirically a narrow window, and
-    # solving still shows real seed-to-seed variance even inside it.
-    collision_reward: float = -150.0
-    goal_reward: float = 500.0
-
-    # Extra penalty on collision, proportional to the lateral impact speed
-    # |v_y| (component normal to the wall). Kept separate from
-    # `collision_reward` so the fixed outcome penalty stays comparable across
-    # soft/hard impacts; 0.0 disables it (no behavior change).
-    impact_penalty_coef: float = 100.0
+    # Historical note: a *terminal* collision reward of -500 (back when a
+    # wall contact ended the episode) made a collision worse than running
+    # out the clock with partial progress, so both flat PPO and hPPO
+    # converged to a risk-averse "advance a bit, then idle" policy that
+    # never attempted the gates -- 0% success across every seed and budget
+    # tested. -150 kept
+    # collisions clearly undesirable while making an honest attempt worth
+    # the risk in expectation -- but was still a narrow, fragile window.
+    #
+    # The wall is no longer a terminal event: a contact clamps p_y to the
+    # violated bound and zeroes v_y (a fully inelastic bounce -- v_x is
+    # untouched, only the wall-normal component is absorbed), and the
+    # episode continues. `contact_penalty` is the small, per-step-of-contact
+    # penalty this now costs (additive to step_penalty, not a replacement),
+    # flat regardless of the impact speed. -50.0 is a starting point, not a
+    # tuned value -- unlike the old terminal reward this can fire on many
+    # steps of the same episode (e.g. wall-hugging through a gate), so it
+    # needs its own empirical pass rather than inheriting the old
+    # terminal-reward scale.
+    contact_penalty: float = -50.0
+    goal_reward: float = 1000.0
 
     # Potential-based progress shaping: adds `progress_reward_coef * (p_x' - p_x)`
     # to the reward every step, on top of whichever branch (time penalty /
     # collision / goal) fired. Depends only on p_x, never p_y -- important
     # here since the gates are off-center, so a Euclidean-distance-to-goal
     # potential would fight them.
-    progress_reward_coef: float = 50.0
+    progress_reward_coef: float = 10.0
 
     # Piecewise-constant lateral width profile (see width_profile.py, e.g.
     # slalom_profile()), overriding the plain constant width `tunnel_width`
@@ -70,10 +72,3 @@ class SlalomEnvConfig:
             raise ValueError(f"sigma_v must be >= 0, got {self.sigma_v}")
         if self.max_steps <= 0:
             raise ValueError(f"max_steps must be > 0, got {self.max_steps}")
-
-
-def make_env(config: "SlalomEnvConfig | None" = None, render_mode: "str | None" = None):
-    """Blessed construction path for a single SlalomEnv instance."""
-    from .slalom_env import SlalomEnv
-
-    return SlalomEnv(config=config, render_mode=render_mode)

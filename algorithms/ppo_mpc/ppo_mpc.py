@@ -3,109 +3,12 @@ import math
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
-from torch.distributions import Beta
 import numpy as np
 
-def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
-    torch.nn.init.orthogonal_(layer.weight, std)
-    torch.nn.init.constant_(layer.bias, bias_const)
-    return layer
-
-
-def normalize_obs(obs, low, high):
-    """Map physical [low, high] observation bounds to [-1, 1].
-
-    Ported from RL/PPO/ppo.py and HRL/hPPO/hppo.py. The environment's
-    observation bounds are fixed and hard-enforced by the env, so there is
-    nothing to estimate: the map is exact, exactly invertible, and needs no
-    running statistics. Without it the manager network sees raw physical units --
-    p_x in [-1, 11] against v_y in [-2, 2], a >5x dynamic-range mismatch
-    across input dimensions feeding the same orthogonally-initialized layer.
-
-    Canonical definition. `PPOMPCAgent` stores the bounds it was built with
-    and exposes this as a method, so a reloaded checkpoint carries its own
-    observation map instead of depending on the caller to reproduce it.
-    """
-    return 2.0 * (obs - low) / (high - low) - 1.0
-
-
-class RunningMeanStd:
-    """Chan et al. parallel running mean/variance, used to normalize the
-    manager critic's regression targets. Ported from RL/PPO/ppo.py.
-
-    The manager's reward is the discounted sum of the environment's own
-    reward over a c-step segment, so its returns inherit the raw +-500
-    terminal scale -- O(400) targets for a freshly initialized critic that
-    outputs ~0 and can move each weight by at most `lr` per step. The climb
-    costs more gradient steps than a run provides, and the critic ends up
-    correlated with the true value but hundreds of units biased. Regressing
-    on standardized targets removes that climb entirely.
-    """
-
-    def __init__(self, epsilon=1e-4, horizon=10):
-        self.mean = 0.0
-        self.var = 1.0
-        self.count = epsilon
-        # Cap the effective sample count at `horizon` batches so the statistics
-        # track the *current* return distribution. With an unbounded count the
-        # early-training transient permanently inflates the variance, and late
-        # targets get squeezed into a narrow band -- a milder rerun of the
-        # scale problem this class exists to prevent.
-        self.horizon = horizon
-
-    def update(self, x):
-        batch_mean = float(x.mean())
-        batch_var = float(x.var(unbiased=False))
-        batch_count = x.numel()
-
-        delta = batch_mean - self.mean
-        tot_count = self.count + batch_count
-
-        self.mean += delta * batch_count / tot_count
-        m_a = self.var * self.count
-        m_b = batch_var * batch_count
-        self.var = (m_a + m_b + delta**2 * self.count * batch_count / tot_count) / tot_count
-        self.count = min(tot_count, self.horizon * batch_count)
-
-    @property
-    def std(self):
-        return math.sqrt(self.var) + 1e-8
-
-    def state_dict(self):
-        return {"mean": self.mean, "var": self.var, "count": self.count}
-
-    def load_state_dict(self, state):
-        self.mean = state["mean"]
-        self.var = state["var"]
-        self.count = state["count"]
-
-# ----------------- Distributions ----------------- #
-
-class ScaledBeta:
-    def __init__(self, alpha, beta, low=-1.0, high=1.0):
-        self.dist = Beta(alpha, beta)
-        self.low = low
-        self.scale = high - low
-
-    def sample(self):
-        return self.dist.sample() * self.scale + self.low
-
-    def deterministic_sample(self):
-        # Mean of Beta distribution is alpha / (alpha + beta)
-        mean = self.dist.concentration1 / (self.dist.concentration1 + self.dist.concentration0)
-        return mean * self.scale + self.low
-
-    def log_prob(self, action):
-        # Unscale action back to [0, 1]
-        unscaled_action = (action - self.low) / self.scale
-        unscaled_action = torch.clamp(unscaled_action, 1e-5, 1.0 - 1e-5)
-        # Apply log determinant of Jacobian correction
-        return self.dist.log_prob(unscaled_action) - torch.log(self.scale)
-
-    def entropy(self):
-        # Apply entropy shift correction
-        return self.dist.entropy() + torch.log(self.scale)
+from common import (
+    layer_init, normalize_obs, clipped_value_loss, floor_normalize,
+    ScaledBeta, RunningMeanStd, ManagerActor, ManagerCritic,
+)
 
 # ----------------- Buffers ----------------- #
 
@@ -324,38 +227,6 @@ class ManagerVecRolloutBuffer:
 
 # ----------------- Manager PPO Networks ----------------- #
 
-class ManagerActor(nn.Module):
-    def __init__(self, obs_dim, goal_dim):
-        super().__init__()
-        self.goal_dim = goal_dim
-        self.net = nn.Sequential(
-            layer_init(nn.Linear(obs_dim, 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, goal_dim * 2), std=0.01)
-        )
-        
-    def forward(self, obs):
-        x = self.net(obs)
-        alpha = F.softplus(x[..., :self.goal_dim]) + 1.0
-        beta = F.softplus(x[..., self.goal_dim:]) + 1.0
-        return alpha, beta
-
-class ManagerCritic(nn.Module):
-    def __init__(self, obs_dim):
-        super().__init__()
-        self.net = nn.Sequential(
-            layer_init(nn.Linear(obs_dim, 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, 1), std=1.0)
-        )
-        
-    def forward(self, obs):
-        return self.net(obs)
-
 # ----------------- PPOMPC Agent Wrapper ----------------- #
 
 class PPOMPCAgent:
@@ -368,7 +239,11 @@ class PPOMPCAgent:
                  gae_lambda=0.95, clip_coef=0.2,
                  ent_coef_manager=0.01, vf_coef=0.5, max_grad_norm=0.5,
                  obs_low=None, obs_high=None, goal_scale=None,
-                 critic_lr_mult=3.0, device="cpu"):
+                 critic_lr_mult=3.0, device="cpu",
+                 autotune_ent_coef=True, target_entropy_frac=0.35, ent_coef_lr=3e-4,
+                 ent_coef_min=1e-4, ent_coef_max=1.0,
+                 target_kl_manager=None, clip_vloss=True,
+                 adv_std_floor_frac=0.0, ret_rms_horizon_manager=10):
         self.gamma = gamma
         self.manager_freq = manager_freq
         # The manager decides once per c-step segment, so one manager step is
@@ -385,8 +260,35 @@ class PPOMPCAgent:
         self.max_grad_norm = max_grad_norm
         self.device = device
 
+        # Manager-collapse mitigations, ported from HPPOAgent in
+        # ../hppo/hppo.py -- see ManagerActor's docstring above for why this
+        # module needs them too. `clip_vloss` defaults on here (unlike
+        # HPPOAgent, where it defaults off and only each scenario's
+        # script_hppo.py flips it): the 6-seed hppo ablation's evidence is
+        # being extended by architectural similarity, not yet independently
+        # re-validated on this module.
+        self.target_kl_manager = target_kl_manager
+        self.clip_vloss = clip_vloss
+        self.adv_std_floor_frac = adv_std_floor_frac
+
         self.manager_limit_low = torch.tensor(-1.0, dtype=torch.float32, device=device)
         self.manager_limit_high = torch.tensor(1.0, dtype=torch.float32, device=device)
+
+        # Entropy autotuning: on by default (see autotune_ent_coef's default
+        # above), same as HPPOAgent's manager head. See PPOAgent in
+        # ../ppo/ppo.py for why target_entropy is scaled by log(scale) rather
+        # than SAC's usual -act_dim (bounded ScaledBeta support, not an
+        # unbounded Gaussian). The manager's action box here is always fixed
+        # [-1, 1], hence log(2.0).
+        self.autotune_ent_coef = autotune_ent_coef
+        self.ent_coef_min = ent_coef_min
+        self.ent_coef_max = ent_coef_max
+        if autotune_ent_coef:
+            self.target_entropy = goal_dim * target_entropy_frac * math.log(2.0)
+            self.log_ent_coef = torch.tensor(
+                math.log(ent_coef_manager), requires_grad=True, device=device
+            )
+            self.ent_coef_optimizer = optim.Adam([self.log_ent_coef], lr=ent_coef_lr)
 
         # Observation bounds and goal scale travel with the agent so that
         # `save()` produces a self-describing checkpoint. Without them a
@@ -398,12 +300,32 @@ class PPOMPCAgent:
         self.goal_scale = None if goal_scale is None else np.asarray(goal_scale, dtype=np.float32).ravel()
 
         # --- Manager (PPO) ---
+        # Architecturally identical to HPPOAgent's manager (same network,
+        # same PPO update), so it carries the same risk and the same
+        # mitigations, adopted alongside it: `target_kl_manager`,
+        # `clip_vloss` (on by default here, extending hppo's 6-seed slalom
+        # result without a dedicated ablation of its own yet), and
+        # `adv_std_floor_frac` (off by default -- hppo's own ablation gave
+        # it a mixed, seed-inconsistent result). See ManagerActor's
+        # docstring (algorithms/common.py) for the full mechanism writeup.
         self.manager_actor = ManagerActor(obs_dim, goal_dim).to(device)
         self.manager_critic = ManagerCritic(obs_dim).to(device)
 
         # The critic learns in standardized-return space; these statistics
-        # map its output back to the raw reward scale that GAE works in.
-        self.manager_ret_rms = RunningMeanStd()
+        # map its output back to the raw reward scale that GAE works in. The
+        # manager's reward is the discounted sum of the environment's own
+        # reward over a c-step segment, so its returns inherit the raw +-500
+        # terminal scale (O(400) targets) against a freshly initialized
+        # critic that outputs ~0 -- see RunningMeanStd's docstring
+        # (algorithms/common.py) for why that gap matters.
+        self.manager_ret_rms = RunningMeanStd(horizon=ret_rms_horizon_manager)
+
+        # Multi-update running std of the manager's raw (pre-normalization)
+        # advantages, used only as a floor under the batch's own std (see
+        # `adv_std_floor_frac` and floor_normalize) -- not persisted in
+        # save()/load(), a pure training-time stabilizer with no --resume
+        # path that would need it.
+        self.manager_adv_rms = RunningMeanStd()
 
         # Two parameter groups, so the critic can run at a higher learning
         # rate than the actor -- the critic is the binding constraint early in
@@ -478,7 +400,7 @@ class PPOMPCAgent:
     # --- persistence --------------------------------------------------------
 
     def save(self, path):
-        torch.save({
+        checkpoint = {
             "manager_actor": self.manager_actor.state_dict(),
             "manager_critic": self.manager_critic.state_dict(),
             "manager_optimizer": self.manager_optimizer.state_dict(),
@@ -493,7 +415,11 @@ class PPOMPCAgent:
             # a reloaded manager that re-plans at a different c is a different
             # controller, and it also fixes the manager's discount.
             "manager_freq": self.manager_freq,
-        }, path)
+        }
+        if self.autotune_ent_coef:
+            checkpoint["manager_log_ent_coef"] = float(self.log_ent_coef.detach())
+            checkpoint["manager_ent_coef_optimizer"] = self.ent_coef_optimizer.state_dict()
+        torch.save(checkpoint, path)
 
     def load(self, path):
         checkpoint = torch.load(path, map_location=self.device)
@@ -518,10 +444,56 @@ class PPOMPCAgent:
         if checkpoint.get("manager_freq") is not None:
             self.manager_freq = checkpoint["manager_freq"]
             self.gamma_manager = self.gamma ** self.manager_freq
+        if checkpoint.get("manager_log_ent_coef") is not None:
+            if self.autotune_ent_coef:
+                with torch.no_grad():
+                    self.log_ent_coef.copy_(
+                        torch.tensor(checkpoint["manager_log_ent_coef"], device=self.device)
+                    )
+                try:
+                    self.ent_coef_optimizer.load_state_dict(checkpoint["manager_ent_coef_optimizer"])
+                except (ValueError, KeyError):
+                    print(f"warning: {path} has no usable ent_coef optimiser state; "
+                          "log_ent_coef loaded, optimiser state discarded")
+            else:
+                self.ent_coef_manager = math.exp(checkpoint["manager_log_ent_coef"])
+                print(f"warning: {path} was trained with autotune_ent_coef=True; "
+                      f"loaded as a fixed ent_coef_manager={self.ent_coef_manager:.6g} instead")
 
     def update_manager(self, buffer, minibatch_size, update_epochs):
         states, actions, logprobs, returns, advantages = buffer.get()
         batch_size = states.shape[0]
+
+        if batch_size == 0:
+            # The manager can end a rollout with zero transitions -- a rollout
+            # short relative to manager_freq, or a run of environments that
+            # neither hit a c-step boundary nor terminated. There is no
+            # gradient to take and no entropy statistic to compute, so skip
+            # the update entirely: falling through would mean() over empty
+            # tensors into nan, and, worse, feed that nan into
+            # manager_ret_rms.update() and the entropy dual-ascent step below,
+            # both of which permanently absorb a nan into their running state
+            # (clamp_ does not recover a nan, since every comparison against
+            # it is false). See HPPOAgent._update_head in ../hppo/hppo.py.
+            metrics = {
+                "manager/loss_policy": float("nan"),
+                "manager/loss_value": float("nan"),
+                "manager/entropy": float("nan"),
+                "manager/approx_kl": float("nan"),
+                "manager/approx_kl_max": float("nan"),
+                "manager/ratio_max_dev": float("nan"),
+                "manager/clipfrac": float("nan"),
+                "manager/update_epochs_ran": 0.0,
+                "manager/value_bias": float("nan"),
+                "manager/value_target_mean": float(self.manager_ret_rms.mean),
+                "manager/value_target_std": float(self.manager_ret_rms.std),
+                "manager/explained_variance": float("nan"),
+                "manager/adv_std_raw": float("nan"),
+                "manager/batch_size": 0.0,
+            }
+            if self.autotune_ent_coef:
+                metrics["manager/ent_coef"] = float(self.log_ent_coef.detach().exp())
+            return metrics
 
         # Pre-update value predictions, on the raw reward scale. These are the
         # estimates that actually produced the advantages, which is what
@@ -535,19 +507,39 @@ class PPOMPCAgent:
         # knows how to line its storage up with what `get()` returned.
         values = buffer.get_values()
 
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        # Advantage normalization -- see floor_normalize for what
+        # `manager_adv_rms`/`adv_std_floor_frac` change and why. `adv_std_raw`
+        # (the batch's own, pre-floor std) is logged regardless: it is the
+        # quantity the manager-collapse hypothesis (see ManagerActor's
+        # docstring) says to watch.
+        advantages, adv_std_raw = floor_normalize(
+            advantages, self.manager_adv_rms, self.adv_std_floor_frac
+        )
 
         # Value-target normalization: refresh the running statistics on this
         # batch's returns, then regress the critic on standardized targets.
         # `get_manager_value` undoes this so GAE keeps working on the raw scale.
         self.manager_ret_rms.update(returns)
         norm_returns = (returns - self.manager_ret_rms.mean) / self.manager_ret_rms.std
+        # Pre-update predictions, re-expressed in the same standardized space
+        # as `newvalue` below, for `clip_vloss`. See HPPOAgent._update_head in
+        # ../hppo/hppo.py for the same approximation this makes.
+        old_values_norm = (values - self.manager_ret_rms.mean) / self.manager_ret_rms.std
 
         clipfracs = []
 
         pg_losses, v_losses, entropy_losses, approx_kls = [], [], [], []
+        ratio_max_dev = 0.0
+        epochs_ran = 0
+
+        # Held fixed for every epoch/minibatch below, even when autotuning --
+        # see PPOAgent.update in ../ppo/ppo.py for why.
+        ent_coef_value = (
+            float(self.log_ent_coef.detach().exp()) if self.autotune_ent_coef else self.ent_coef_manager
+        )
 
         for epoch in range(update_epochs):
+            epochs_ran += 1
             b_inds = torch.randperm(batch_size, device=self.device)
             for start in range(0, batch_size, minibatch_size):
                 end = start + minibatch_size
@@ -564,6 +556,7 @@ class PPOMPCAgent:
                 with torch.no_grad():
                     approx_kl = ((ratio - 1) - logratio).mean()
                     clipfracs += [((ratio - 1.0).abs() > self.clip_coef).float().mean().item()]
+                    ratio_max_dev = max(ratio_max_dev, (ratio - 1.0).abs().max().item())
 
                 mb_advantages = advantages[mb_inds]
 
@@ -572,14 +565,18 @@ class PPOMPCAgent:
                 pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - self.clip_coef, 1 + self.clip_coef)
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-                # Value loss
-                v_loss = 0.5 * ((newvalue - norm_returns[mb_inds]) ** 2).mean()
+                # Value loss -- see clipped_value_loss for what `clip_vloss`
+                # changes and why.
+                v_loss = clipped_value_loss(
+                    newvalue, old_values_norm[mb_inds], norm_returns[mb_inds],
+                    self.clip_coef, self.clip_vloss
+                )
 
                 # Entropy loss
                 entropy_loss = entropy.mean()
 
                 # Total loss
-                loss = pg_loss - self.ent_coef_manager * entropy_loss + v_loss * self.vf_coef
+                loss = pg_loss - ent_coef_value * entropy_loss + v_loss * self.vf_coef
 
                 self.manager_optimizer.zero_grad()
                 loss.backward()
@@ -594,6 +591,25 @@ class PPOMPCAgent:
                 entropy_losses.append(entropy_loss.item())
                 approx_kls.append(approx_kl.item())
 
+            # Optional trust-region backstop. Off by default
+            # (target_kl_manager=None), in which case all `update_epochs`
+            # always run and clipping is the only mechanism keeping the
+            # update near the sampling policy. See HPPOAgent._update_head in
+            # ../hppo/hppo.py.
+            if self.target_kl_manager is not None and approx_kls[-1] > self.target_kl_manager:
+                break
+
+        # One dual-ascent step per update_manager call (not per minibatch --
+        # see ent_coef_value above), using this update's mean entropy.
+        if self.autotune_ent_coef:
+            mean_entropy = float(np.mean(entropy_losses))
+            ent_coef_loss = self.log_ent_coef * (mean_entropy - self.target_entropy)
+            self.ent_coef_optimizer.zero_grad()
+            ent_coef_loss.backward()
+            self.ent_coef_optimizer.step()
+            with torch.no_grad():
+                self.log_ent_coef.clamp_(math.log(self.ent_coef_min), math.log(self.ent_coef_max))
+
         # Values are compared on the raw return scale, so explained_variance
         # stays comparable across runs with and without value normalization.
         returns_np = returns.cpu().numpy()
@@ -601,14 +617,26 @@ class PPOMPCAgent:
         var_y = np.var(returns_np)
         explained_var = np.nan if var_y == 0 else 1 - np.var(returns_np - values_np) / var_y
 
-        return {
+        metrics = {
             "manager/loss_policy": float(np.mean(pg_losses)),
             "manager/loss_value": float(np.mean(v_losses)),
             "manager/entropy": float(np.mean(entropy_losses)),
             "manager/approx_kl": float(np.mean(approx_kls)),
+            # Worst single minibatch/epoch of this update, not just the mean.
+            "manager/approx_kl_max": float(np.max(approx_kls)),
+            "manager/ratio_max_dev": float(ratio_max_dev),
             "manager/clipfrac": float(np.mean(clipfracs)),
+            # Epochs actually run; below update_epochs only when
+            # target_kl_manager fired.
+            "manager/update_epochs_ran": float(epochs_ran),
             "manager/value_bias": float((values - returns).mean().item()),
             "manager/value_target_mean": float(self.manager_ret_rms.mean),
             "manager/value_target_std": float(self.manager_ret_rms.std),
             "manager/explained_variance": float(explained_var),
+            # Pre-normalization advantage std -- see floor_normalize.
+            "manager/adv_std_raw": adv_std_raw,
+            "manager/batch_size": float(batch_size),
         }
+        if self.autotune_ent_coef:
+            metrics["manager/ent_coef"] = float(self.log_ent_coef.detach().exp())
+        return metrics

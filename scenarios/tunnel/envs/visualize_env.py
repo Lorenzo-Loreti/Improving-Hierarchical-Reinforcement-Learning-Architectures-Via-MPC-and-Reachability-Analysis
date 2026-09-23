@@ -3,10 +3,10 @@
 Draws the corridor, spawn box, and goal line implied by a TunnelEnvConfig
 -- built purely from `config` + `width_profile`, no `gym.Env` instantiation
 needed. TunnelEnv has no gates (just a constant-width corridor), so this is
-simpler than its Gauntlet/Slalom counterparts, but keeps the same layout and
-parameter annotations for consistency across the three environments.
+simpler than its Slalom counterpart, but keeps the same layout and parameter
+annotations for consistency across the two environments.
 
-Usage (from the `Tunnel_PPO_NoNoise` project root):
+Usage (from scenarios/tunnel/, so `envs` resolves as a package):
     python -m envs.visualize_env
     python -m envs.visualize_env --tunnel-width 3 --output envs/env_layout.png
 """
@@ -22,7 +22,7 @@ from .width_profile import constant_profile
 def resolve_profile(config: TunnelEnvConfig):
     """Mirrors TunnelEnv's own fallback: an explicit `config.width_profile`
     wins, otherwise fall back to `constant_profile` (what every real training
-    run in this project actually uses -- see script_tunnel_ppo.py)."""
+    run in this project actually uses -- see scripts/script_ppo.py)."""
     if config.width_profile is not None:
         return config.width_profile
     return constant_profile(config.tunnel_width)
@@ -82,7 +82,7 @@ def plot_env(config: TunnelEnvConfig, ax=None):
         f"dt={config.dt}   v_max={config.v_max}   u_max={config.u_max}   "
         f"sigma_p={config.sigma_p}   sigma_v={config.sigma_v}\n"
         f"max_steps={config.max_steps}   step_penalty={config.step_penalty}   "
-        f"goal_reward={config.goal_reward}   collision_reward={config.collision_reward}   "
+        f"goal_reward={config.goal_reward}   contact_penalty={config.contact_penalty}   "
         f"progress_reward_coef={config.progress_reward_coef}"
     )
     ax.figure.subplots_adjust(bottom=0.26)

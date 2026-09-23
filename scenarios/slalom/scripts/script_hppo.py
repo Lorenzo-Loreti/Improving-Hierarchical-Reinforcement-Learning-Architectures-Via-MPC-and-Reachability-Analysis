@@ -9,11 +9,14 @@ import sys
 # for the flat `hppo` module it imports by bare name.
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'algorithms', 'hppo')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'algorithms')))
 from envs.config import SlalomEnvConfig
 from envs.slalom_env import SlalomEnv
 from envs.vec_slalom_env import SlalomVecEnv
 from envs.width_profile import slalom_profile
 from hppo import HPPOAgent, VecRolloutBuffer, ManagerVecRolloutBuffer
+from optimal_solver import spawn_grid, precompute_optimal_grid, MinTimeSolver
+from solved_check import check_solved
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -39,14 +42,24 @@ def parse_args():
     # (flat PPO, PPO+MPC) trains against -- passing them is how a single run
     # can test a different risk/reward balance without moving that shared
     # default out from under everyone else. See envs/config.py.
-    parser.add_argument("--collision-reward", type=float, default=SlalomEnvConfig().collision_reward,
-        help="terminal reward on collision (before --impact-penalty-coef). "
-             "Defaults to SlalomEnvConfig's own default, so omitting this "
-             "reproduces the shared environment every other script trains "
-             "against -- see envs/config.py for why it is -150, not -500")
-    parser.add_argument("--impact-penalty-coef", type=float, default=SlalomEnvConfig().impact_penalty_coef,
-        help="extra collision penalty, proportional to lateral impact speed "
-             "|v_y|. 0.0 disables it")
+    parser.add_argument("--env-u-max", type=float, default=None,
+        help="REGIME STUDY ONLY. Override the environment's acceleration "
+             "limit u_max (default None = SlalomEnvConfig's own 2.5, i.e. the "
+             "canonical environment every architecture in this repo is "
+             "compared on). Lowering it makes the plant sluggish, raising the "
+             "agility ratio rho = v_max/(u_max*manager_freq*dt). Mirrors the "
+             "identically-named flag in the other three scripts; hPPO is the "
+             "*learned*-worker arm of that sweep, the one control that says "
+             "whether robustness to plant sluggishness comes from hierarchy "
+             "as such or specifically from the model-based worker. See "
+             "docs/reachability-regime-study.md")
+    parser.add_argument("--contact-penalty", type=float, default=SlalomEnvConfig().contact_penalty,
+        help="small penalty applied every step the agent is in contact with a "
+             "wall, flat regardless of impact speed -- no longer a terminal "
+             "reward: a contact clamps the agent to the wall and absorbs "
+             "v_y, but the episode continues. Defaults to SlalomEnvConfig's "
+             "own default, so omitting this reproduces the shared environment "
+             "every other script trains against -- see envs/config.py")
 
     # Algorithm specific arguments
     parser.add_argument("--total-timesteps", type=int, default=500000,
@@ -70,27 +83,157 @@ def parse_args():
              "varies by seed, and annealing to ~0 by the end of a fixed "
              "training budget starved that escape of gradient signal before "
              "it could happen on several seeds. See envs/config.py's "
-             "collision_reward comment for the fuller story")
+             "contact_penalty comment for the fuller story")
     parser.add_argument("--lr-floor-frac", type=float, default=0.0,
         help="the linear LR anneal stops at this fraction of the base rate "
              "instead of decaying all the way to 0. At 0.0 (default) this is "
              "exactly the previous anneal-to-zero behaviour. A floor keeps "
              "the last updates from freezing (approx_kl collapsing to ~0), "
              "which otherwise burns the tail of --total-timesteps on a "
-             "policy that can no longer move -- see hppo_explanation.md "
-             "stall-optimum discussion")
+             "policy that can no longer move")
     parser.add_argument("--manager-freq", type=int, default=10,
         help="c: the number of steps the manager's goal is valid for. Also "
              "fixes the manager's discount, gamma**c")
+    parser.add_argument("--replan-on-collision", type=lambda x: x.lower() in ['true', '1', 't', 'y', 'yes'], default=True,
+        help="force the manager to resample a goal the instant the worker "
+             "contacts a wall, instead of waiting out --manager-freq or "
+             "episode end -- a wall hit can clamp position/zero velocity in "
+             "a way that makes the in-flight goal unreachable for the rest "
+             "of the segment. On by default; pass --replan-on-collision "
+             "false to restore the pre-fix behaviour.")
     parser.add_argument("--max-goal-bound", type=float, default=10.0,
         help="the manager's [-1, 1] action is scaled by this to a physical "
              "goal displacement in metres, and divided by it again to form "
              "the worker's input")
+    # --- worker termination-avoidance ------------------------------------
+    #
+    # The worker is trained on a purely *intrinsic* reward: the per-step
+    # reduction in the distance to the manager's goal. That reward stream has
+    # no terminal term, so in the worker's own MDP reaching the environment's
+    # goal line is an absorbing state of value exactly 0, while *not* reaching
+    # it keeps paying ~v_max*dt approx 0.12 per step forever (the manager hands
+    # out a fresh, effectively unreachable goal every --manager-freq steps, so
+    # the stream never runs dry). Discounted at --gamma that is a value of
+    # O(10) for never finishing against 0 for finishing: the worker's optimal
+    # policy under its own reward is to approach the goal line and stall.
+    #
+    # That is exactly what a 500k-step slalom run does. Around update ~50 (of
+    # 244) the worker starts braking near p_x = L, episode length climbs
+    # 80 -> 200, and eval success falls 1.00 -> 0.00 over ~30 updates and
+    # never recovers. Probing the collapsed checkpoint at (p_x, p_y, v) =
+    # (9.5, 0, 1.2, 0): the worker's deterministic a_x is between -1.6 and
+    # -2.1 for *every goal in the manager's entire action box* -- no goal the
+    # manager can emit makes it cross the line, which is why the hierarchy has
+    # no in-run recovery path. Flat PPO and both PPO+MPC variants are immune
+    # for the same reason: neither has a *learned* worker optimizing a
+    # reward stream that termination cuts off (flat PPO optimizes the
+    # environment's own reward, whose terminal is +goal_reward; PPO+MPC's
+    # worker is a QP, not a policy).
+    #
+    # The two knobs below are two different ways to put the environment's
+    # terminal back into the worker's return; 0.0 restores the pre-fix reward
+    # exactly for either. A 4-variant x 2-seed, 500k-step ablation with
+    # --early-stop-success-rate and --solved-early-stop *disabled* (so a fix
+    # that merely delays the collapse cannot be mistaken for one that removes
+    # it) settled which is needed:
+    #
+    #   variant                          clean solves   final eval return
+    #   ------------------------------   ------------   ------------------
+    #   baseline (both knobs 0.0)            0/2        -153 / -997
+    #   --ent-coef-lr 0.05                   0/2        -181 /  615
+    #   --worker-success-bonus 20            2/2        1018 / 1019
+    #   --worker-extrinsic-coef 0.02         2/2        1019 / 1019
+    #
+    # against a mean oracle optimum of ~1013 (see the "Solved-check:
+    # precomputed optimal returns" line printed at startup); "clean solve"
+    # is the final evaluation sitting at >= 95% of that, which separates a
+    # genuine solve from the two ways an unfixed run ends -- stalling short
+    # of the line at 200 steps/episode (seed 1), or reaching it by smashing
+    # through both gates (seed 2: success_rate 1.00 at return -997). Two
+    # things that
+    # ablation settles beyond the headline: (1) the pathology is the *worker's*
+    # reward, not the manager's exploration -- fixing the entropy autotuner
+    # (whose dual-ascent step is lr-bounded at ~3e-4 per update, so at the
+    # default it moves ent_coef by 8% over a whole run while the manager's
+    # entropy falls from +1.2 to -2.2 nats) changes when the collapse happens
+    # and not whether it does; (2) both fixes do not merely prevent the
+    # collapse, they close the optimality gap -- the unfixed hierarchy peaked
+    # at ~745 with 3-8 wall contacts per episode even *before* collapsing,
+    # because the worker had no reason to care about anything but the goal
+    # vector.
+    #
+    # --worker-extrinsic-coef is the default, and the reasoning that first
+    # picked --worker-success-bonus instead is worth recording because the
+    # evidence overturned it. The success bonus is the *minimal* intervention:
+    # it changes the terminal only and leaves the worker otherwise blind to
+    # the environment's reward, which is what keeps this a feudal hierarchy
+    # rather than two agents optimizing the same objective at different
+    # rates. On the 2-seed ablation above the two tie on final quality, so
+    # that argument decided it.
+    #
+    # It does not survive the full benchmark. Re-running both arms at 3 seeds
+    # under the benchmark protocol (uniform 500k budget, --solved-early-stop
+    # left on and --early-stop-success-rate 2.0 to disable the looser stop)
+    # separates them on samples rather than on quality:
+    #
+    #   hppo, slalom   success-bonus  3/3 solved, 266k / 296k / 399k steps,
+    #                                 final return 1018 / 1019 / 1017
+    #                  extrinsic      3/3 solved,  71k /  81k /  81k steps,
+    #                                 final return 1015 / 1016 / 1016
+    #
+    # A 3-5x difference in samples at the same final policy, and the reason
+    # is what the success bonus does *not* do. It repairs the termination
+    # incentive, so the worker does finish -- success_rate 1.00 on every seed
+    # -- but nothing in its reward charges it for a wall or for the clock, so
+    # every collision still has to be steered out by a manager that only acts
+    # every --manager-freq steps, and that indirection is expensive.
+    # Restoring the terminal alone makes the worker's MDP *sound*; it does
+    # not make it *aligned*.
+    #
+    # The size of that gap also changes the headline comparison: at
+    # 71k-81k steps this hierarchy is no longer measurably slower than flat
+    # PPO (51k-81k) on the slalom, where under the success bonus it read as a
+    # clean 4-6x hierarchy tax. See docs/benchmark.md section 3.
+    #
+    # So: feudal purity was the right prior and the wrong call. 0.02 is the
+    # default; --worker-success-bonus 20 is kept as the minimal-intervention
+    # ablation arm, and is the one to use when the question is specifically
+    # "what does the terminal alone fix?".
+    parser.add_argument("--worker-success-bonus", type=float, default=0.0,
+        help="one-off bonus added to the *worker's* reward on the step the "
+             "episode terminates successfully. The targeted fix for the "
+             "termination-avoidance pathology above: it makes crossing the "
+             "goal line worth more to the worker than the goal-closing reward "
+             "it forgoes by crossing. Size it against that forgone value, not "
+             "against the environment's reward: the worker earns about "
+             "v_max*dt per step indefinitely, so what it gives up by "
+             "terminating is v_max*dt/(1-gamma) approx 12 at the defaults, "
+             "and the default 20.0 clears that with ~1.7x margin. Re-derive "
+             "it if --gamma, --manager-freq or the velocity limit move. "
+             "Not the default: see the comparison above. 0.0 (default) with "
+             "--worker-extrinsic-coef also 0.0 restores the pre-fix reward, "
+             "which collapses")
+    parser.add_argument("--worker-extrinsic-coef", type=float, default=0.02,
+        help="FeUdal-Networks-style mixing coefficient: add this times the "
+             "environment's own reward to the worker's intrinsic reward, so "
+             "the worker sees r_int + coef * r_env instead of r_int alone. "
+             "The broader alternative to --worker-success-bonus: it fixes the "
+             "same termination-avoidance pathology (goal_reward enters the "
+             "worker's return) and additionally makes the worker itself aware "
+             "of wall contacts and of the clock, instead of leaving every "
+             "collision the manager's problem. At the SlalomEnvConfig "
+             "defaults a coefficient of 0.02 puts the terminal at +20, a "
+             "contact at -1.0 and a step at -0.02 in the worker's units, "
+             "against an intrinsic stream of ~0.12/step -- which is why it "
+             "is the default: it is the only one of the two that makes the "
+             "worker itself avoid walls, and the _reach variants need that. "
+             "0.0 restores the pre-fix reward unless --worker-success-bonus "
+             "is set")
     parser.add_argument("--num-envs", type=int, default=8,
         help="the number of parallel slalom environments to collect rollouts "
              "from. Rollouts come from a batched SlalomVecEnv; each "
              "environment carries its own goal, manager cadence and segment "
-             "accumulator (see section 8 of hppo_explanation.md)")
+             "accumulator")
     parser.add_argument("--num-steps-worker", type=int, default=2048,
         help="the number of worker (= environment) steps per rollout, summed "
              "over all --num-envs environments. Unchanged in meaning by "
@@ -101,7 +244,7 @@ def parse_args():
              "Must be divisible by --num-envs")
     parser.add_argument("--gamma", type=float, default=0.99,
         help="the environment-step discount factor. 0.99, not the 0.999 this "
-             "script used to train at: see RL/PPO/PPO.md section 11.1. The "
+             "script used to train at: see the thesis PPO chapter, 11.1. The "
              "manager is discounted at gamma**manager_freq")
     parser.add_argument("--gae-lambda", type=float, default=0.95,
         help="the lambda for the general advantage estimation")
@@ -119,20 +262,68 @@ def parse_args():
     parser.add_argument("--clip-coef", type=float, default=0.2,
         help="the surrogate clipping coefficient")
     parser.add_argument("--ent-coef-manager", type=float, default=0.01,
-        help="coefficient of the manager entropy")
+        help="coefficient of the manager entropy. With --autotune-ent-coef, this is only the initial value")
     parser.add_argument("--ent-coef-worker", type=float, default=0.01,
-        help="coefficient of the worker entropy")
+        help="coefficient of the worker entropy. With --autotune-ent-coef, this is only the initial value")
+    parser.add_argument("--autotune-ent-coef", type=lambda x: x.lower() in ['true', '1', 't', 'y', 'yes'], default=True,
+        help="learn both heads' entropy coefficients via SAC-style dual ascent toward independent target entropies. On by default; pass --autotune-ent-coef false to hold --ent-coef-manager/--ent-coef-worker fixed instead")
+    parser.add_argument("--target-entropy-frac", type=float, default=0.35,
+        help="target entropy (per head) as a fraction of that head's max achievable entropy; only used with --autotune-ent-coef")
+    parser.add_argument("--ent-coef-lr", type=float, default=3e-4,
+        help="learning rate for each head's entropy coefficient optimizer; only used with --autotune-ent-coef")
+    parser.add_argument("--ent-coef-min", type=float, default=1e-4,
+        help="lower clamp on either autotuned entropy coefficient; only used with --autotune-ent-coef")
+    parser.add_argument("--ent-coef-max", type=float, default=1.0,
+        help="upper clamp on either autotuned entropy coefficient; only used with --autotune-ent-coef")
     parser.add_argument("--vf-coef", type=float, default=0.5,
         help="coefficient of the value function")
     parser.add_argument("--max-grad-norm", type=float, default=0.5,
         help="the maximum norm for the gradient clipping")
     parser.add_argument("--target-kl", type=float, default=None,
-        help="if set, stop an update early once approx_kl exceeds this. Off "
-             "by default: clipping is then the only trust-region mechanism")
-    parser.add_argument("--stall-patience", type=int, default=10,
-        help="warn after this many consecutive updates in which every "
-             "finished episode was a truncation (the stall optimum, "
-             "RL/PPO/PPO.md section 17.4). 0 disables the check")
+        help="if set, stop the *worker's* update early once approx_kl exceeds "
+             "this. Off by default: clipping is then the only trust-region "
+             "mechanism. See --target-kl-manager for the manager's own")
+    parser.add_argument("--target-kl-manager", type=float, default=None,
+        help="if set, stop the *manager's* update early once approx_kl "
+             "exceeds this, independently of --target-kl (the worker's). Off "
+             "by default. Candidate mitigation for the manager-collapse "
+             "instability: the manager's batch is ~manager_freq times "
+             "smaller than the worker's and, once the policy is "
+             "near-converged, low-variance -- with no trust region, "
+             "clipping alone does not stop a single epoch from moving the "
+             "policy far in one update. See HPPOAgent.ManagerActor's "
+             "docstring in algorithms/hppo/hppo.py")
+    parser.add_argument("--clip-vloss", type=lambda x: x.lower() in ['true', '1', 't', 'y', 'yes'], default=True,
+        help="PPO2/CleanRL-style value-loss clipping: bound how far the "
+             "critic's new prediction may move from its pre-update one (by "
+             "--clip-coef) before scoring the value loss, so one update "
+             "cannot push either critic arbitrarily far on a noisy batch. "
+             "Applied to both heads -- see algorithms/hppo/hppo.py's "
+             "_update_head. On by default as of a 6-seed slalom ablation "
+             "(seeds 1-6): 4/6 seeds went from never recovering after the "
+             "manager-collapse instability to a clean solve that triggers "
+             "the existing --early-stop-success-rate; a 5th delayed the "
+             "collapse from ~150k to ~230k steps; only 1/6 still collapsed, "
+             "with the same value_bias/explained_variance drift signature "
+             "as every unclipped run. Pass --clip-vloss false to restore "
+             "the previous unclipped behaviour")
+    parser.add_argument("--adv-std-floor-frac", type=float, default=0.0,
+        help="floor the advantage-normalization denominator at this fraction "
+             "of each head's own multi-update running std, instead of "
+             "dividing by the current batch's std alone. 0.0 (default) "
+             "reproduces the previous behaviour exactly. Candidate mitigation "
+             "for the manager-collapse instability: once the policy is "
+             "near-converged, a batch of near-identical trajectories can have "
+             "an anomalously small advantage std, and dividing by it "
+             "amplifies whatever noise is left into an oversized policy "
+             "update. See algorithms/hppo/hppo.py's _update_head")
+    parser.add_argument("--ret-rms-horizon-manager", type=int, default=10,
+        help="effective sample count (in multiples of one manager batch) the "
+             "manager's return-normalization statistics remember. Default 10 "
+             "matches the worker's (and the previous shared) horizon; a "
+             "larger value makes the manager's value-target normalization "
+             "less reactive to a single anomalous rollout, at the cost of "
+             "adapting more slowly to a real shift in the return distribution")
     parser.add_argument("--eval-freq", type=int, default=5,
         help="evaluate the agent every eval_freq updates. 5 rather than 1 "
              "because an evaluation of --eval-episodes episodes costs up to "
@@ -141,6 +332,64 @@ def parse_args():
              "training it is measuring")
     parser.add_argument("--eval-episodes", type=int, default=20,
         help="number of episodes to evaluate the agent")
+    parser.add_argument("--solved-early-stop", type=lambda x: x.lower() in ['true', '1', 't', 'y', 'yes'], default=True,
+        help="if toggled, actually stop training once the solved criterion below "
+             "is met. The check, its logging, and the one-time solved.pt checkpoint "
+             "still happen either way -- this only gates the early `break`, so runs "
+             "meant to be plotted against each other on the same x-axis (fixed "
+             "--total-timesteps for every seed) can set this false and still see "
+             "where each seed crossed the threshold. Independent of "
+             "--early-stop-success-rate below -- either can stop training")
+    parser.add_argument("--solved-tolerance", type=float, default=5.0,
+        help="stop training once the agent's return is within this many reward "
+             "units of the oracle's optimal return (see algorithms/optimal_solver.py) "
+             "at every point of the fixed evaluation grid below")
+    parser.add_argument("--solved-grid-nx", type=int, default=5,
+        help="number of p_x0 points in the fixed grid the solved-check evaluates from")
+    parser.add_argument("--solved-grid-ny", type=int, default=5,
+        help="number of p_y0 points in the fixed grid the solved-check evaluates from")
+    parser.add_argument("--solved-consecutive", type=int, default=2,
+        help="require the solved criterion to hold for this many consecutive "
+             "eval passes in a row before actually stopping training -- guards "
+             "against stopping on a momentary crossing while the policy is "
+             "still moving")
+    parser.add_argument("--early-stop-success-rate", type=float, default=1.0,
+        help="stop training once eval/success_rate has been >= this AND "
+             "eval/episodic_return >= --early-stop-optimal-frac, both for "
+             "--early-stop-patience consecutive evaluations. On by default: "
+             "on the slalom task, seed 1's manager reliably reaches 100%% "
+             "eval success by ~1/5 of a 500k-step run and then, under "
+             "continued training, its goal distribution keeps sharpening "
+             "past that point -- one goal dimension's Beta collapses toward "
+             "a state-insensitive skew, the other's state-dependent sign "
+             "flip (needed to alternate between the slalom's two "
+             "oppositely-offset gates) erodes, and eval success falls back "
+             "to 0%% within a few evaluations and never recovers for the "
+             "rest of the budget. This has no in-run recovery mechanism, so "
+             "rather than fight it, stop as soon as the policy has "
+             "demonstrably solved the task. Set > 1.0 to disable")
+    parser.add_argument("--early-stop-optimal-frac", type=float, default=0.95,
+        help="the eval/episodic_return floor --early-stop-success-rate also "
+             "requires, as a fraction of the solved-check oracle's mean "
+             "optimal return (see the 'Solved-check: precomputed optimal "
+             "returns' line printed at startup) rather than a fixed reward "
+             "value. success_rate alone is not enough: the manager reaches "
+             "100%% success as early as ~40k steps by smashing through both "
+             "gates rather than threading them -- SlalomEnv clamps a wall "
+             "contact and continues rather than ending the episode (see "
+             "envs/config.py's contact_penalty comment), so reaching the "
+             "goal line at all does not mean reaching it cleanly. A prior "
+             "version of this flag was a fixed absolute value (150.0) "
+             "picked off one seed's trajectory at one goal_reward/"
+             "contact_penalty balance; it went stale the moment that "
+             "balance changed -- a seed-1-10 sweep at a 5x larger "
+             "goal_reward found it let a policy with ~16 collisions/episode "
+             "(return=215, far from the ~1013 mean optimum) trigger early "
+             "stop. Deriving the floor from the oracle's own optimal return "
+             "keeps it meaningful across reward-scale changes")
+    parser.add_argument("--early-stop-patience", type=int, default=3,
+        help="consecutive qualifying evaluations required before "
+             "--early-stop-success-rate stops training; see its help")
     args = parser.parse_args()
     if args.num_envs <= 0:
         parser.error(f"--num-envs must be > 0, got {args.num_envs}")
@@ -183,9 +432,15 @@ if __name__ == "__main__":
 
     env_config = SlalomEnvConfig(
         width_profile=slalom_profile(),
-        collision_reward=args.collision_reward,
-        impact_penalty_coef=args.impact_penalty_coef,
+        contact_penalty=args.contact_penalty,
+        **({} if args.env_u_max is None else {"u_max": args.env_u_max}),
     )
+
+    if args.env_u_max is not None:
+        _T = args.manager_freq * env_config.dt
+        print(f"REGIME STUDY: env u_max overridden to {env_config.u_max} "
+              f"(canonical {SlalomEnvConfig().u_max}); agility ratio rho = "
+              f"v_max/(u_max*T) = {env_config.v_max / (env_config.u_max * _T):.2f}")
 
     if args.track:
         wandb.init(
@@ -218,6 +473,26 @@ if __name__ == "__main__":
     obs_low = eval_env.observation_space.low
     obs_high = eval_env.observation_space.high
 
+    # Solved-check setup: a fixed grid of initial conditions (not random
+    # draws), so the oracle's optimal return for each point is solved once
+    # here and reused on every later eval pass instead of being recomputed.
+    # Any MinTimeSolver infeasibility raises here, at startup, rather than
+    # mid-training.
+    solved_grid = spawn_grid(eval_env, args.solved_grid_nx, args.solved_grid_ny)
+    optimal_grid = precompute_optimal_grid(eval_env, solved_grid, solver=MinTimeSolver())
+    optimal_returns = np.array([r.total_return for _, r in optimal_grid])
+    print(f"Solved-check: precomputed optimal returns for {len(optimal_grid)} fixed initial "
+          f"conditions (mean={optimal_returns.mean():.1f}, min={optimal_returns.min():.1f}, "
+          f"max={optimal_returns.max():.1f}); solved-tolerance={args.solved_tolerance}")
+    # See --early-stop-optimal-frac: derived from the oracle's mean optimal
+    # return rather than a fixed value, so it stays meaningful whatever
+    # goal_reward/contact_penalty balance this run is training against.
+    early_stop_min_return = args.early_stop_optimal_frac * float(optimal_returns.mean())
+    print(f"Early-stop return floor: {early_stop_min_return:.1f} "
+          f"({args.early_stop_optimal_frac:.0%} of mean optimal)")
+    consecutive_solved = 0
+    solved_checkpoint_saved = False
+
     # Agent and Buffer
     agent = HPPOAgent(
         obs_dim=obs_dim,
@@ -245,7 +520,18 @@ if __name__ == "__main__":
         obs_low=obs_low,
         obs_high=obs_high,
         max_goal_bound=max_goal_bound,
-        device=device
+        device=device,
+        autotune_ent_coef=args.autotune_ent_coef,
+        target_entropy_frac=args.target_entropy_frac,
+        ent_coef_lr=args.ent_coef_lr,
+        ent_coef_min=args.ent_coef_min,
+        ent_coef_max=args.ent_coef_max,
+        # Manager-collapse mitigations under test -- see each flag's help
+        # above and HPPOAgent.ManagerActor's docstring in algorithms/hppo/hppo.py.
+        target_kl_manager=args.target_kl_manager,
+        clip_vloss=args.clip_vloss,
+        adv_std_floor_frac=args.adv_std_floor_frac,
+        ret_rms_horizon_manager=args.ret_rms_horizon_manager,
     )
 
     # One base learning rate per parameter group (actor, then critic) for each
@@ -322,7 +608,10 @@ if __name__ == "__main__":
 
     ep_reward = np.zeros(args.num_envs, dtype=np.float64)
     ep_length = np.zeros(args.num_envs, dtype=np.int64)
-    stalled_updates = 0
+
+    # See --early-stop-success-rate: counts consecutive qualifying
+    # evaluations, reset by any evaluation that falls short.
+    consecutive_high_success = 0
 
     for update in range(1, num_updates + 1):
         # Linear LR decay: once the policies have converged a constant LR keeps
@@ -343,7 +632,17 @@ if __name__ == "__main__":
         completed_returns = []
         completed_lengths = []
         completed_successes = []
-        completed_collisions = []
+        completed_collision_counts = []
+        completed_collision_impacts = []
+        collision_forced_replan_count = 0
+        # Direct instrumentation of the termination-avoidance mechanism (see
+        # --worker-success-bonus): what the worker actually does in the strip
+        # of states immediately before the goal line. A healthy worker keeps
+        # a_x positive there and crosses; the collapsed one brakes with
+        # a_x approx -2 and orbits. Logged per update so the onset is visible
+        # in the same plot as the eval success rate it precedes by ~30 updates.
+        near_goal_ax = []
+        near_goal_value = []
 
         for step in range(0, args.num_steps_per_env):
             global_step += args.num_envs
@@ -356,6 +655,14 @@ if __name__ == "__main__":
                 )
 
             action_np = worker_action.cpu().numpy()
+
+            # See near_goal_ax above. `obs` is the pre-step observation, so
+            # this is "the action taken from a state within 1 m of the goal
+            # line", which is exactly the decision the pathology corrupts.
+            near_goal_mask = obs[:, 0] >= (env_config.tunnel_length - 1.0)
+            if np.any(near_goal_mask):
+                near_goal_ax.append(action_np[near_goal_mask, 0])
+                near_goal_value.append(worker_value.cpu().numpy()[near_goal_mask])
 
             # Environment step (SlalomVecEnv auto-resets envs that finish)
             next_obs, env_reward, terminated, truncated, info = vec_env.step(action_np)
@@ -385,6 +692,23 @@ if __name__ == "__main__":
 
             worker_reward = (np.linalg.norm(current_goal, axis=-1)
                              - np.linalg.norm(next_goal, axis=-1))
+
+            # Put the environment's own outcome back into the worker's return
+            # -- see --worker-success-bonus / --worker-extrinsic-coef for the
+            # termination-avoidance pathology both of these exist to remove.
+            # Applied here, before the truncation bootstrap below, so the
+            # bootstrapped value and the reward it is folded into are on the
+            # same (mixed) scale.
+            if args.worker_extrinsic_coef != 0.0:
+                worker_reward = worker_reward + args.worker_extrinsic_coef * env_reward
+            if args.worker_success_bonus != 0.0:
+                # `terminated` is only ever a goal-line crossing in this
+                # environment (a wall contact is non-terminal), but read the
+                # success flag rather than relying on that, so adding another
+                # terminal condition later cannot silently start paying this
+                # bonus for it.
+                worker_succeeded = terminated & info["final_info"]["is_success"]
+                worker_reward[worker_succeeded] += args.worker_success_bonus
 
             # Handle truncation bootstrapping for the worker. The episode did
             # not end, the clock did: fold the value of the state it was cut at
@@ -418,9 +742,13 @@ if __name__ == "__main__":
             worker_step_in_c += 1
 
             # Which managers act now? An environment's segment ends after c
-            # worker steps or when its episode does, and the environments do
-            # not agree on when that is.
-            manager_act_now = (worker_step_in_c == args.manager_freq) | done
+            # worker steps, when its episode does, or (--replan-on-collision)
+            # the instant the worker contacts a wall -- a hit can clamp
+            # position/zero velocity in a way that leaves the in-flight goal
+            # unreachable for the rest of the segment, and the environments
+            # do not agree on when any of this happens.
+            collision_forced = info["final_info"]["collision"] & args.replan_on_collision
+            manager_act_now = (worker_step_in_c == args.manager_freq) | done | collision_forced
             if np.any(manager_act_now):
                 # Handle truncation bootstrapping for the manager. Its segment
                 # is worker_step_in_c environment steps long, so the cut-off
@@ -439,6 +767,32 @@ if __name__ == "__main__":
                         (agent.gamma ** worker_step_in_c[manager_trunc])
                         * true_next_manager_value.cpu().numpy())
 
+                # Collision-forced replans are a third kind of segment
+                # boundary, one the fixed gamma**manager_freq recursion in
+                # compute_manager_returns_and_advantage doesn't know about --
+                # that recursion is only correct across a done=False boundary
+                # because today the sole way to reach one is the c-step
+                # counter, so every such gap really is manager_freq steps.
+                # Handled exactly like the truncation case above: fold the
+                # correctly-discounted continuation into this reward and
+                # close the transition with a done below (a pseudo-done, the
+                # episode itself continues), rather than letting the
+                # recursion chain across it with the wrong exponent.
+                collision_forced_continue = collision_forced & ~done
+                if np.any(collision_forced_continue):
+                    collision_forced_replan_count += int(np.sum(collision_forced_continue))
+                    with torch.no_grad():
+                        true_next_manager_value_collision = agent.get_manager_value(
+                            torch.tensor(next_obs_norm[collision_forced_continue],
+                                         dtype=torch.float32, device=device)
+                        )
+                    manager_reward[collision_forced_continue] += (
+                        (agent.gamma ** worker_step_in_c[collision_forced_continue])
+                        * true_next_manager_value_collision.cpu().numpy())
+
+                manager_dones_to_store = done.copy()
+                manager_dones_to_store[collision_forced_continue] = True
+
                 manager_buffer.add(
                     manager_act_now,
                     manager_obs_norm,
@@ -446,7 +800,7 @@ if __name__ == "__main__":
                     manager_logprob,
                     manager_reward,
                     manager_value,
-                    done.astype(np.float32)
+                    manager_dones_to_store.astype(np.float32)
                 )
 
                 last_manager_done[manager_act_now] = done[manager_act_now]
@@ -478,7 +832,8 @@ if __name__ == "__main__":
                 completed_returns.append(ep_reward[i])
                 completed_lengths.append(ep_length[i])
                 completed_successes.append(bool(info["final_info"]["is_success"][i]))
-                completed_collisions.append(bool(info["final_info"]["collision"][i]))
+                completed_collision_counts.append(int(info["final_info"]["collision_count"][i]))
+                completed_collision_impacts.extend(info["final_info"]["collision_impacts"][i])
                 ep_reward[i] = 0.0
                 ep_length[i] = 0
 
@@ -528,44 +883,45 @@ if __name__ == "__main__":
         metrics["charts/worker_critic_lr"] = agent.worker_optimizer.param_groups[-1]["lr"]
         metrics["charts/SPS"] = sps
         metrics["charts/num_episodes"] = len(completed_returns)
+        metrics["charts/collision_forced_replans"] = collision_forced_replan_count
+        if near_goal_ax:
+            metrics["charts/worker_ax_near_goal"] = float(np.mean(np.concatenate(near_goal_ax)))
+            metrics["charts/worker_value_near_goal"] = float(np.mean(np.concatenate(near_goal_value)))
+            metrics["charts/near_goal_samples"] = float(sum(a.size for a in near_goal_ax))
+        metrics["charts/collision_forced_replan_rate"] = (
+            collision_forced_replan_count / max(manager_buffer.total_steps, 1))
 
         log_line = (f"update={update} global_step={global_step} SPS={sps} "
                     f"w_ev={metrics['worker/explained_variance']:.3f} "
                     f"m_ev={metrics['manager/explained_variance']:.3f} "
-                    f"m_v_bias={metrics['manager/value_bias']:.1f}")
+                    f"m_v_bias={metrics['manager/value_bias']:.1f} "
+                    # Manager-collapse diagnostics (see ManagerActor's
+                    # docstring in algorithms/hppo/hppo.py): printed inline,
+                    # not just logged to W&B, so the update where these spike
+                    # or crater is visible without leaving the console.
+                    f"m_adv_std={metrics['manager/adv_std_raw']:.4f} "
+                    f"m_kl_max={metrics['manager/approx_kl_max']:.4f} "
+                    f"m_ratio_max={metrics['manager/ratio_max_dev']:.3f}")
+        if "charts/worker_ax_near_goal" in metrics:
+            log_line += (f" w_ax@goal={metrics['charts/worker_ax_near_goal']:+.2f} "
+                         f"w_v@goal={metrics['charts/worker_value_near_goal']:.2f}")
         if completed_returns:
             mean_return = float(np.mean(completed_returns))
             mean_length = float(np.mean(completed_lengths))
             success_rate = float(np.mean(completed_successes))
-            collision_rate = float(np.mean(completed_collisions))
+            collision_count_mean = float(np.mean(completed_collision_counts))
             metrics["charts/episodic_return"] = mean_return
             metrics["charts/episodic_length"] = mean_length
             metrics["charts/success_rate"] = success_rate
-            metrics["charts/collision_rate"] = collision_rate
+            metrics["charts/collision_count_mean"] = collision_count_mean
             log_line += (f" return={mean_return:.1f} length={mean_length:.0f} "
-                         f"success_rate={success_rate:.2f} collision_rate={collision_rate:.2f} "
+                         f"success_rate={success_rate:.2f} collisions/ep={collision_count_mean:.2f} "
                          f"(n={len(completed_returns)})")
-
-            # Stall-trap detector, ported from flat PPO. A few per cent of
-            # seeds fall into a local optimum in which the policy simply stops
-            # moving: every episode runs out the clock, so nothing terminates,
-            # the undiscounted return is exactly `max_steps * step_penalty` for
-            # every episode, and the batch's return distribution is constant.
-            # The advantages then carry no signal and the run never recovers.
-            # Detecting it is free, and an undetected stalled run silently
-            # poisons a results table, because its return is indistinguishable
-            # from a policy that crashes immediately (SLALOM_ENV section 8.2).
-            if not any(completed_successes) and not any(completed_collisions):
-                stalled_updates += 1
-            else:
-                stalled_updates = 0
-            if args.stall_patience and stalled_updates == args.stall_patience:
-                print(f"WARNING: every episode has ended in truncation for "
-                      f"{args.stall_patience} consecutive updates "
-                      f"(return={mean_return:.1f}). This run has almost "
-                      f"certainly entered the stall optimum and will not "
-                      f"recover on its own; restart with a different --seed.")
-        metrics["charts/stalled_updates"] = stalled_updates
+            if completed_collision_impacts:
+                # Individual per-contact penalties (not summed), so both the
+                # typical and the single worst contact this update are visible.
+                metrics["charts/collision_impact_mean"] = float(np.mean(completed_collision_impacts))
+                metrics["charts/collision_impact_worst"] = float(np.min(completed_collision_impacts))
         print(log_line)
 
         if args.track:
@@ -583,7 +939,8 @@ if __name__ == "__main__":
             eval_returns = []
             eval_lengths = []
             eval_successes = []
-            eval_collisions = []
+            eval_collision_counts = []
+            eval_collision_impacts = []
             for i in range(args.eval_episodes):
                 eval_obs, info_eval = eval_env.reset(seed=args.seed + i)
                 eval_obs_norm = agent.normalize_obs(eval_obs)
@@ -640,37 +997,130 @@ if __name__ == "__main__":
                 eval_returns.append(eval_ep_reward)
                 eval_lengths.append(eval_ep_length)
                 eval_successes.append(bool(info_eval["is_success"]))
-                eval_collisions.append(bool(info_eval["collision"]))
+                # collision_count/collision_impacts are cumulative over the
+                # whole episode (see SlalomEnv.step), so the last step's info
+                # already carries every contact the episode had.
+                eval_collision_counts.append(info_eval["collision_count"])
+                eval_collision_impacts.extend(info_eval["collision_impacts"])
 
             mean_eval_return = float(np.mean(eval_returns))
             success_rate = float(np.mean(eval_successes))
-            collision_rate = float(np.mean(eval_collisions))
+            collision_count_mean = float(np.mean(eval_collision_counts))
             print(f"Evaluation at update {update}: return={mean_eval_return:.2f}, length={np.mean(eval_lengths):.2f}, "
-                  f"success_rate={success_rate:.2f}, collision_rate={collision_rate:.2f}")
+                  f"success_rate={success_rate:.2f}, collisions/ep={collision_count_mean:.2f}")
+            eval_metrics = {
+                "eval/episodic_return": mean_eval_return,
+                "eval/episodic_length": np.mean(eval_lengths),
+                "eval/success_rate": success_rate,
+                "eval/collision_count_mean": collision_count_mean,
+            }
+            if eval_collision_impacts:
+                eval_metrics["eval/collision_impact_mean"] = float(np.mean(eval_collision_impacts))
+                eval_metrics["eval/collision_impact_worst"] = float(np.min(eval_collision_impacts))
             if args.track:
-                wandb.log({
-                    "eval/episodic_return": mean_eval_return,
-                    "eval/episodic_length": np.mean(eval_lengths),
-                    "eval/success_rate": success_rate,
-                    "eval/collision_rate": collision_rate,
-                }, step=global_step)
+                wandb.log(eval_metrics, step=global_step)
 
             if mean_eval_return > best_eval_return:
                 best_eval_return = mean_eval_return
                 agent.save(os.path.join(checkpoint_dir, "best.pt"))
+
+            # Solved-check: the same fixed grid, deterministic policy action
+            # (matching the random eval above) on every pass, compared
+            # point-by-point against the oracle's precomputed optimal return
+            # for that exact starting position -- see algorithms/solved_check.py.
+            #
+            # A *factory*, not a single shared closure: the manager-replan
+            # cadence (state["goal"]/state["step_in_c"]) is per-episode state,
+            # and check_solved calls make_policy_fn() fresh right after each
+            # grid point's own env.reset() -- exactly like this eval loop's
+            # own eval_goal/eval_step_in_c above, just reattributed from
+            # "post-step, before the next loop iteration" to "start of the
+            # next policy_fn call" (same information either way).
+            def make_policy_fn():
+                state = {}
+
+                def policy_fn(obs):
+                    obs_norm = agent.normalize_obs(obs)
+                    pos = np.array([obs[0], obs[1]])
+                    if "goal" not in state:
+                        manager_obs = torch.tensor(obs_norm, dtype=torch.float32, device=device).unsqueeze(0)
+                        with torch.no_grad():
+                            manager_action = agent.get_manager_action(manager_obs, deterministic=True)
+                        state["goal"] = agent.scale_goal(manager_action.cpu().numpy()[0])
+                        state["step_in_c"] = 0
+                    else:
+                        decayed_goal = state["goal"] - (pos - state["pos"])
+                        state["step_in_c"] += 1
+                        if state["step_in_c"] == args.manager_freq:
+                            manager_obs = torch.tensor(obs_norm, dtype=torch.float32, device=device).unsqueeze(0)
+                            with torch.no_grad():
+                                manager_action = agent.get_manager_action(manager_obs, deterministic=True)
+                            state["goal"] = agent.scale_goal(manager_action.cpu().numpy()[0])
+                            state["step_in_c"] = 0
+                        else:
+                            state["goal"] = decayed_goal
+                    state["pos"] = pos
+                    with torch.no_grad():
+                        worker_action = agent.get_worker_action(
+                            worker_input(obs_norm, state["goal"]).unsqueeze(0), deterministic=True)
+                    return worker_action.cpu().numpy()[0]
+
+                return policy_fn
+
+            solved_result = check_solved(make_policy_fn, eval_env, optimal_grid, args.solved_tolerance)
+            print(f"Solved-check at update {update}: solved={solved_result.solved} "
+                  f"worst_gap={solved_result.worst_gap:.2f} at "
+                  f"p_x0={solved_result.worst_point[0]:.2f} p_y0={solved_result.worst_point[1]:.2f} "
+                  f"(consecutive={consecutive_solved})")
+            if args.track:
+                wandb.log({
+                    "solved/is_solved": float(solved_result.solved),
+                    "solved/worst_gap": solved_result.worst_gap,
+                    "solved/mean_gap": float(solved_result.gaps.mean()),
+                }, step=global_step)
+
+            consecutive_solved = consecutive_solved + 1 if solved_result.solved else 0
 
             agent.manager_actor.train()
             agent.manager_critic.train()
             agent.worker_actor.train()
             agent.worker_critic.train()
 
+            # See --early-stop-success-rate. Checked after best.pt so the
+            # qualifying evaluation is always banked before we might stop.
+            if (success_rate >= args.early_stop_success_rate
+                    and mean_eval_return >= early_stop_min_return):
+                consecutive_high_success += 1
+            else:
+                consecutive_high_success = 0
+            if consecutive_high_success >= args.early_stop_patience:
+                print(f"Early stop at update {update}: eval/success_rate >= "
+                      f"{args.early_stop_success_rate} and eval/episodic_return "
+                      f">= {early_stop_min_return:.1f} ({args.early_stop_optimal_frac:.0%} "
+                      f"of mean optimal) for {consecutive_high_success} consecutive evaluations")
+                if args.track:
+                    wandb.log({"charts/early_stopped_at_update": update}, step=global_step)
+                break
+
+            # Independent of --early-stop-success-rate above: either one can
+            # stop training. Saved once, the first time the criterion holds,
+            # regardless of --solved-early-stop -- marks the moment the
+            # policy became near-optimal even on a run left to run to its
+            # full --total-timesteps budget for a coherent cross-seed plot.
+            if consecutive_solved >= args.solved_consecutive:
+                if not solved_checkpoint_saved:
+                    print(f"Solved criterion held for {consecutive_solved} consecutive evals "
+                          f"(tolerance={args.solved_tolerance}) at global_step={global_step}.")
+                    agent.save(os.path.join(checkpoint_dir, "solved.pt"))
+                    solved_checkpoint_saved = True
+                    if args.track:
+                        wandb.log({"solved/first_solved_step": global_step}, step=global_step)
+                if args.solved_early_stop:
+                    print("--solved-early-stop is on -- stopping training early.")
+                    break
+
     agent.save(os.path.join(checkpoint_dir, "final.pt"))
     print(f"Saved checkpoints to {checkpoint_dir}")
-    if args.stall_patience and stalled_updates >= args.stall_patience:
-        print(f"WARNING: this run finished in the stall optimum "
-              f"({stalled_updates} consecutive truncation-only updates). Its "
-              f"return is not comparable with a converged run -- discard it or "
-              f"rerun with a different --seed.")
 
     eval_env.close()
     if args.track:

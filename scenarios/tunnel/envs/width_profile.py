@@ -21,9 +21,8 @@ class WidthProfile:
     Piecewise-*constant* rather than a continuous taper because `MPCWorker`'s
     QP treats `p_x` as a decision variable inside its horizon, so it can only
     look up the segment at the current, measured `p_x` and hold it constant
-    across one solve — see `envs/TUNNEL_ENV.md` Sec 3 for the calibration
-    rule this implies (no segment shorter than one horizon's worst-case
-    travel).
+    across one solve -- no segment may be shorter than one horizon's
+    worst-case travel.
 
     Segments must together cover every real `p_x` exactly once: sorted,
     contiguous (no gap or overlap), the first starting at `-inf` and the

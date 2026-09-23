@@ -13,9 +13,10 @@ class SlalomEnv(gym.Env):
     Discrete-time LTI double-integrator environment: the agent navigates a
     2D slalom from left to right.
 
-    Reward: a dense -1 per-step time penalty, a sparse +-500 terminal reward
-    on goal/collision, and optional potential-based progress shaping — all
-    configurable via SlalomEnvConfig.
+    Reward: a dense -1 per-step time penalty, a per-step penalty on wall
+    contact (non-terminal -- the episode continues through an inelastic
+    bounce), a sparse terminal reward on reaching the goal, and optional
+    potential-based progress shaping — all configurable via SlalomEnvConfig.
     """
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
@@ -96,21 +97,39 @@ class SlalomEnv(gym.Env):
         super().reset(seed=seed)
         self.steps = 0
 
-        # Randomize initial position uniformly in a small box on the left
-        # p_x in [0, 2], p_y in [-W/4, W/4]
-        p_x = self.np_random.uniform(low=0.0, high=2.0)
-        p_y = self.np_random.uniform(low=-self.W/4.0, high=self.W/4.0)
+        if options is not None and "init_state" in options:
+            # Forces a specific [p_x, p_y, v_x, v_y] instead of the random
+            # draw below -- used to evaluate/solve from a fixed, reusable
+            # grid of initial conditions (see algorithms/optimal_solver.py's
+            # spawn_grid/precompute_optimal_grid) rather than a fresh random
+            # one every reset.
+            self.state = np.asarray(options["init_state"], dtype=np.float32).copy()
+        else:
+            # Randomize initial position uniformly in a small box on the left
+            # p_x in [0, 2], p_y in [-W/4, W/4]
+            p_x = self.np_random.uniform(low=0.0, high=2.0)
+            p_y = self.np_random.uniform(low=-self.W/4.0, high=self.W/4.0)
 
-        # Initial velocity is exactly zero
-        self.state = np.array([p_x, p_y, 0.0, 0.0], dtype=np.float32)
+            # Initial velocity is exactly zero
+            self.state = np.array([p_x, p_y, 0.0, 0.0], dtype=np.float32)
 
         self._trail = [self.state[:2].copy()]
+
+        # Per-episode wall-contact bookkeeping (see step()): a running count
+        # and the *individual* (not cumulative) penalty charged by each
+        # contact this episode, so downstream logging can tell "one bad
+        # crash" apart from "many small grazes" instead of only seeing a
+        # single collided/not-collided flag.
+        self._episode_collision_count = 0
+        self._episode_collision_impacts = []
 
         obs = self.state.copy()
         info = {
             "is_success": False,
             "collision": False,
-            "distance_to_goal": float(max(self.L - p_x, 0.0)),
+            "collision_count": 0,
+            "collision_impacts": [],
+            "distance_to_goal": float(max(self.L - self.state[0], 0.0)),
         }
 
         if self.render_mode == "human":
@@ -143,29 +162,36 @@ class SlalomEnv(gym.Env):
         # Extract positions
         p_x, p_y = self.state[0], self.state[1]
 
-        self._trail.append(self.state[:2].copy())
-
         terminated = False
         truncated = False
         collision = False
         is_success = False
         reward = self.config.step_penalty
 
-        # Wall collision, looked up at the post-step, post-clip p_x.
+        # Wall contact, looked up at the post-step, post-clip p_x. A fully
+        # inelastic bounce: p_y is clamped to the violated bound and v_y is
+        # zeroed (v_x is untouched -- only the wall-normal component is
+        # absorbed on impact). No mirroring/reflection is needed since a
+        # zero-restitution bounce can only move p_y back to the boundary,
+        # never past the opposite wall. The episode does not end; the
+        # contact is charged a small per-step penalty (additive to
+        # step_penalty) instead of the old terminal one.
         y_lo, y_hi = self.width_profile.bounds_at(p_x)
         if p_y <= y_lo or p_y >= y_hi:
-            impact_speed = abs(float(self.state[3]))  # |v_y| at impact
-            time_penalty_refund = -self.config.step_penalty * (self.steps - 1)
-            reward = (
-                self.config.collision_reward
-                - self.config.impact_penalty_coef * impact_speed
-                + time_penalty_refund
-            )
-            terminated = True
+            p_y = y_lo if p_y <= y_lo else y_hi
+            self.state[1] = p_y
+            self.state[3] = 0.0
             collision = True
 
-        # Check goal reached
-        elif p_x >= self.L:
+            contact_cost = self.config.contact_penalty
+            reward += contact_cost
+            self._episode_collision_count += 1
+            self._episode_collision_impacts.append(contact_cost)
+
+        # Check goal reached (independent of the contact check above -- a
+        # step that reaches the goal is a clean terminal success regardless
+        # of an incidental wall graze the same step).
+        if p_x >= self.L:
             reward = self.config.goal_reward
             terminated = True
             is_success = True
@@ -178,10 +204,14 @@ class SlalomEnv(gym.Env):
         # branch fired above.
         reward += self.config.progress_reward_coef * (p_x - p_x_prev)
 
+        self._trail.append(self.state[:2].copy())
+
         obs = self.state.copy()
         info = {
             "is_success": is_success,
             "collision": collision,
+            "collision_count": self._episode_collision_count,
+            "collision_impacts": list(self._episode_collision_impacts),
             "distance_to_goal": float(max(self.L - p_x, 0.0)),
         }
 

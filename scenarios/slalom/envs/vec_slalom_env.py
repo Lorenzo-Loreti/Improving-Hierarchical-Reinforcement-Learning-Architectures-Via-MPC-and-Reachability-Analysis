@@ -72,6 +72,12 @@ class SlalomVecEnv:
         self.states = np.zeros((num_envs, 4), dtype=np.float32)
         self.steps = np.zeros(num_envs, dtype=np.int64)
 
+        # Per-episode wall-contact bookkeeping, per env (see step()): a
+        # running count and the *individual* (not cumulative) penalty of
+        # each contact this episode.
+        self._collision_counts = np.zeros(num_envs, dtype=np.int64)
+        self._collision_impacts = [[] for _ in range(num_envs)]
+
     def seed(self, seed=None):
         self._np_random = np.random.default_rng(seed)
 
@@ -84,6 +90,9 @@ class SlalomVecEnv:
         zeros = np.zeros(n, dtype=np.float32)
         self.states[mask] = np.stack([p_x, p_y, zeros, zeros], axis=1)
         self.steps[mask] = 0
+        self._collision_counts[mask] = 0
+        for i in np.flatnonzero(mask):
+            self._collision_impacts[i] = []
 
     def reset(self, seed=None):
         if seed is not None:
@@ -109,27 +118,41 @@ class SlalomVecEnv:
 
         p_x, p_y = self.states[:, 0], self.states[:, 1]
 
+        # Wall contact, looked up at the post-step, post-clip p_x. A fully
+        # inelastic bounce: p_y is clamped to the violated bound and v_y is
+        # zeroed for every collided env (v_x untouched). No mirroring is
+        # needed since a zero-restitution bounce cannot overshoot the
+        # opposite wall. The episode no longer ends on contact.
         y_lo, y_hi = self.width_profile.bounds_at(p_x)
         collision = (p_y <= y_lo) | (p_y >= y_hi)
-        goal = (p_x >= self.L) & ~collision
-        terminated = collision | goal
+        if np.any(collision):
+            clamped_y = np.where(p_y <= y_lo, y_lo, y_hi)
+            self.states[collision, 1] = clamped_y[collision]
+            self.states[collision, 3] = 0.0
+            p_y = self.states[:, 1]
+
+        goal = p_x >= self.L
+        terminated = goal
         truncated = (self.steps >= self.max_steps) & ~terminated
 
         rewards = np.full(self.num_envs, self.config.step_penalty, dtype=np.float32)
-        impact_speed = np.abs(self.states[:, 3])
-        time_penalty_refund = -self.config.step_penalty * (self.steps - 1)
-        rewards[collision] = (
-            self.config.collision_reward
-            - self.config.impact_penalty_coef * impact_speed[collision]
-            + time_penalty_refund[collision]
-        )
+        rewards[collision] += self.config.contact_penalty
         rewards[goal] = self.config.goal_reward
 
-        # Potential-based progress shaping (Sec 8.5 of SLALOM_ENV.md). Must
+        # Potential-based progress shaping. Must
         # run before `_sample_initial(done)` below mutates `self.states` in
         # place, since `p_x` is a view into it and would otherwise pick up
         # the post-reset row instead of the terminal one.
         rewards += self.config.progress_reward_coef * (p_x - prev_p_x)
+
+        # Per-episode wall-contact bookkeeping, per env (see __init__): a
+        # running count and the *individual* (not cumulative) penalty of
+        # each contact this episode. Updated -- and snapshotted into
+        # final_info below -- before `_sample_initial(done)` resets a done
+        # env's counters.
+        self._collision_counts[collision] += 1
+        for i in np.flatnonzero(collision):
+            self._collision_impacts[i].append(float(self.config.contact_penalty))
 
         done = terminated | truncated
 
@@ -137,6 +160,8 @@ class SlalomVecEnv:
         final_info = {
             "is_success": np.zeros(self.num_envs, dtype=bool),
             "collision": collision.copy(),
+            "collision_count": self._collision_counts.copy(),
+            "collision_impacts": [list(lst) for lst in self._collision_impacts],
         }
 
         obs_out = self.states.copy()

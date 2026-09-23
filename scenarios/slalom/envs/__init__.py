@@ -1,7 +1,7 @@
 import gymnasium.error
 from gymnasium.envs.registration import register
 
-from .config import SlalomEnvConfig, make_env
+from .config import SlalomEnvConfig
 from .slalom_env import SlalomEnv
 from .width_profile import WidthSegment, WidthProfile, constant_profile, slalom_profile
 
@@ -13,7 +13,6 @@ except gymnasium.error.Error:
 __all__ = [
     "SlalomEnv",
     "SlalomEnvConfig",
-    "make_env",
     "WidthSegment",
     "WidthProfile",
     "constant_profile",

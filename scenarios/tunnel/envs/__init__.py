@@ -1,7 +1,7 @@
 import gymnasium.error
 from gymnasium.envs.registration import register
 
-from .config import TunnelEnvConfig, make_env
+from .config import TunnelEnvConfig
 from .tunnel_env import TunnelEnv
 from .width_profile import WidthSegment, WidthProfile, constant_profile
 
@@ -13,7 +13,6 @@ except gymnasium.error.Error:
 __all__ = [
     "TunnelEnv",
     "TunnelEnvConfig",
-    "make_env",
     "WidthSegment",
     "WidthProfile",
     "constant_profile",
