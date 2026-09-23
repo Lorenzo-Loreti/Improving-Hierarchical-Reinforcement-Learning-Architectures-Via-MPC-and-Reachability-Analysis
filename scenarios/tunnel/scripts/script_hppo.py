@@ -187,21 +187,10 @@ def parse_args():
     parser.add_argument("--clip-coef", type=float, default=0.2,
         help="the surrogate clipping coefficient")
     parser.add_argument("--ent-coef-manager", type=float, default=0.01,
-        help="coefficient of the manager entropy. With --autotune-ent-coef, this is only the initial value")
+        help="coefficient of the manager's entropy bonus, fixed for the whole "
+             "run (see HPPOAgent for why there is no autotuning)")
     parser.add_argument("--ent-coef-worker", type=float, default=0.01,
-        help="coefficient of the worker entropy. With --autotune-ent-coef, this is only the initial value")
-    parser.add_argument("--autotune-ent-coef", type=lambda x: x.lower() in ['true', '1', 't', 'y', 'yes'], default=True,
-        help="learn both heads' entropy coefficients via SAC-style dual ascent toward independent target entropies. On by default; pass --autotune-ent-coef false to hold --ent-coef-manager/--ent-coef-worker fixed instead")
-    parser.add_argument("--target-entropy-frac", type=float, default=0.35,
-        help="target entropy (per head) as a fraction of that head's max achievable entropy; only used with --autotune-ent-coef")
-    parser.add_argument("--ent-coef-lr", type=float, default=3e-4,
-        help="learning rate for each head's entropy coefficient optimizer; only used with --autotune-ent-coef")
-    parser.add_argument("--ent-coef-min", type=float, default=1e-4,
-        help="lower clamp on either autotuned entropy coefficient; only used with --autotune-ent-coef")
-    parser.add_argument("--ent-coef-max", type=float, default=1.0,
-        help="upper clamp on either autotuned entropy coefficient; only used with --autotune-ent-coef")
-    parser.add_argument("--vf-coef", type=float, default=0.5,
-        help="coefficient of the value function")
+        help="coefficient of the worker's entropy bonus, fixed for the whole run")
     parser.add_argument("--max-grad-norm", type=float, default=0.5,
         help="the maximum norm for the gradient clipping")
     parser.add_argument("--clip-vloss", type=lambda x: x.lower() in ['true', '1', 't', 'y', 'yes'], default=True,
@@ -394,7 +383,6 @@ if __name__ == "__main__":
         clip_coef=args.clip_coef,
         ent_coef_manager=args.ent_coef_manager,
         ent_coef_worker=args.ent_coef_worker,
-        vf_coef=args.vf_coef,
         max_grad_norm=args.max_grad_norm,
         critic_lr_mult=args.critic_lr_mult,
         # Carried into the checkpoint so a reloaded hierarchy knows the
@@ -403,11 +391,6 @@ if __name__ == "__main__":
         obs_high=obs_high,
         max_goal_bound=max_goal_bound,
         device=device,
-        autotune_ent_coef=args.autotune_ent_coef,
-        target_entropy_frac=args.target_entropy_frac,
-        ent_coef_lr=args.ent_coef_lr,
-        ent_coef_min=args.ent_coef_min,
-        ent_coef_max=args.ent_coef_max,
         # The one manager-collapse mitigation kept -- see --clip-vloss's
         # help and ManagerActor's docstring in algorithms/common.py.
         clip_vloss=args.clip_vloss,

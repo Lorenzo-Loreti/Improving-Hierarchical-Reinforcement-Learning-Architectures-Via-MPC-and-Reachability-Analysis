@@ -283,6 +283,30 @@ def test_reloaded_policies_act_identically():
     assert torch.allclose(reloaded.get_worker_action(obs_goal, deterministic=True), worker_before, atol=1e-6)
 
 
+def test_checkpoint_from_the_autotuning_era_still_loads():
+    """Every checkpoint trained before the entropy autotuner was removed
+    carries both heads' log_ent_coef and their optimiser states. Loading one
+    must restore the networks and leave the fixed ent_coefs alone, not raise."""
+    agent = _agent()
+    obs = torch.randn(4, OBS_DIM)
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "old.pt")
+        agent.save(path)
+        checkpoint = torch.load(path, weights_only=False)
+        for head in ("manager", "worker"):
+            log_ent_coef = torch.tensor(math.log(0.3), requires_grad=True)
+            checkpoint[f"{head}_log_ent_coef"] = math.log(0.3)
+            checkpoint[f"{head}_ent_coef_optimizer"] = torch.optim.Adam([log_ent_coef], lr=3e-4).state_dict()
+        torch.save(checkpoint, path)
+
+        reloaded = HPPOAgent(OBS_DIM, GOAL_DIM, ACT_DIM, device="cpu")
+        reloaded.load(path)  # must not raise, and must not need weights_only=False
+
+    assert reloaded.ent_coef_manager == 0.01 and reloaded.ent_coef_worker == 0.01
+    assert torch.allclose(reloaded.get_manager_action(obs, deterministic=True),
+                          agent.get_manager_action(obs, deterministic=True), atol=1e-6)
+
+
 # --------------------------------------------------------------------------
 # The update
 # --------------------------------------------------------------------------
@@ -341,8 +365,8 @@ def test_update_with_empty_batch_does_not_crash(head):
     a c-step boundary nor terminated. The update must degrade to a metrics-only
     no-op rather than crash -- it once did, via the since-removed target_kl
     check indexing an empty list. See
-    test_empty_batch_does_not_poison_ent_coef for the autotuning-specific
-    failure this same empty batch used to cause."""
+    (The same empty batch also used to poison the since-removed entropy
+    autotuner's log_ent_coef with a NaN.)"""
     agent, buf = _prepared(head, fill=0)
     update = agent.update_manager if head == "manager" else agent.update_worker
     metrics = update(buf, 8, 2)
@@ -364,26 +388,7 @@ def test_empty_batch_metrics_have_the_same_keys_as_a_real_update(head):
 
 
 @pytest.mark.parametrize("head", ["manager", "worker"])
-def test_empty_batch_does_not_poison_ent_coef(head):
-    """Regression test: an empty batch left `entropy_losses` empty, so
-    `mean_entropy = float(np.mean([]))` was nan; that nan flowed through the
-    dual-ascent step into `log_ent_coef`, and the clamp right after it cannot
-    recover a nan since every comparison against one is false. The result was
-    a permanently corrupted head for the rest of training, with no error
-    raised anywhere."""
-    agent, buf = _prepared(head, agent=_autotune_agent(), fill=0)
-    log_ent_coef = getattr(agent, f"log_ent_coef_{head}")
-    before = float(log_ent_coef.detach())
-    update = agent.update_manager if head == "manager" else agent.update_worker
-    update(buf, 8, 2)
-    assert float(log_ent_coef.detach()) == before
-
-
-@pytest.mark.parametrize("head", ["manager", "worker"])
 def test_update_reports_the_expected_metrics(head):
-    """Autotuning is on by default, so the default agent's metrics include
-    {head}/ent_coef; see test_autotune_off_matches_todays_metrics_and_checkpoint_shape
-    for the metrics dict with autotuning explicitly disabled."""
     agent, buf = _prepared(head)
     update = agent.update_manager if head == "manager" else agent.update_worker
     metrics = update(buf, 8, 2)
@@ -393,11 +398,22 @@ def test_update_reports_the_expected_metrics(head):
         f"{head}/clipfrac",
         f"{head}/value_bias", f"{head}/value_target_mean",
         f"{head}/value_target_std", f"{head}/explained_variance",
-        f"{head}/adv_std_raw", f"{head}/batch_size", f"{head}/ent_coef",
+        f"{head}/adv_std_raw", f"{head}/batch_size",
     }
     # np.mean over a float32 batch returns np.float32, which is not a float
     # and serialises awkwardly.
     assert all(type(v) is float for v in metrics.values())
+
+
+@pytest.mark.parametrize("head", ["manager", "worker"])
+def test_each_heads_actor_and_critic_share_no_parameters(head):
+    """The premise behind HPPOAgent having no vf_coef: with disjoint
+    parameters a critic's gradient comes from its value loss alone, so a
+    constant weight on that loss is undone by Adam instead of trading the
+    head's actor and critic off against each other."""
+    agent = _agent()
+    actor, critic = getattr(agent, f"{head}_actor"), getattr(agent, f"{head}_critic")
+    assert {id(p) for p in actor.parameters()}.isdisjoint({id(p) for p in critic.parameters()})
 
 
 def test_update_changes_both_networks_of_the_head_and_neither_of_the_other():
@@ -436,155 +452,6 @@ def test_manager_update_reports_the_pre_normalization_advantage_std():
     expected = float(buf.advantages[:buf.step].std())
     metrics = agent.update_manager(buf, 8, 2)
     assert metrics["manager/adv_std_raw"] == pytest.approx(expected, rel=1e-4)
-
-
-# --------------------------------------------------------------------------
-# Entropy autotuning (SAC-style dual ascent on log_ent_coef_manager/_worker)
-# --------------------------------------------------------------------------
-
-def _autotune_agent(target_entropy_manager=None, target_entropy_worker=None, **kwargs):
-    agent = _agent(autotune_ent_coef=True, **kwargs)
-    if target_entropy_manager is not None:
-        agent.target_entropy_manager = target_entropy_manager
-    if target_entropy_worker is not None:
-        agent.target_entropy_worker = target_entropy_worker
-    return agent
-
-
-def test_autotune_off_matches_todays_metrics_and_checkpoint_shape():
-    """Explicitly disabling autotuning must be unchanged from before
-    autotuning existed: no extra tensors, no new checkpoint keys, same
-    metrics dict for either head. Autotuning itself is on by default (see
-    test_update_reports_the_expected_metrics)."""
-    agent, buf = _prepared("worker", agent=_agent(autotune_ent_coef=False))
-    assert not agent.autotune_ent_coef
-    assert not hasattr(agent, "log_ent_coef_worker")
-    metrics = agent.update_worker(buf, 8, 2)
-    assert "worker/ent_coef" not in metrics
-
-    with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "ckpt.pt")
-        agent.save(path)
-        checkpoint = torch.load(path, weights_only=False)
-    assert "manager_log_ent_coef" not in checkpoint
-    assert "worker_log_ent_coef" not in checkpoint
-
-
-@pytest.mark.parametrize("head", ["manager", "worker"])
-def test_ent_coef_rises_when_entropy_is_below_target(head):
-    """A target far above the policy's actual (bounded) entropy ceiling must
-    push that head's log_ent_coef, hence ent_coef, up."""
-    kwargs = {f"target_entropy_{head}": 10.0}
-    agent, buf = _prepared(head, agent=_autotune_agent(**kwargs))
-    log_ent_coef = getattr(agent, f"log_ent_coef_{head}")
-    before = float(log_ent_coef.detach().exp())
-    update = agent.update_manager if head == "manager" else agent.update_worker
-    metrics = update(buf, 8, 2)
-    assert metrics[f"{head}/ent_coef"] > before
-
-
-@pytest.mark.parametrize("head", ["manager", "worker"])
-def test_ent_coef_falls_when_entropy_is_above_target(head):
-    """A target far below the policy's entropy must push ent_coef down."""
-    kwargs = {f"target_entropy_{head}": -10.0}
-    agent, buf = _prepared(head, agent=_autotune_agent(**kwargs))
-    log_ent_coef = getattr(agent, f"log_ent_coef_{head}")
-    before = float(log_ent_coef.detach().exp())
-    update = agent.update_manager if head == "manager" else agent.update_worker
-    metrics = update(buf, 8, 2)
-    assert metrics[f"{head}/ent_coef"] < before
-
-
-@pytest.mark.parametrize("head", ["manager", "worker"])
-def test_log_ent_coef_is_clamped(head):
-    """A strongly-pushing target must not drive either head's ent_coef past
-    ent_coef_max -- PPO's entropy term shares one backward pass with
-    pg_loss/v_loss, so an unclamped coefficient could starve them."""
-    kwargs = {f"target_entropy_{head}": 100.0, "ent_coef_max": 0.02, "ent_coef_lr": 1.0}
-    agent, buf = _prepared(head, agent=_autotune_agent(**kwargs))
-    update = agent.update_manager if head == "manager" else agent.update_worker
-    for _ in range(20):
-        metrics = update(buf, 8, 2)
-        assert metrics[f"{head}/ent_coef"] <= 0.02 + 1e-8
-
-
-@pytest.mark.parametrize("head", ["manager", "worker"])
-def test_ent_coef_is_fixed_within_one_update_call(head):
-    """This batch is reused across update_epochs passes; the dual-ascent
-    optimizer must step exactly once per update_manager/update_worker call,
-    not once per minibatch, or the coefficient would drift mid-update."""
-    kwargs = {f"target_entropy_{head}": 10.0}
-    agent, buf = _prepared(head, agent=_autotune_agent(**kwargs))
-    ent_coef_optimizer = getattr(agent, f"ent_coef_optimizer_{head}")
-    update = agent.update_manager if head == "manager" else agent.update_worker
-
-    step_calls = []
-    original_step = ent_coef_optimizer.step
-
-    def counting_step(*args, **kwargs):
-        step_calls.append(1)
-        return original_step(*args, **kwargs)
-
-    ent_coef_optimizer.step = counting_step
-    update(buf, 8, 5)
-    assert len(step_calls) == 1
-
-
-def test_manager_and_worker_ent_coefs_are_independent():
-    """No accidental state sharing between the two heads' dual-ascent state:
-    driving one head's entropy far below target and the other's far above
-    must move their coefficients in opposite directions from the same agent."""
-    agent = _autotune_agent(target_entropy_manager=10.0, target_entropy_worker=-10.0)
-    _, manager_buf = _prepared("manager", agent=agent)
-    _, worker_buf = _prepared("worker", agent=agent)
-    manager_before = float(agent.log_ent_coef_manager.detach().exp())
-    worker_before = float(agent.log_ent_coef_worker.detach().exp())
-
-    manager_metrics = agent.update_manager(manager_buf, 8, 2)
-    worker_metrics = agent.update_worker(worker_buf, 8, 2)
-
-    assert manager_metrics["manager/ent_coef"] > manager_before
-    assert worker_metrics["worker/ent_coef"] < worker_before
-
-
-def test_autotune_checkpoint_round_trips():
-    """Both heads' log_ent_coef and optimiser state must survive a save/load
-    round trip, or a resumed autotuning run silently restarts from the
-    initial ent_coef instead of the value it had converged to."""
-    agent = _autotune_agent(max_goal_bound=10.0)
-    with torch.no_grad():
-        agent.log_ent_coef_manager.fill_(math.log(0.5))
-        agent.log_ent_coef_worker.fill_(math.log(0.2))
-
-    with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "ckpt.pt")
-        agent.save(path)
-        reloaded = _autotune_agent()
-        reloaded.load(path)  # must not need weights_only=False
-
-    assert float(reloaded.log_ent_coef_manager.detach()) == pytest.approx(math.log(0.5), abs=1e-6)
-    assert float(reloaded.log_ent_coef_worker.detach()) == pytest.approx(math.log(0.2), abs=1e-6)
-
-
-def test_loading_autotuned_checkpoint_into_non_autotuning_agent_warns_and_folds_back(capsys):
-    """A checkpoint trained with autotuning, loaded into an agent constructed
-    without it, must fold each head's tuned value into a fixed ent_coef
-    rather than silently dropping it."""
-    agent = _autotune_agent()
-    with torch.no_grad():
-        agent.log_ent_coef_manager.fill_(math.log(0.3))
-        agent.log_ent_coef_worker.fill_(math.log(0.15))
-
-    with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "ckpt.pt")
-        agent.save(path)
-        reloaded = _agent(autotune_ent_coef=False)
-        reloaded.load(path)  # must not raise
-
-    out = capsys.readouterr().out
-    assert "trained with autotune_ent_coef=True" in out
-    assert reloaded.ent_coef_manager == pytest.approx(0.3, abs=1e-6)
-    assert reloaded.ent_coef_worker == pytest.approx(0.15, abs=1e-6)
 
 
 # --------------------------------------------------------------------------
