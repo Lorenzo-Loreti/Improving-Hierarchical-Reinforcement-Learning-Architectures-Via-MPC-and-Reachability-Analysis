@@ -111,7 +111,7 @@ class RolloutBuffer:
         return states, actions, logprobs, returns, advantages
 
 class PPOAgent:
-    # Defaults deliberately match what each scenario's script_ppo.py passes, so an agent
+    # Defaults deliberately match what ppo_train.py's flags default to, so an agent
     # constructed directly -- an evaluation notebook, say -- behaves like the
     # trained configuration instead of silently differing from it. Change the
     # two together.
@@ -195,8 +195,8 @@ class PPOAgent:
         #
         # Callers must anneal *every* group. Writing only `param_groups[0]`,
         # which was correct while there was a single group, now silently
-        # leaves the critic un-annealed; each scenario's script_ppo.py captures the
-        # base learning rates once and scales each group against its own.
+        # leaves the critic un-annealed; ppo_train.py captures the base
+        # learning rates once and scales each group against its own.
         self.optimizer = optim.Adam([
             {"params": list(self.actor.parameters()), "lr": lr},
             {"params": list(self.critic.parameters()), "lr": lr * critic_lr_mult},

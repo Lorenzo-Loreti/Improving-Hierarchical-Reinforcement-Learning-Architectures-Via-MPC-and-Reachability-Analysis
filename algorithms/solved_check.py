@@ -14,7 +14,7 @@ policy_fn(obs) -> action` factory rather than an agent object, so the same
 function works whether the caller is PPO, hPPO, PPO+MPC, or anything else -- the
 caller is responsible for making the returned callable deterministic (e.g.
 this project's agents already expose a `deterministic=True` action mode for
-evaluation; see script_ppo.py's existing eval loop), since a stochastic
+evaluation; see PPOAgent.act and algorithms/ppo/ppo_train.py's eval loop), since a stochastic
 policy_fn would make "solved" flicker between eval passes for no reason
 related to the policy actually improving.
 

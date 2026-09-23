@@ -438,5 +438,5 @@ def test_act_is_the_deterministic_action_without_a_critic_pass():
 
 def test_agent_default_discount_is_the_documented_one():
     """gamma = 0.99 is a deliberate default, not an accident (PPO chapter §11.1),
-    and it must match what each scenario's script_ppo.py passes."""
+    and it must match ppo_train.py's --gamma default."""
     assert PPOAgent(4, 2, device="cpu").gamma == 0.99
