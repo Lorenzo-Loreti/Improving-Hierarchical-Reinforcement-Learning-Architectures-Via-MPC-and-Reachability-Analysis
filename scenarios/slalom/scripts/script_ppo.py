@@ -95,19 +95,8 @@ def parse_args():
     parser.add_argument("--clip-coef", type=float, default=0.2,
         help="the surrogate clipping coefficient")
     parser.add_argument("--ent-coef", type=float, default=0.01,
-        help="coefficient of the entropy. With --autotune-ent-coef, this is only the initial value")
-    parser.add_argument("--autotune-ent-coef", type=lambda x: x.lower() in ['true', '1', 't', 'y', 'yes'], default=True,
-        help="learn the entropy coefficient via SAC-style dual ascent toward a target entropy. On by default; pass --autotune-ent-coef false to hold --ent-coef fixed instead")
-    parser.add_argument("--target-entropy-frac", type=float, default=0.35,
-        help="target entropy as a fraction of the policy's max achievable entropy (log(action range) per dim); only used with --autotune-ent-coef")
-    parser.add_argument("--ent-coef-lr", type=float, default=3e-4,
-        help="learning rate for the entropy coefficient's own optimizer; only used with --autotune-ent-coef")
-    parser.add_argument("--ent-coef-min", type=float, default=1e-4,
-        help="lower clamp on the autotuned entropy coefficient; only used with --autotune-ent-coef")
-    parser.add_argument("--ent-coef-max", type=float, default=1.0,
-        help="upper clamp on the autotuned entropy coefficient; only used with --autotune-ent-coef")
-    parser.add_argument("--vf-coef", type=float, default=0.5,
-        help="coefficient of the value function")
+        help="coefficient of the entropy bonus, fixed for the whole run (see "
+             "PPOAgent for why there is no autotuning)")
     parser.add_argument("--max-grad-norm", type=float, default=0.5,
         help="the maximum norm for the gradient clipping")
     parser.add_argument("--critic-lr-mult", type=float, default=3.0,
@@ -193,7 +182,6 @@ if __name__ == "__main__":
         gae_lambda=args.gae_lambda,
         clip_coef=args.clip_coef,
         ent_coef=args.ent_coef,
-        vf_coef=args.vf_coef,
         max_grad_norm=args.max_grad_norm,
         critic_lr_mult=args.critic_lr_mult,
         # Carried into the checkpoint so a reloaded policy knows the
@@ -201,11 +189,6 @@ if __name__ == "__main__":
         obs_low=obs_low,
         obs_high=obs_high,
         device=device,
-        autotune_ent_coef=args.autotune_ent_coef,
-        target_entropy_frac=args.target_entropy_frac,
-        ent_coef_lr=args.ent_coef_lr,
-        ent_coef_min=args.ent_coef_min,
-        ent_coef_max=args.ent_coef_max,
     )
 
     # One base learning rate per parameter group (actor, then critic). The

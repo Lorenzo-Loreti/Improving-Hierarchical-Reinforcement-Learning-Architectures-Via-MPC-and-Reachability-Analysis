@@ -309,9 +309,6 @@ def test_explained_variance_uses_pre_update_values():
 
 
 def test_update_reports_the_expected_metrics():
-    """Autotuning is on by default, so the default agent's metrics include
-    loss/ent_coef; see test_autotune_off_matches_todays_metrics_and_checkpoint_shape
-    for the metrics dict with autotuning explicitly disabled."""
     agent, buf = _prepared_agent_and_buffer()
     metrics = agent.update(buf, minibatch_size=8, update_epochs=2)
     assert set(metrics) == {
@@ -320,9 +317,19 @@ def test_update_reports_the_expected_metrics():
         "loss/clipfrac", "loss/value_bias",
         "loss/value_target_mean", "loss/value_target_std", "loss/explained_variance",
         "loss/adv_std_raw", "loss/batch_size",
-        "loss/ent_coef",
     }
     assert all(isinstance(v, float) for v in metrics.values())
+
+
+def test_actor_and_critic_share_no_parameters():
+    """The premise behind PPOAgent having no vf_coef: with disjoint
+    parameters the critic's gradient comes from the value loss alone, so a
+    constant weight on that loss is undone by Adam instead of trading the
+    two heads off against each other."""
+    agent = PPOAgent(4, 2, device="cpu")
+    actor_ids = {id(p) for p in agent.actor.parameters()}
+    critic_ids = {id(p) for p in agent.critic.parameters()}
+    assert actor_ids.isdisjoint(critic_ids)
 
 
 def test_update_changes_both_heads():
@@ -341,129 +348,6 @@ def test_update_reports_the_pre_normalization_advantage_std():
     expected = float(buf.advantages.reshape(-1).std())
     metrics = agent.update(buf, minibatch_size=8, update_epochs=2)
     assert metrics["loss/adv_std_raw"] == pytest.approx(expected, rel=1e-4)
-
-
-# --------------------------------------------------------------------------
-# Entropy autotuning (SAC-style dual ascent on log_ent_coef)
-# --------------------------------------------------------------------------
-
-def _autotuning_agent_and_buffer(target_entropy, seed=0, **agent_kwargs):
-    agent = PPOAgent(4, 2, autotune_ent_coef=True, device="cpu", **agent_kwargs)
-    agent.target_entropy = target_entropy
-    buf = _filled_buffer(num_steps=8, num_envs=4, seed=seed)
-    with torch.no_grad():
-        flat = buf.states.reshape(-1, 4)
-        _, logprobs, _ = agent.policy_forward(flat, buf.actions.reshape(-1, 2))
-    buf.logprobs = logprobs.reshape(8, 4)
-    agent.compute_returns_and_advantage(buf, torch.zeros(4), torch.zeros(4))
-    return agent, buf
-
-
-def test_autotune_off_matches_todays_metrics_and_checkpoint_shape():
-    """Explicitly disabling autotuning must be unchanged from before
-    autotuning existed: no extra tensors, no new checkpoint keys, same
-    metrics dict. Autotuning itself is on by default (see
-    test_update_reports_the_expected_metrics)."""
-    agent, buf = _prepared_agent_and_buffer(PPOAgent(4, 2, autotune_ent_coef=False, device="cpu"))
-    assert not agent.autotune_ent_coef
-    assert not hasattr(agent, "log_ent_coef")
-    metrics = agent.update(buf, minibatch_size=8, update_epochs=2)
-    assert "loss/ent_coef" not in metrics
-
-    with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "ckpt.pt")
-        agent.save(path)
-        checkpoint = torch.load(path, weights_only=False)
-    assert "log_ent_coef" not in checkpoint
-    assert "ent_coef_optimizer" not in checkpoint
-
-
-def test_ent_coef_rises_when_entropy_is_below_target():
-    """A target far above the policy's actual (bounded) entropy ceiling must
-    push log_ent_coef, hence ent_coef, up: not enough exploration yet."""
-    agent, buf = _autotuning_agent_and_buffer(target_entropy=10.0)
-    before = float(agent.log_ent_coef.detach().exp())
-    metrics = agent.update(buf, minibatch_size=8, update_epochs=2)
-    assert metrics["loss/ent_coef"] > before
-
-
-def test_ent_coef_falls_when_entropy_is_above_target():
-    """A target far below the policy's entropy must push ent_coef down."""
-    agent, buf = _autotuning_agent_and_buffer(target_entropy=-10.0)
-    before = float(agent.log_ent_coef.detach().exp())
-    metrics = agent.update(buf, minibatch_size=8, update_epochs=2)
-    assert metrics["loss/ent_coef"] < before
-
-
-def test_log_ent_coef_is_clamped():
-    """A strongly-pushing target must not drive ent_coef past ent_coef_max --
-    PPO's entropy term shares one backward pass with pg_loss/v_loss, so an
-    unclamped coefficient could otherwise starve them of gradient signal."""
-    agent, buf = _autotuning_agent_and_buffer(
-        target_entropy=100.0, ent_coef_max=0.02, ent_coef_lr=1.0
-    )
-    for i in range(20):
-        metrics = agent.update(buf, minibatch_size=8, update_epochs=2)
-        assert metrics["loss/ent_coef"] <= 0.02 + 1e-8
-        buf = _filled_buffer(num_steps=8, num_envs=4, seed=i + 1)
-        with torch.no_grad():
-            flat = buf.states.reshape(-1, 4)
-            _, logprobs, _ = agent.policy_forward(flat, buf.actions.reshape(-1, 2))
-        buf.logprobs = logprobs.reshape(8, 4)
-        agent.compute_returns_and_advantage(buf, torch.zeros(4), torch.zeros(4))
-
-
-def test_ent_coef_is_fixed_within_one_update_call():
-    """PPO reuses one batch across update_epochs passes; the dual-ascent
-    optimizer must step exactly once per update() call, not once per
-    minibatch, or the coefficient (and hence the loss it enters) would drift
-    mid-update, epoch 1 and epoch 10 no longer optimizing the same surrogate."""
-    agent, buf = _autotuning_agent_and_buffer(target_entropy=10.0)
-    step_calls = []
-    original_step = agent.ent_coef_optimizer.step
-
-    def counting_step(*args, **kwargs):
-        step_calls.append(1)
-        return original_step(*args, **kwargs)
-
-    agent.ent_coef_optimizer.step = counting_step
-    agent.update(buf, minibatch_size=8, update_epochs=5)
-    assert len(step_calls) == 1
-
-
-def test_autotune_checkpoint_round_trips():
-    """log_ent_coef and its optimiser state must survive a save/load round
-    trip, or a resumed autotuning run silently restarts from the initial
-    ent_coef instead of the value it had converged to."""
-    agent = PPOAgent(4, 2, autotune_ent_coef=True, device="cpu")
-    with torch.no_grad():
-        agent.log_ent_coef.fill_(math.log(0.5))
-
-    with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "ckpt.pt")
-        agent.save(path)
-        reloaded = PPOAgent(4, 2, autotune_ent_coef=True, device="cpu")
-        reloaded.load(path)  # must not need weights_only=False
-
-    assert float(reloaded.log_ent_coef.detach()) == pytest.approx(math.log(0.5), abs=1e-6)
-
-
-def test_loading_autotuned_checkpoint_into_non_autotuning_agent_warns_and_folds_back(capsys):
-    """A checkpoint trained with autotuning, loaded into an agent constructed
-    without it, must fold the tuned value into a fixed ent_coef rather than
-    silently dropping it (mirrors test_load_tolerates_a_single_group_optimiser_state)."""
-    agent = PPOAgent(4, 2, autotune_ent_coef=True, device="cpu")
-    with torch.no_grad():
-        agent.log_ent_coef.fill_(math.log(0.3))
-
-    with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "ckpt.pt")
-        agent.save(path)
-        reloaded = PPOAgent(4, 2, autotune_ent_coef=False, device="cpu")
-        reloaded.load(path)  # must not raise
-
-    assert "trained with autotune_ent_coef=True" in capsys.readouterr().out
-    assert reloaded.ent_coef == pytest.approx(0.3, abs=1e-6)
 
 
 # --------------------------------------------------------------------------
@@ -529,6 +413,28 @@ def test_load_tolerates_a_single_group_optimiser_state(capsys):
         assert torch.allclose(a, b)
     # the ratio survives a load that discarded the optimiser state
     assert [g["lr"] for g in new.optimizer.param_groups] == pytest.approx([3e-4, 9e-4])
+
+
+def test_checkpoint_from_the_autotuning_era_still_loads():
+    """Every checkpoint trained before the entropy autotuner was removed
+    carries log_ent_coef and its optimiser state. Loading one must restore
+    the weights and leave the fixed ent_coef alone, not raise."""
+    agent = PPOAgent(4, 2, device="cpu")
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "old.pt")
+        agent.save(path)
+        checkpoint = torch.load(path, weights_only=False)
+        log_ent_coef = torch.tensor(math.log(0.3), requires_grad=True)
+        checkpoint["log_ent_coef"] = math.log(0.3)
+        checkpoint["ent_coef_optimizer"] = torch.optim.Adam([log_ent_coef], lr=3e-4).state_dict()
+        torch.save(checkpoint, path)
+
+        reloaded = PPOAgent(4, 2, device="cpu")
+        reloaded.load(path)  # must not raise, and must not need weights_only=False
+
+    assert reloaded.ent_coef == 0.01
+    for a, b in zip(agent.actor.parameters(), reloaded.actor.parameters()):
+        assert torch.equal(a, b)
 
 
 def test_agent_default_discount_is_the_documented_one():
