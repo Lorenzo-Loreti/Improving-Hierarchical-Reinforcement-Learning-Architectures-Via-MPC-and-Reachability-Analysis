@@ -111,6 +111,38 @@ anyone re-running the cross-algorithm comparison.
 | PPO+MPC-reach | 3/3 | 24k / 22k / 22k | 209 / 209 / 209 | 98.3 % | 0 / 0 / 0 |
 | hPPO | 3/3 | 30k / 40k / 40k | 212 / 213 / 215 | 100.2 % | 0 / 0 / 0 |
 
+### Since measured: flat PPO and hPPO simplified (2026-09-23)
+
+The PPO and hPPO rows above were measured before both were simplified. The
+simplification removed options that were never enabled and changed behaviour
+in three ways:
+
+- the entropy autotuner, inert at its learning rate, was replaced by a
+  fixed `ent_coef = 0.01`, which is where it had stayed anyway;
+- `vf_coef` was dropped, since each actor/critic pair shares no parameters;
+- hPPO's manager no longer re-plans on a wall contact (`--replan-on-collision`).
+
+See the class comments of `PPOAgent` and `HPPOAgent`. The rows are left as
+measured. Re-running under this same protocol, with 13 seeds on the slalom
+because 3 cannot resolve a sample-efficiency change on this task:
+
+| slalom, 13 seeds | solved | steps to solve, median / mean | final return | contacts/ep |
+| --- | --- | --- | --- | --- |
+| PPO, before | 13/13 | 51k / 59k | 1018.2 | 0 |
+| PPO, after | 13/13 | 51k / 56k | 1018.0 | 0 |
+| hPPO, before | 13/13 | 82k / 85k | 1015.6 | 0 |
+| hPPO, no collision re-plan | 13/13 | 92k / 95k | 1016.0 | 0 |
+| hPPO, after (also no autotuner, no `vf_coef`) | 13/13 | 82k / 96k | 1016.1 | 0 |
+
+None of the differences in steps is significant (Mann–Whitney, hPPO after vs
+before: p = 0.71; the collision re-plan alone: p = 0.15). The mean moves because
+a few seeds sit on a plateau for longer (hPPO after: 184k on seed 7, 133k on
+seeds 2 and 3). Final quality is unchanged throughout. On the tunnel both are
+unchanged: PPO 20k on all 3 seeds before and after, hPPO 31k / 41k / 41k →
+41k / 31k / 31k. The "before" seeds 1–3 reproduce the rows above
+(hPPO slalom 72k / 82k / 82k against 71k / 81k / 81k, within one evaluation
+interval), so these rows and the table are one protocol.
+
 ## What the numbers say
 
 **1. The tunnel does not discriminate.** Every algorithm solves it 3/3, within

@@ -412,6 +412,7 @@ class HPPOAgent:
     #   per update, so at the 3e-4 it always ran with the coefficients
     #   could not leave the neighbourhood of their 0.01 start: the 16 hPPO
     #   runs on disk (tunnel) all ended with both heads at 0.0098-0.0102,
+    #   13 slalom seeds under the benchmark protocol at 0.00985-0.00992,
     #   and docs/worker-termination-avoidance.md (section 3) measured
     #   0.0100 -> 0.0108 over a whole 244-update slalom run while the
     #   manager's entropy fell from +1.2 to -2.2 nats. Every hPPO result
