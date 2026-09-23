@@ -10,7 +10,8 @@ that was used as a control, is in
 This document exists because the finding invalidates an earlier, published-in-
 comments diagnosis of the same symptom ("the hPPO manager collapse"). The
 canonical short version lives in code — the `--worker-success-bonus` block in
-`scenarios/slalom/scripts/script_hppo.py` and the dated addendum at the end of
+`algorithms/hppo/hppo_train.py` (written in `scenarios/slalom/scripts/script_hppo.py`,
+before both scenarios' hPPO loops were merged there) and the dated addendum at the end of
 `ManagerActor`'s docstring in `algorithms/common.py`. This is the long version:
 what the defect is, how it was pinned down, what changed, and what the evidence
 for each change actually is.
@@ -419,6 +420,10 @@ Reading them:
 | `scenarios/{slalom,tunnel}/scripts/script_ppo_mpc.py` | control-arm diagnostic only, no knobs |
 | `scenarios/{slalom,tunnel}/scripts/script_ppo_mpc_reach.py` | control-arm diagnostic only, no knobs |
 | `algorithms/common.py` | dated addendum to `ManagerActor`'s docstring correcting the earlier manager-side diagnosis |
+
+Both `script_hppo.py` loops have since been merged into `algorithms/hppo/hppo_train.py`,
+which carries the slalom's write-up with the tunnel's notes; the scripts are now thin
+per-scenario wrappers.
 
 ---
 

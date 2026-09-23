@@ -367,7 +367,7 @@ class ManagerVecRolloutBuffer:
 
 
 class HPPOAgent:
-    # Defaults deliberately match what each scenario's script_hppo.py passes, so an
+    # Defaults deliberately match what hppo_train.py's flags default to, so an
     # agent constructed directly -- an evaluation notebook, say -- behaves like
     # the trained configuration instead of silently differing from it. Change
     # the two together.
@@ -516,8 +516,8 @@ class HPPOAgent:
         #
         # Callers must anneal *every* group. Writing only `param_groups[0]`,
         # which was correct while there was a single group, now silently leaves
-        # the critic un-annealed; each scenario's script_hppo.py captures the base
-        # learning rates once and scales each group against its own.
+        # the critic un-annealed; hppo_train.py captures the base learning
+        # rates once and scales each group against its own.
         self.manager_optimizer = optim.Adam([
             {"params": list(self.manager_actor.parameters()), "lr": lr_manager},
             {"params": list(self.manager_critic.parameters()), "lr": lr_manager * critic_lr_mult},
@@ -872,8 +872,8 @@ class HPPOAgent:
 
     def update_worker(self, buffer, minibatch_size, update_epochs):
         # buffer.states holds the CONCATENATED (normalized obs, normalized
-        # goal) that the worker networks take as input; see
-        # each scenario's script_hppo.py.
+        # goal) that the worker networks take as input; see worker_input in
+        # hppo_train.py.
         return self._update_head(
             buffer, minibatch_size, update_epochs,
             policy_forward=self.worker_policy_forward,

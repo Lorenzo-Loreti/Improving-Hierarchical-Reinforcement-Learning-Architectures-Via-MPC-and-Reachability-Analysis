@@ -220,7 +220,7 @@ def test_agent_is_the_single_source_of_each_head_discount():
 
 
 def test_agent_default_discount_is_the_documented_one():
-    """The default must track each scenario's script_hppo.py's --gamma (PPO ch. 11.1)."""
+    """The default must track hppo_train.py's --gamma (PPO ch. 11.1)."""
     agent = HPPOAgent(OBS_DIM, GOAL_DIM, ACT_DIM, device="cpu")
     assert agent.gamma == pytest.approx(0.99)
 
@@ -449,8 +449,8 @@ def test_update_changes_both_networks_of_the_head_and_neither_of_the_other():
 # --------------------------------------------------------------------------
 
 def test_clip_vloss_is_on_by_default_as_in_the_scripts():
-    """The only mitigation the 6-seed ablation supported, and what both
-    script_hppo.py pass. The agent's own default used to be False, so an
+    """The only mitigation the 6-seed ablation supported, and hppo_train.py's
+    --clip-vloss default. The agent's own default used to be False, so an
     agent built directly (an evaluation notebook, a test) silently trained
     differently from the scripts."""
     assert _agent().clip_vloss is True

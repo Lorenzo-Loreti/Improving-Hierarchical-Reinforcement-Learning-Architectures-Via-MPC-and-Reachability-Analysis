@@ -84,8 +84,9 @@ def normalize_goal(goal, max_goal_bound):
     max_goal_bound`), so the pair round-trips. (`ppo_mpc_reach`'s
     state-dependent `reachable_goal` is *not* invertible this way, which is
     one reason that variant keeps its own goal handling rather than sharing
-    this one.) Note that a goal decays as the agent moves toward it (each
-    scenario's script_hppo.py), so a partially consumed goal sits strictly
+    this one.) Note that a goal decays as the agent moves toward it (the
+    hPPO training loop, algorithms/hppo/hppo_train.py), so a partially
+    consumed goal sits strictly
     inside
     `[-max_goal_bound, max_goal_bound]`; only a freshly emitted one can
     approach that edge.
@@ -296,8 +297,8 @@ class ManagerActor(nn.Module):
     this Beta from sharpening arbitrarily close to a point mass.
 
     Kept as a defensive backstop, but it is *not* what fixes the slalom
-    seed-1 collapse (see each scenario's script_hppo.py's early-stopping
-    instead) -- a first attempt set this to 50 on the theory that both alpha
+    seed-1 collapse (see --early-stop-success-rate in
+    algorithms/hppo/hppo_train.py instead) -- a first attempt set this to 50 on the theory that both alpha
     and beta were blowing up symmetrically into a narrow peak, and that run
     was bit-for-bit identical to the uncapped one: the cap never bound.
     Inspecting the collapsed checkpoint directly showed the real shape is a
@@ -314,7 +315,7 @@ class ManagerActor(nn.Module):
     Neither is early-stopping the actual fix -- it only stops training
     before the collapse is *observed*, on both seed 1 and seed 2, it never
     crossed the strict floor it needs to fire against (see
-    script_hppo.py's --early-stop-optimal-frac).
+    --early-stop-optimal-frac in algorithms/hppo/hppo_train.py).
 
     A first hypothesis for the collapse itself was that the manager's batch
     -- small (~manager_freq times smaller than the worker's) and, once the
@@ -367,8 +368,9 @@ class ManagerActor(nn.Module):
     The "manager collapse" is not a manager problem. It is the *worker's*
     reward, and the manager's critic drift described above is downstream of
     it. Read the `--worker-success-bonus` block in
-    scenarios/slalom/scripts/script_hppo.py for the full diagnosis; in
-    short:
+    algorithms/hppo/hppo_train.py (written in scenarios/slalom/scripts/
+    script_hppo.py, before both scenarios' hPPO loops were merged there)
+    for the full diagnosis; in short:
 
     The worker is trained on a purely intrinsic reward (the per-step
     reduction in the distance to the manager's goal) with no terminal term,
@@ -410,7 +412,7 @@ class ManagerActor(nn.Module):
     `manager_freq` steps. Both arms reach the same final policy on slalom,
     but the bonus needs 266k/296k/399k steps to get there against the
     extrinsic mix's 71k/81k/81k. See the flag block in
-    scenarios/slalom/scripts/script_hppo.py. `MAX_CONCENTRATION` and `clip_vloss` are left as they are --
+    algorithms/hppo/hppo_train.py. `MAX_CONCENTRATION` and `clip_vloss` are left as they are --
     they are real backstops against a real failure mode, and the collapsed
     checkpoint does now sit pinned at the cap (alpha=[46.7, 6.7],
     beta=[1.00, 6.86], the skewed shape described above) -- but neither is

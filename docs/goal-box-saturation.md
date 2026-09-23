@@ -26,7 +26,7 @@ goal in completely different ways.
 
 - **hPPO's worker is a network.** It receives the goal *re-normalized by the
   same `max_goal_bound`* before it reaches the first layer (`worker_input` in
-  `script_hppo.py`); `normalize_goal` and `scale_goal` are exact inverses
+  `algorithms/hppo/hppo_train.py`); `normalize_goal` and `scale_goal` are exact inverses
   (`algorithms/common.py`, `algorithms/hppo/hppo.py`), so the constant cancels
   and the worker network literally sees the manager's raw `[-1, 1]` action. An
   unreachable goal is simply a direction. The one place it does not cancel is
