@@ -5,10 +5,7 @@ import torch.nn.functional as F
 import numpy as np
 import math
 
-from common import (
-    layer_init, normalize_obs, clipped_value_loss, floor_normalize,
-    ScaledBeta, RunningMeanStd,
-)
+from common import layer_init, normalize_obs, ScaledBeta, RunningMeanStd
 
 
 class ActorNetwork(nn.Module):
@@ -128,28 +125,26 @@ class PPOAgent:
     # batch-level normalisation in update() rescales straight back to unit
     # variance. At 0.99 the return signal stays wide and the critic stays
     # accurate. See the thesis PPO chapter, section 11.1 (kept outside this repo).
+    #
+    # Deliberately absent, although HPPOAgent has them: value-loss clipping
+    # (`clip_vloss`), the advantage-std floor (`adv_std_floor_frac`), a
+    # configurable ret_rms horizon and an early-stopping `target_kl`. They
+    # were once ported here for API parity but were never enabled in any
+    # flat-PPO run, and the evidence behind them is about hPPO's manager
+    # head, not about this agent -- see `clipped_value_loss` and
+    # `floor_normalize` in algorithms/common.py.
     def __init__(self, obs_dim, act_dim, act_limit_low=-1.0, act_limit_high=1.0, lr=3e-4, gamma=0.99, gae_lambda=0.95,
                  clip_coef=0.2, ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5,
-                 target_kl=None, obs_low=None, obs_high=None,
+                 obs_low=None, obs_high=None,
                  critic_lr_mult=3.0, device="cpu",
                  autotune_ent_coef=True, target_entropy_frac=0.35, ent_coef_lr=3e-4,
-                 ent_coef_min=1e-4, ent_coef_max=1.0,
-                 clip_vloss=False, adv_std_floor_frac=0.0, ret_rms_horizon=10):
+                 ent_coef_min=1e-4, ent_coef_max=1.0):
         self.gamma = gamma
         self.gae_lambda = gae_lambda
         self.clip_coef = clip_coef
         self.ent_coef = ent_coef
         self.vf_coef = vf_coef
         self.max_grad_norm = max_grad_norm
-        self.target_kl = target_kl
-        # PPO2/CleanRL-style value clipping -- see `clipped_value_loss`.
-        # Ported from HPPOAgent (algorithms/hppo/hppo.py) for API/diagnostic
-        # parity, not a finding specific to flat PPO -- see that function's
-        # docstring. False reproduces the exact previous behaviour.
-        self.clip_vloss = clip_vloss
-        # Floor on the advantage-normalisation denominator -- see
-        # `floor_normalize`. 0.0 reproduces the exact previous behaviour.
-        self.adv_std_floor_frac = adv_std_floor_frac
         self.device = device
 
         self.act_limit_low = torch.tensor(act_limit_low, dtype=torch.float32, device=device)
@@ -191,16 +186,7 @@ class PPOAgent:
         # at gamma=0.999) against a freshly initialized critic that outputs
         # ~0 -- see RunningMeanStd's docstring (algorithms/common.py) for why
         # that gap matters.
-        self.ret_rms = RunningMeanStd(horizon=ret_rms_horizon)
-
-        # Multi-update running std of raw (pre-normalization) advantages, used
-        # only as a floor under the batch's own std (see `adv_std_floor_frac`
-        # and `update`) -- not persisted in save()/load(), since it is a pure
-        # training-time stabilizer with no --resume path that would need it.
-        # Built unconditionally rather than only when adv_std_floor_frac > 0:
-        # it is cheap to update and this avoids a None-vs-object branch in
-        # update(). Ported from HPPOAgent for parity -- see clip_vloss above.
-        self.adv_rms = RunningMeanStd()
+        self.ret_rms = RunningMeanStd()
 
         # Two parameter groups, so the critic can run at a higher learning
         # rate than the actor. The critic is the binding constraint early in
@@ -328,19 +314,21 @@ class PPOAgent:
         # PPO implementations report.
         values = buffer.values.reshape(batch_size)
 
-        # Advantage normalization -- see floor_normalize for what
-        # `adv_std_floor_frac` changes and why. `adv_std_raw` (the batch's
-        # own, pre-floor std) is logged regardless.
-        advantages, adv_std_raw = floor_normalize(advantages, self.adv_rms, self.adv_std_floor_frac)
+        # Per-batch advantage normalization. The raw std is logged: it is the
+        # scale of the signal the normalization is about to hide. The mean
+        # comes from `var_mean`, not `.mean()`: the two differ in the last
+        # bit on about half of all batches, and `var_mean`'s is the one every
+        # reported flat-PPO run was trained with -- `.mean()` shifts slalom
+        # seeds 2 and 3 to measurably different (if equally good) policies.
+        adv_std_raw = float(advantages.std())
+        _, adv_mean = torch.var_mean(advantages)
+        advantages = (advantages - adv_mean) / (adv_std_raw + 1e-8)
 
         # Value-target normalization: refresh the running statistics on this
         # batch's returns, then regress the critic on standardized targets.
         # `get_value` undoes this so GAE keeps working on the raw scale.
         self.ret_rms.update(returns)
         norm_returns = (returns - self.ret_rms.mean) / self.ret_rms.std
-        # Pre-update predictions, re-expressed in the same standardized space
-        # as `newvalue` below, for `clip_vloss`. Unused when clip_vloss=False.
-        old_values_norm = (values - self.ret_rms.mean) / self.ret_rms.std
 
         clipfracs = []
 
@@ -348,7 +336,6 @@ class PPOAgent:
         # Worst single minibatch/epoch of this update, not just the mean --
         # see `ratio_max_dev` in the metrics dict below.
         ratio_max_dev = 0.0
-        epochs_ran = 0
 
         # Held fixed for every epoch/minibatch below, even when autotuning: PPO
         # reuses this same batch across update_epochs passes, so a coefficient
@@ -359,8 +346,7 @@ class PPOAgent:
             float(self.log_ent_coef.detach().exp()) if self.autotune_ent_coef else self.ent_coef
         )
 
-        for epoch in range(update_epochs):
-            epochs_ran += 1
+        for _ in range(update_epochs):
             b_inds = torch.randperm(batch_size, device=self.device)
             for start in range(0, batch_size, minibatch_size):
                 end = start + minibatch_size
@@ -387,12 +373,8 @@ class PPOAgent:
                 pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - self.clip_coef, 1 + self.clip_coef)
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-                # Value loss -- see clipped_value_loss for what `clip_vloss`
-                # changes and why.
-                v_loss = clipped_value_loss(
-                    newvalue, old_values_norm[mb_inds], norm_returns[mb_inds],
-                    self.clip_coef, self.clip_vloss
-                )
+                # Value loss: plain regression on the standardized targets.
+                v_loss = 0.5 * ((newvalue - norm_returns[mb_inds]) ** 2).mean()
 
                 # Entropy loss
                 entropy_loss = entropy.mean()
@@ -415,13 +397,6 @@ class PPOAgent:
                 v_losses.append(v_loss.item())
                 entropy_losses.append(entropy_loss.item())
                 approx_kls.append(approx_kl.item())
-
-            # Optional trust-region backstop. Off by default (target_kl=None),
-            # in which case all `update_epochs` always run and clipping is the
-            # only mechanism keeping the update near the sampling policy --
-            # so do not describe such runs as KL-constrained.
-            if self.target_kl is not None and approx_kls[-1] > self.target_kl:
-                break
 
         # One dual-ascent step per update() call (not per minibatch -- see
         # ent_coef_value above), using this update's mean entropy as the
@@ -456,8 +431,6 @@ class PPOAgent:
             "loss/approx_kl_max": float(np.max(approx_kls)),
             "loss/ratio_max_dev": float(ratio_max_dev),
             "loss/clipfrac": float(np.mean(clipfracs)),
-            # Epochs actually run; below update_epochs only when target_kl fired.
-            "loss/update_epochs_ran": float(epochs_ran),
             # Mean offset between predicted and actual return, pre-update. A
             # large value here with a healthy explained_variance means the
             # critic has the shape right but not the scale.
@@ -467,7 +440,7 @@ class PPOAgent:
             # float() not just for tidiness: np.var over a float32 batch returns
             # np.float32, which is not a Python float and serialises awkwardly.
             "loss/explained_variance": float(explained_var),
-            # Pre-normalization advantage std -- see floor_normalize.
+            # Pre-normalization advantage std.
             "loss/adv_std_raw": adv_std_raw,
             "loss/batch_size": float(batch_size),
         }

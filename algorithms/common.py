@@ -97,11 +97,13 @@ def clipped_value_loss(newvalue, old_value, target, clip_coef, clip_vloss):
     """PPO2/CleanRL-style optionally-clipped value loss for one minibatch.
 
     Added during the hPPO manager-collapse investigation (see `ManagerActor`'s
-    docstring in `hppo.py`) and adopted by every algorithm here for
-    diagnostic/API parity, not because the underlying finding is specific to
-    hPPO's manager head. `clip_vloss=False` reproduces plain regression MSE
-    exactly, so an agent built without opting in behaves exactly as before
-    this function existed.
+    docstring in `hppo.py`) and adopted by the three manager-based algorithms
+    (hPPO, PPO+MPC, PPO+MPC-reach) for diagnostic/API parity, not because the
+    underlying finding is specific to hPPO's manager head. Flat PPO carried
+    it too, never enabled, and has since dropped it along with
+    `floor_normalize` below. `clip_vloss=False` reproduces plain regression
+    MSE exactly, so an agent built without opting in behaves exactly as
+    before this function existed.
 
     Without clipping (`clip_vloss=False`) this is a plain regression MSE.
     With it, a *candidate* prediction is additionally clamped to within

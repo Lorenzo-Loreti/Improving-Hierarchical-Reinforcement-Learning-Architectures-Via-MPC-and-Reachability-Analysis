@@ -24,8 +24,6 @@ from ppo import (
     RolloutBuffer,
     RunningMeanStd,
     ScaledBeta,
-    clipped_value_loss,
-    floor_normalize,
     normalize_obs,
 )
 
@@ -310,18 +308,6 @@ def test_explained_variance_uses_pre_update_values():
     assert metrics["loss/value_bias"] == pytest.approx(float(np.mean(values - returns)), abs=1e-2)
 
 
-def test_update_runs_every_epoch_when_target_kl_is_unset():
-    agent, buf = _prepared_agent_and_buffer()
-    assert agent.target_kl is None
-    assert agent.update(buf, minibatch_size=8, update_epochs=10)["loss/update_epochs_ran"] == 10
-
-
-def test_target_kl_stops_the_update_early():
-    agent, buf = _prepared_agent_and_buffer()
-    agent.target_kl = 0.0  # any policy movement at all trips it
-    assert agent.update(buf, minibatch_size=8, update_epochs=10)["loss/update_epochs_ran"] == 1
-
-
 def test_update_reports_the_expected_metrics():
     """Autotuning is on by default, so the default agent's metrics include
     loss/ent_coef; see test_autotune_off_matches_todays_metrics_and_checkpoint_shape
@@ -331,7 +317,7 @@ def test_update_reports_the_expected_metrics():
     assert set(metrics) == {
         "loss/policy_loss", "loss/value_loss", "loss/entropy", "loss/approx_kl",
         "loss/approx_kl_max", "loss/ratio_max_dev",
-        "loss/clipfrac", "loss/update_epochs_ran", "loss/value_bias",
+        "loss/clipfrac", "loss/value_bias",
         "loss/value_target_mean", "loss/value_target_std", "loss/explained_variance",
         "loss/adv_std_raw", "loss/batch_size",
         "loss/ent_coef",
@@ -348,131 +334,6 @@ def test_update_changes_both_heads():
     assert any(not torch.allclose(a, b) for a, b in zip(critic_before, agent.critic.parameters()))
 
 
-# --------------------------------------------------------------------------
-# Ported-for-parity mitigations: value-loss clipping, advantage-std floor,
-# ret_rms horizon (see clipped_value_loss/floor_normalize's docstrings --
-# these were added to HPPOAgent during a manager-collapse investigation and
-# ported here for API/diagnostic parity, not a finding specific to flat PPO)
-# --------------------------------------------------------------------------
-
-def test_clipped_value_loss_matches_plain_mse_when_disabled():
-    """clip_vloss=False must reproduce the original, unclipped loss exactly
-    -- this is the default, so every run before this option existed depends
-    on it being a no-op."""
-    newvalue = torch.tensor([0.0, 5.0, -3.0])
-    old_value = torch.tensor([10.0, 10.0, 10.0])
-    target = torch.tensor([1.0, 1.0, 1.0])
-    expected = 0.5 * ((newvalue - target) ** 2).mean()
-    actual = clipped_value_loss(newvalue, old_value, target, clip_coef=0.2, clip_vloss=False)
-    assert torch.allclose(actual, expected)
-
-
-def test_clipped_value_loss_matches_unclipped_inside_the_trust_region():
-    """When newvalue is already within clip_coef of old_value, clipping has
-    nothing to bind on: clipped and unclipped candidates coincide."""
-    old_value = torch.tensor([10.0])
-    newvalue = old_value + 0.05  # inside clip_coef=0.2
-    target = torch.tensor([10.5])
-    expected = 0.5 * ((newvalue - target) ** 2).mean()
-    actual = clipped_value_loss(newvalue, old_value, target, clip_coef=0.2, clip_vloss=True)
-    assert torch.allclose(actual, expected)
-
-
-def test_clipped_value_loss_picks_the_clipped_candidate_when_it_scores_worse():
-    """newvalue has moved beyond clip_coef *and* toward target (a legitimate
-    improvement): the clipped candidate, pinned near the stale old_value,
-    scores worse than the unclipped one and must be the one used -- this is
-    the actual trust-region bite, not a no-op."""
-    old_value = torch.tensor([10.0])
-    target = torch.tensor([0.0])
-    newvalue = torch.tensor([8.0])  # moved 2.0 toward target, past clip_coef=0.2
-    unclipped_loss = 0.5 * ((newvalue - target) ** 2).mean()
-    actual = clipped_value_loss(newvalue, old_value, target, clip_coef=0.2, clip_vloss=True)
-    assert actual > unclipped_loss
-    v_clipped = old_value - 0.2  # clamp(8-10, -0.2, 0.2) == -0.2, so old_value + (-0.2)
-    expected = 0.5 * ((v_clipped - target) ** 2).mean()
-    assert torch.allclose(actual, expected)
-
-
-def test_clipped_value_loss_zero_gradient_beyond_the_clip_boundary():
-    """The actual protection clip_vloss buys: once the clipped candidate wins
-    the max() (previous test), its gradient w.r.t. newvalue is zero out there
-    -- clamp() is flat beyond the boundary -- so this update stops pushing
-    the critic any further in that direction."""
-    old_value = torch.tensor([10.0])
-    target = torch.tensor([0.0])
-    newvalue = torch.tensor([8.0], requires_grad=True)
-    loss = clipped_value_loss(newvalue, old_value, target, clip_coef=0.2, clip_vloss=True)
-    loss.backward()
-    assert newvalue.grad.item() == pytest.approx(0.0)
-
-
-def test_floor_normalize_matches_previous_behaviour_when_floor_is_zero():
-    """floor_frac=0.0 (the default) must reproduce the original single-batch
-    normalization exactly, whether or not an adv_rms is supplied."""
-    advantages = torch.tensor([1.0, -2.0, 3.0, 0.5])
-    expected = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-    normalized, raw_std = floor_normalize(advantages.clone(), RunningMeanStd(), 0.0)
-    assert torch.allclose(normalized, expected, atol=1e-6)
-    assert raw_std == pytest.approx(float(advantages.std()))
-
-
-def test_floor_normalize_floors_a_degenerate_batchs_std():
-    """A batch with an anomalously small std must be normalized against the
-    floor, not its own near-zero std, or dividing by it would amplify
-    whatever noise is left into an oversized update."""
-    rms = RunningMeanStd()
-    rms.mean, rms.var = 0.0, 100.0  # multi-update history: std == 10.0
-    tiny = torch.tensor([1.0, 1.0001, 0.9999, 1.0])  # std ~= 4e-5
-    normalized, raw_std = floor_normalize(tiny, rms, floor_frac=0.5)
-    assert raw_std < 1e-3
-    expected = (tiny - tiny.mean()) / (0.5 * 10.0 + 1e-8)
-    assert torch.allclose(normalized, expected, atol=1e-4)
-
-
-def test_floor_normalize_leaves_a_healthy_batch_unfloored():
-    """A batch whose own std already exceeds the floor must be normalized
-    against its own std, unchanged from the un-floored behaviour -- the floor
-    only ever raises the denominator, never lowers it."""
-    rms = RunningMeanStd()
-    rms.mean, rms.var = 0.0, 1.0  # multi-update history: std == 1.0
-    advantages = torch.tensor([10.0, -20.0, 30.0, 5.0])  # std >> 0.5 * 1.0
-    normalized, raw_std = floor_normalize(advantages.clone(), rms, floor_frac=0.5)
-    expected = (advantages - advantages.mean()) / (raw_std + 1e-8)
-    assert torch.allclose(normalized, expected, atol=1e-5)
-
-
-def test_floor_normalize_updates_adv_rms_but_not_in_time_for_its_own_floor():
-    """Complements test_floor_normalize_floors_a_degenerate_batchs_std, which
-    shows a degenerate batch cannot lift its own floor. This shows the other
-    half: adv_rms is still updated with that batch, just *after* the floor
-    was computed from its pre-update state -- so the next call sees it, even
-    though this one did not."""
-    rms = RunningMeanStd()
-    rms.mean, rms.var, rms.count = 0.0, 100.0, 1000.0  # well-established std == 10.0
-    tiny = torch.tensor([1.0, 1.0001, 0.9999, 1.0])  # std ~= 4e-5
-    floor_normalize(tiny, rms, floor_frac=0.5)
-    # The tiny batch must have pulled the running std down for whatever
-    # checks it *after* this call -- proving it landed, not that it was
-    # silently dropped.
-    assert rms.std < 10.0
-
-
-def test_agent_honours_its_own_ret_rms_horizon():
-    """ret_rms_horizon lets the critic's value-target statistics be given a
-    longer or shorter memory than the default 10 -- unlike HPPOAgent's two
-    independent heads, PPOAgent has only the one, so there is a single
-    ret_rms_horizon kwarg rather than a per-head pair."""
-    agent = PPOAgent(4, 2, device="cpu", ret_rms_horizon=40)
-    batch = torch.randn(64)
-    # Enough updates (> horizon) that count is actually capped rather than
-    # still climbing -- 20 updates would leave count at a plain running
-    # total (20*64 < 40*64) and pass by accident.
-    for _ in range(100):
-        agent.ret_rms.update(batch)
-    assert agent.ret_rms.count == pytest.approx(40 * 64)
-
-
 def test_update_reports_the_pre_normalization_advantage_std():
     """adv_std_raw must reflect the buffer's own GAE advantages, not
     something post-normalization or otherwise disconnected from them."""
@@ -480,18 +341,6 @@ def test_update_reports_the_pre_normalization_advantage_std():
     expected = float(buf.advantages.reshape(-1).std())
     metrics = agent.update(buf, minibatch_size=8, update_epochs=2)
     assert metrics["loss/adv_std_raw"] == pytest.approx(expected, rel=1e-4)
-
-
-def test_clip_vloss_bounds_how_far_the_critic_moves_on_a_noisy_batch():
-    """With clip_vloss on, a single update's value-loss gradient is capped
-    the same way the policy ratio clip caps the actor's -- this is the
-    end-to-end claim (through a real update() call) that the unit tests
-    above verify only at the clipped_value_loss level."""
-    torch.manual_seed(0)
-    agent, buf = _prepared_agent_and_buffer(PPOAgent(4, 2, device="cpu", clip_vloss=True))
-    assert agent.clip_vloss
-    metrics = agent.update(buf, minibatch_size=8, update_epochs=2)
-    assert "loss/value_loss" in metrics and math.isfinite(metrics["loss/value_loss"])
 
 
 # --------------------------------------------------------------------------

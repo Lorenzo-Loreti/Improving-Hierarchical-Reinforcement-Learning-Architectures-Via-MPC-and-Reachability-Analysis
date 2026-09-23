@@ -114,8 +114,6 @@ def parse_args():
         help="the critic's learning rate as a multiple of --learning-rate. The "
              "critic gets its own optimiser parameter group; 1.0 restores the "
              "single-rate behaviour")
-    parser.add_argument("--target-kl", type=float, default=None,
-        help="if set, stop an update early once approx_kl exceeds this. Off by default: clipping is then the only trust-region mechanism")
     args = parser.parse_args()
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
@@ -197,7 +195,6 @@ if __name__ == "__main__":
         ent_coef=args.ent_coef,
         vf_coef=args.vf_coef,
         max_grad_norm=args.max_grad_norm,
-        target_kl=args.target_kl,
         critic_lr_mult=args.critic_lr_mult,
         # Carried into the checkpoint so a reloaded policy knows the
         # observation map it was trained under.
