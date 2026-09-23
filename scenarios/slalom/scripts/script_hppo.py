@@ -92,13 +92,6 @@ def parse_args():
     parser.add_argument("--manager-freq", type=int, default=10,
         help="c: the number of steps the manager's goal is valid for. Also "
              "fixes the manager's discount, gamma**c")
-    parser.add_argument("--replan-on-collision", type=lambda x: x.lower() in ['true', '1', 't', 'y', 'yes'], default=True,
-        help="force the manager to resample a goal the instant the worker "
-             "contacts a wall, instead of waiting out --manager-freq or "
-             "episode end -- a wall hit can clamp position/zero velocity in "
-             "a way that makes the in-flight goal unreachable for the rest "
-             "of the segment. On by default; pass --replan-on-collision "
-             "false to restore the pre-fix behaviour.")
     parser.add_argument("--max-goal-bound", type=float, default=10.0,
         help="the manager's [-1, 1] action is scaled by this to a physical "
              "goal displacement in metres, and divided by it again to form "
@@ -597,7 +590,6 @@ if __name__ == "__main__":
         completed_successes = []
         completed_collision_counts = []
         completed_collision_impacts = []
-        collision_forced_replan_count = 0
         # Direct instrumentation of the termination-avoidance mechanism (see
         # --worker-success-bonus): what the worker actually does in the strip
         # of states immediately before the goal line. A healthy worker keeps
@@ -705,13 +697,29 @@ if __name__ == "__main__":
             worker_step_in_c += 1
 
             # Which managers act now? An environment's segment ends after c
-            # worker steps, when its episode does, or (--replan-on-collision)
-            # the instant the worker contacts a wall -- a hit can clamp
-            # position/zero velocity in a way that leaves the in-flight goal
-            # unreachable for the rest of the segment, and the environments
-            # do not agree on when any of this happens.
-            collision_forced = info["final_info"]["collision"] & args.replan_on_collision
-            manager_act_now = (worker_step_in_c == args.manager_freq) | done | collision_forced
+            # worker steps or when its episode does, and the environments do
+            # not agree on when. Those are the only two boundaries, so every
+            # done=False boundary is exactly manager_freq steps long -- which
+            # is what the manager's fixed gamma**manager_freq GAE recursion
+            # assumes.
+            #
+            # A wall contact used to be a third boundary (--replan-on-collision,
+            # on by default): the manager re-planned the instant the worker
+            # hit a wall, on the grounds that a hit can clamp position and
+            # zero velocity in a way that leaves the in-flight goal
+            # unreachable for the rest of the segment. It was removed because
+            # (1) it was a train/eval mismatch -- evaluation and the
+            # solved-check only ever re-planned on the manager_freq boundary,
+            # so the policy was trained under a controller it was never
+            # evaluated with; (2) it mattered while collision rates were 8-24
+            # per episode and is close to moot at the 0-1 the worker-reward fix
+            # brought (docs/worker-termination-avoidance.md, open item 1); and
+            # (3) its segments needed a pseudo-done plus a continuation value
+            # folded into the reward, and when such a segment was the last one
+            # a column stored in a rollout, the GAE bootstrap (next_done taken
+            # from the real `done`, not the pseudo-done) added that
+            # continuation a second time.
+            manager_act_now = (worker_step_in_c == args.manager_freq) | done
             if np.any(manager_act_now):
                 # Handle truncation bootstrapping for the manager. Its segment
                 # is worker_step_in_c environment steps long, so the cut-off
@@ -730,32 +738,6 @@ if __name__ == "__main__":
                         (agent.gamma ** worker_step_in_c[manager_trunc])
                         * true_next_manager_value.cpu().numpy())
 
-                # Collision-forced replans are a third kind of segment
-                # boundary, one the fixed gamma**manager_freq recursion in
-                # compute_manager_returns_and_advantage doesn't know about --
-                # that recursion is only correct across a done=False boundary
-                # because today the sole way to reach one is the c-step
-                # counter, so every such gap really is manager_freq steps.
-                # Handled exactly like the truncation case above: fold the
-                # correctly-discounted continuation into this reward and
-                # close the transition with a done below (a pseudo-done, the
-                # episode itself continues), rather than letting the
-                # recursion chain across it with the wrong exponent.
-                collision_forced_continue = collision_forced & ~done
-                if np.any(collision_forced_continue):
-                    collision_forced_replan_count += int(np.sum(collision_forced_continue))
-                    with torch.no_grad():
-                        true_next_manager_value_collision = agent.get_manager_value(
-                            torch.tensor(next_obs_norm[collision_forced_continue],
-                                         dtype=torch.float32, device=device)
-                        )
-                    manager_reward[collision_forced_continue] += (
-                        (agent.gamma ** worker_step_in_c[collision_forced_continue])
-                        * true_next_manager_value_collision.cpu().numpy())
-
-                manager_dones_to_store = done.copy()
-                manager_dones_to_store[collision_forced_continue] = True
-
                 manager_buffer.add(
                     manager_act_now,
                     manager_obs_norm,
@@ -763,7 +745,7 @@ if __name__ == "__main__":
                     manager_logprob,
                     manager_reward,
                     manager_value,
-                    manager_dones_to_store.astype(np.float32)
+                    done.astype(np.float32)
                 )
 
                 last_manager_done[manager_act_now] = done[manager_act_now]
@@ -846,13 +828,10 @@ if __name__ == "__main__":
         metrics["charts/worker_critic_lr"] = agent.worker_optimizer.param_groups[-1]["lr"]
         metrics["charts/SPS"] = sps
         metrics["charts/num_episodes"] = len(completed_returns)
-        metrics["charts/collision_forced_replans"] = collision_forced_replan_count
         if near_goal_ax:
             metrics["charts/worker_ax_near_goal"] = float(np.mean(np.concatenate(near_goal_ax)))
             metrics["charts/worker_value_near_goal"] = float(np.mean(np.concatenate(near_goal_value)))
             metrics["charts/near_goal_samples"] = float(sum(a.size for a in near_goal_ax))
-        metrics["charts/collision_forced_replan_rate"] = (
-            collision_forced_replan_count / max(manager_buffer.total_steps, 1))
 
         log_line = (f"update={update} global_step={global_step} SPS={sps} "
                     f"w_ev={metrics['worker/explained_variance']:.3f} "

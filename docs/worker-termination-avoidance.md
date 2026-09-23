@@ -431,6 +431,12 @@ uncontrolled variable into the comparisons above.
    rollout but not in the evaluation loop or in `make_policy_fn`'s solved-check,
    both of which re-plan only on the `manager_freq` boundary. It mattered while
    collision rates were 8–24 per episode; it is close to moot at 0–1.
+   **Since removed** from hPPO: the manager now re-plans only on the
+   `manager_freq` boundary and at episode end, in training as in evaluation.
+   It also carried a small GAE bug: when a collision-forced segment was the
+   last one an environment stored in a rollout, its continuation value was
+   counted twice (folded into the reward, then bootstrapped again). See the
+   comment at `manager_act_now` in the hPPO training loop.
 2. **`max_goal_bound = 10.0` makes almost every goal unreachable within a
    segment.** The manager effectively controls a *direction* only, and the
    magnitude axis is a flat direction in its action space that lets the Beta's
