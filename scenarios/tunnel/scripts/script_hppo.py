@@ -82,14 +82,12 @@ def parse_args():
              "that varies by seed, and annealing to ~0 by the end of a fixed "
              "training budget starved that escape of gradient signal before "
              "it could happen on several seeds. See envs/config.py's "
-             "contact_penalty comment for the fuller story")
-    parser.add_argument("--lr-floor-frac", type=float, default=0.0,
-        help="the linear LR anneal stops at this fraction of the base rate "
-             "instead of decaying all the way to 0. At 0.0 (default) this is "
-             "exactly the previous anneal-to-zero behaviour. A floor keeps "
-             "the last updates from freezing (approx_kl collapsing to ~0), "
-             "which otherwise burns the tail of --total-timesteps on a "
-             "policy that can no longer move")
+             "contact_penalty comment for the fuller story. Annealing all "
+             "the way to 0 also freezes the last updates (approx_kl "
+             "collapses to ~0), burning the tail of --total-timesteps on a "
+             "policy that can no longer move; a --lr-floor-frac that stopped "
+             "the decay short of 0 existed for that, and was removed along "
+             "with the other options no run enabled by default")
     parser.add_argument("--manager-freq", type=int, default=10,
         help="c: the number of steps the manager's goal is valid for. Also "
              "fixes the manager's discount, gamma**c")
@@ -213,20 +211,6 @@ def parse_args():
         help="coefficient of the value function")
     parser.add_argument("--max-grad-norm", type=float, default=0.5,
         help="the maximum norm for the gradient clipping")
-    parser.add_argument("--target-kl", type=float, default=None,
-        help="if set, stop the *worker's* update early once approx_kl exceeds "
-             "this. Off by default: clipping is then the only trust-region "
-             "mechanism. See --target-kl-manager for the manager's own")
-    parser.add_argument("--target-kl-manager", type=float, default=None,
-        help="if set, stop the *manager's* update early once approx_kl "
-             "exceeds this, independently of --target-kl (the worker's). Off "
-             "by default. Candidate mitigation for the manager-collapse "
-             "instability: the manager's batch is ~manager_freq times "
-             "smaller than the worker's and, once the policy is "
-             "near-converged, low-variance -- with no trust region, "
-             "clipping alone does not stop a single epoch from moving the "
-             "policy far in one update. See HPPOAgent.ManagerActor's "
-             "docstring in algorithms/hppo/hppo.py")
     parser.add_argument("--clip-vloss", type=lambda x: x.lower() in ['true', '1', 't', 'y', 'yes'], default=True,
         help="PPO2/CleanRL-style value-loss clipping: bound how far the "
              "critic's new prediction may move from its pre-update one (by "
@@ -241,23 +225,6 @@ def parse_args():
              "drift in the manager) is architecture-level, not scenario-"
              "specific, hence the same default here. Pass --clip-vloss "
              "false to restore the previous unclipped behaviour")
-    parser.add_argument("--adv-std-floor-frac", type=float, default=0.0,
-        help="floor the advantage-normalization denominator at this fraction "
-             "of each head's own multi-update running std, instead of "
-             "dividing by the current batch's std alone. 0.0 (default) "
-             "reproduces the previous behaviour exactly. Candidate mitigation "
-             "for the manager-collapse instability: once the policy is "
-             "near-converged, a batch of near-identical trajectories can have "
-             "an anomalously small advantage std, and dividing by it "
-             "amplifies whatever noise is left into an oversized policy "
-             "update. See algorithms/hppo/hppo.py's _update_head")
-    parser.add_argument("--ret-rms-horizon-manager", type=int, default=10,
-        help="effective sample count (in multiples of one manager batch) the "
-             "manager's return-normalization statistics remember. Default 10 "
-             "matches the worker's (and the previous shared) horizon; a "
-             "larger value makes the manager's value-target normalization "
-             "less reactive to a single anomalous rollout, at the cost of "
-             "adapting more slowly to a real shift in the return distribution")
     parser.add_argument("--eval-freq", type=int, default=5,
         help="evaluate the agent every eval_freq updates. 5 rather than 1 "
              "because an evaluation of --eval-episodes episodes costs up to "
@@ -436,7 +403,6 @@ if __name__ == "__main__":
         ent_coef_worker=args.ent_coef_worker,
         vf_coef=args.vf_coef,
         max_grad_norm=args.max_grad_norm,
-        target_kl=args.target_kl,
         critic_lr_mult=args.critic_lr_mult,
         # Carried into the checkpoint so a reloaded hierarchy knows the
         # observation and goal maps it was trained under.
@@ -449,12 +415,9 @@ if __name__ == "__main__":
         ent_coef_lr=args.ent_coef_lr,
         ent_coef_min=args.ent_coef_min,
         ent_coef_max=args.ent_coef_max,
-        # Manager-collapse mitigations under test -- see each flag's help
-        # above and HPPOAgent.ManagerActor's docstring in algorithms/hppo/hppo.py.
-        target_kl_manager=args.target_kl_manager,
+        # The one manager-collapse mitigation kept -- see --clip-vloss's
+        # help and ManagerActor's docstring in algorithms/common.py.
         clip_vloss=args.clip_vloss,
-        adv_std_floor_frac=args.adv_std_floor_frac,
-        ret_rms_horizon_manager=args.ret_rms_horizon_manager,
     )
 
     # One base learning rate per parameter group (actor, then critic) for each
@@ -540,7 +503,7 @@ if __name__ == "__main__":
         # Linear LR decay: once the policies have converged a constant LR keeps
         # injecting noise into all four heads off a shrinking advantage signal.
         if args.anneal_lr:
-            frac = 1.0 - (1.0 - args.lr_floor_frac) * (update - 1.0) / num_updates
+            frac = 1.0 - (update - 1.0) / num_updates
             for group, base_lr in zip(agent.manager_optimizer.param_groups, base_lrs_manager):
                 group["lr"] = frac * base_lr
             for group, base_lr in zip(agent.worker_optimizer.param_groups, base_lrs_worker):

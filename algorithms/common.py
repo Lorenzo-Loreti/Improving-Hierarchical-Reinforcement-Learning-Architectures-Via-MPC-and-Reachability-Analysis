@@ -147,7 +147,8 @@ def floor_normalize(advantages, adv_rms, floor_frac):
     own std was getting driven anomalously small and amplifying noise into
     an oversized update. `floor_frac <= 0.0` (the default everywhere) or
     `adv_rms is None` reproduces the previous, un-floored normalization
-    exactly.
+    exactly. Only the two PPO+MPC variants still carry it: flat PPO and
+    hPPO, where it was never enabled, dropped it.
 
     `adv_rms` is updated with this batch's raw advantages *after* the floor
     is computed from its pre-update state, so a single batch cannot lift its

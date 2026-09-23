@@ -339,15 +339,14 @@ def test_update_with_empty_batch_does_not_crash(head):
     """A head's buffer can end a rollout with zero transitions: a rollout
     short relative to manager_freq, or a run of environments that neither hit
     a c-step boundary nor terminated. The update must degrade to a metrics-only
-    no-op rather than crash -- previously `approx_kls[-1]` indexed an empty
-    list here whenever target_kl was set. See
+    no-op rather than crash -- it once did, via the since-removed target_kl
+    check indexing an empty list. See
     test_empty_batch_does_not_poison_ent_coef for the autotuning-specific
     failure this same empty batch used to cause."""
-    agent, buf = _prepared(head, agent=_agent(target_kl=0.0, target_kl_manager=0.0), fill=0)
+    agent, buf = _prepared(head, fill=0)
     update = agent.update_manager if head == "manager" else agent.update_worker
     metrics = update(buf, 8, 2)
     assert metrics[f"{head}/batch_size"] == 0
-    assert metrics[f"{head}/update_epochs_ran"] == 0
     assert math.isnan(metrics[f"{head}/loss_policy"])
 
 
@@ -380,41 +379,6 @@ def test_empty_batch_does_not_poison_ent_coef(head):
     assert float(log_ent_coef.detach()) == before
 
 
-def test_update_runs_every_epoch_when_target_kl_is_unset():
-    agent, buf = _prepared("worker")
-    assert agent.target_kl is None
-    assert agent.update_worker(buf, 8, 10)["worker/update_epochs_ran"] == 10
-
-
-def test_target_kl_stops_the_update_early():
-    agent, buf = _prepared("worker", agent=_agent(target_kl=0.0))
-    assert agent.update_worker(buf, 8, 10)["worker/update_epochs_ran"] == 1
-
-
-def test_target_kl_manager_stops_the_manager_update_early():
-    """The manager gets its own trust region, independent of --target-kl (the
-    worker's) -- see HPPOAgent's target_kl_manager and ManagerActor's
-    docstring for why the manager specifically needs one."""
-    agent, buf = _prepared("manager", agent=_agent(target_kl_manager=0.0))
-    assert agent.update_manager(buf, 8, 10)["manager/update_epochs_ran"] == 1
-
-
-def test_target_kl_manager_does_not_affect_the_worker():
-    """A manager-only trust region must not touch the worker's update -- the
-    two heads' target_kl are independent knobs, like their ent_coef."""
-    agent = _agent(target_kl_manager=0.0)
-    _, worker_buf = _prepared("worker", agent=agent)
-    assert agent.update_worker(worker_buf, 8, 10)["worker/update_epochs_ran"] == 10
-
-
-def test_worker_target_kl_does_not_affect_the_manager():
-    """And the reverse: --target-kl (the worker's) must not touch the
-    manager's update."""
-    agent = _agent(target_kl=0.0)
-    _, manager_buf = _prepared("manager", agent=agent)
-    assert agent.update_manager(manager_buf, 8, 10)["manager/update_epochs_ran"] == 10
-
-
 @pytest.mark.parametrize("head", ["manager", "worker"])
 def test_update_reports_the_expected_metrics(head):
     """Autotuning is on by default, so the default agent's metrics include
@@ -426,7 +390,7 @@ def test_update_reports_the_expected_metrics(head):
     assert set(metrics) == {
         f"{head}/loss_policy", f"{head}/loss_value", f"{head}/entropy",
         f"{head}/approx_kl", f"{head}/approx_kl_max", f"{head}/ratio_max_dev",
-        f"{head}/clipfrac", f"{head}/update_epochs_ran",
+        f"{head}/clipfrac",
         f"{head}/value_bias", f"{head}/value_target_mean",
         f"{head}/value_target_std", f"{head}/explained_variance",
         f"{head}/adv_std_raw", f"{head}/batch_size", f"{head}/ent_coef",
@@ -452,25 +416,16 @@ def test_update_changes_both_networks_of_the_head_and_neither_of_the_other():
 
 
 # --------------------------------------------------------------------------
-# Manager-collapse mitigations: value-loss clipping, advantage-std floor,
-# per-head ret_rms horizon (see ManagerActor's docstring for the hypothesis)
+# Manager-collapse diagnostics and the one mitigation kept (see
+# ManagerActor's docstring)
 # --------------------------------------------------------------------------
 
-def test_agent_gives_each_head_its_own_ret_rms_horizon():
-    """The manager's batch is ~manager_freq times smaller than the worker's
-    and more prone to a single anomalous rollout dominating a short-memory
-    estimate -- ret_rms_horizon_manager lets it be given a longer one
-    independently of the worker's."""
-    agent = _agent(ret_rms_horizon_manager=40, ret_rms_horizon_worker=10)
-    batch = torch.randn(64)
-    # Enough updates (> horizon, for both) that count is actually capped
-    # rather than still climbing -- 20 updates would leave the manager's
-    # count at a plain running total (20*64 < 40*64) and pass by accident.
-    for _ in range(100):
-        agent.manager_ret_rms.update(batch)
-        agent.worker_ret_rms.update(batch)
-    assert agent.manager_ret_rms.count == pytest.approx(40 * 64)
-    assert agent.worker_ret_rms.count == pytest.approx(10 * 64)
+def test_clip_vloss_is_on_by_default_as_in_the_scripts():
+    """The only mitigation the 6-seed ablation supported, and what both
+    script_hppo.py pass. The agent's own default used to be False, so an
+    agent built directly (an evaluation notebook, a test) silently trained
+    differently from the scripts."""
+    assert _agent().clip_vloss is True
 
 
 def test_manager_update_reports_the_pre_normalization_advantage_std():
