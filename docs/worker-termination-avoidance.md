@@ -450,8 +450,10 @@ uncontrolled variable into the comparisons above.
 3. **The entropy autotuner is inert at its default learning rate** (§3). Fixing
    it does not fix the collapse, but it does mean no run to date has actually
    been entropy-regularised the way its configuration claims.
-   Flat PPO has since dropped its autotuner for the fixed `ent_coef = 0.01` it
-   was effectively running at (see `PPOAgent` in `algorithms/ppo/ppo.py`).
+   Flat PPO and hPPO have since both dropped their autotuners for the fixed
+   `ent_coef = 0.01` they were effectively running at (see `PPOAgent` in
+   `algorithms/ppo/ppo.py` and `HPPOAgent` in `algorithms/hppo/hppo.py`; the
+   13-seed re-measurement is in `benchmark.md`).
 4. **The flat baseline (`ppo`) carries no `near_goal` diagnostic.** Adding
    it would complete the plot with a reference line that is immune by
    construction; it was left out as being outside the hierarchical scope.
