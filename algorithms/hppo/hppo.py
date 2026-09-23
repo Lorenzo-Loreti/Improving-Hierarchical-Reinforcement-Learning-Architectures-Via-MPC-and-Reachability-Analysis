@@ -44,17 +44,22 @@ class WorkerCritic(nn.Module):
 
 
 class RolloutBuffer:
-    """Single-environment rollout store, shared by both heads.
+    """Single-environment rollout store -- the serial reference implementation.
 
-    Unlike RL/PPO's buffer this one is partially filled: the worker writes one
+    The training loop does not use it: it collects from a vector env into
+    `VecRolloutBuffer` (worker) and `ManagerVecRolloutBuffer` (manager).
+    This one is kept because it is the simplest correct statement of the
+    GAE both of those must reproduce per environment, and
+    tests/test_vec_rollout.py checks them against it column by column.
+
+    Unlike flat PPO's buffer this one is partially filled: the worker writes one
     transition per environment step, the manager one per c-step segment, so a
     manager buffer sized for the worker's step budget ends a rollout roughly
     `manager_freq` times emptier. Everything downstream slices to `self.step`
     rather than assuming a full batch.
 
     The buffer is agnostic about how observations are encoded -- it stores what
-    the caller hands it. each scenario's script_hppo.py normalizes before storing, so
-    what is written here is already in the networks' input space.
+    the caller hands it, already in the networks' input space.
     """
 
     def __init__(self, num_steps, obs_dim, act_dim, device):
@@ -84,8 +89,9 @@ class RolloutBuffer:
         self.dones[self.step] = torch.as_tensor(done, dtype=torch.float32, device=self.device)
         self.step += 1
 
-    def compute_returns_and_advantage(self, next_value, next_done, gamma, gae_lambda):
-        """GAE(lambda) over the stored rollout.
+    def compute_returns_and_advantage(self, next_value, gamma, gae_lambda):
+        """GAE(lambda) over the stored rollout. `next_value` is the value of
+        the state that follows the last stored transition.
 
         `gamma` and `gae_lambda` are required rather than defaulted: they used
         to default to 0.99/0.95 while the manager was in fact discounted at
@@ -100,16 +106,19 @@ class RolloutBuffer:
         t ended an episode", so the bootstrap mask is `1 - dones[t]`. CleanRL
         stores "observation t begins a new episode" instead and masks with
         `dones[t+1]`. Both are correct; they are the same quantity indexed
-        differently.
+        differently. It is also why there is no `next_done` argument: CleanRL
+        needs one for the state after the rollout, whereas here the last
+        transition's own `dones[-1]` already says whether `next_value` may be
+        bootstrapped from. (All three buffers used to take a `next_done`
+        anyway; the training loop filled it with exactly `dones[-1]` --
+        except, for the manager, after a collision-forced re-plan, which is
+        where that redundancy turned into a double-counted bootstrap. See
+        the manager_act_now comment in the training loop.)
         """
         lastgaelam = 0
         for t in reversed(range(self.step)):
-            if t == self.step - 1:
-                nextnonterminal = 1.0 - next_done
-                nextvalues = next_value
-            else:
-                nextnonterminal = 1.0 - self.dones[t]
-                nextvalues = self.values[t + 1]
+            nextvalues = next_value if t == self.step - 1 else self.values[t + 1]
+            nextnonterminal = 1.0 - self.dones[t]
             delta = self.rewards[t] + gamma * nextvalues * nextnonterminal - self.values[t]
             self.advantages[t] = lastgaelam = delta + gamma * gae_lambda * nextnonterminal * lastgaelam
         self.returns = self.advantages + self.values
@@ -142,10 +151,11 @@ class VecRolloutBuffer:
     The worker acts once per environment step in every environment, so its
     rollout is a full rectangular grid -- exactly flat PPO's layout, and
     nothing like the manager's (see ManagerVecRolloutBuffer). Ported from
-    RL/PPO/ppo.py so the two share a GAE convention.
+    flat PPO's RolloutBuffer (algorithms/ppo/ppo.py) so the two share a GAE
+    convention.
 
     As with the single-env buffer, the caller stores already-encoded inputs:
-    each scenario's script_hppo.py writes the concatenated (normalized obs, normalized
+    the training loop writes the concatenated (normalized obs, normalized
     goal) the worker networks actually take.
     """
 
@@ -178,24 +188,21 @@ class VecRolloutBuffer:
         self.dones[self.step] = torch.as_tensor(done, dtype=torch.float32, device=self.device)
         self.step += 1
 
-    def compute_returns_and_advantage(self, next_value, next_done, gamma, gae_lambda):
+    def compute_returns_and_advantage(self, next_value, gamma, gae_lambda):
         """GAE(lambda) run independently down each of the `num_envs` columns.
 
-        `next_value` and `next_done` are per-environment vectors of shape
-        (num_envs,). Same `dones[t]` convention as the single-env buffer:
-        "the transition at index t ended an episode", masked with
-        `1 - dones[t]` -- which is also the convention an auto-resetting
-        vector env produces naturally, since the observation after a done
-        already belongs to the next episode.
+        `next_value` is a per-environment vector of shape (num_envs,). Same
+        `dones[t]` convention as the single-env buffer: "the transition at
+        index t ended an episode", masked with `1 - dones[t]` -- which is
+        also the convention an auto-resetting vector env produces naturally,
+        since the observation after a done already belongs to the next
+        episode. So the last row's own dones mask the bootstrap, and there is
+        no `next_done` argument (see RolloutBuffer's).
         """
         lastgaelam = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         for t in reversed(range(self.step)):
-            if t == self.step - 1:
-                nextnonterminal = 1.0 - next_done
-                nextvalues = next_value
-            else:
-                nextnonterminal = 1.0 - self.dones[t]
-                nextvalues = self.values[t + 1]
+            nextvalues = next_value if t == self.step - 1 else self.values[t + 1]
+            nextnonterminal = 1.0 - self.dones[t]
             delta = self.rewards[t] + gamma * nextvalues * nextnonterminal - self.values[t]
             self.advantages[t] = lastgaelam = delta + gamma * gae_lambda * nextnonterminal * lastgaelam
         self.returns = self.advantages + self.values
@@ -288,7 +295,7 @@ class ManagerVecRolloutBuffer:
         self.dones[rows, cols] = _t(done)[cols]
         self.steps[idx] += 1
 
-    def compute_returns_and_advantage(self, next_value, next_done, gamma, gae_lambda):
+    def compute_returns_and_advantage(self, next_value, gamma, gae_lambda):
         """GAE(lambda) down each environment's own chain of segments.
 
         Vectorized across environments despite the ragged lengths: the loop
@@ -299,9 +306,11 @@ class ManagerVecRolloutBuffer:
         and takes the bootstrap branch -- identical to running the single-env
         loop on that column alone.
 
-        `next_value` and `next_done` are (num_envs,) vectors describing each
-        environment's in-flight segment: the state its last stored transition
-        led to.
+        `next_value` is a (num_envs,) vector: the value of each environment's
+        in-flight segment, whose start is the state its last stored
+        transition led to. Whether to bootstrap from it is that last
+        transition's own done flag (see RolloutBuffer's docstring), so there
+        is no `next_done` argument.
         """
         steps = torch.as_tensor(self.steps, device=self.device)
         T = int(self.steps.max()) if self.steps.size else 0
@@ -313,9 +322,10 @@ class ManagerVecRolloutBuffer:
             is_last = t == steps - 1
             # Same indexing convention as the single-env buffer: `dones[t]`
             # flags "the transition at index t ended an episode", so the mask
-            # is 1 - dones[t] -- at t, not t + 1. Only `values` is read one
-            # step ahead.
-            nextnonterminal = torch.where(is_last, 1.0 - next_done, 1.0 - self.dones[t])
+            # is 1 - dones[t] -- at t, not t + 1, and for a column's last
+            # transition as for any other. Only `values` is read one step
+            # ahead.
+            nextnonterminal = 1.0 - self.dones[t]
             if t + 1 < T:
                 nextvalues = torch.where(is_last, next_value, self.values[t + 1])
             else:
@@ -480,16 +490,22 @@ class HPPOAgent:
         # manager, whose batch is ~manager_freq times smaller, was tried as a
         # collapse mitigation and dropped -- see the class comment.)
         #
-        # The manager is the head that actually needs the normalization: its
+        # The manager is the head that most needs the normalization: its
         # reward is the discounted sum of the environment's own reward over a
-        # c-step segment, so its returns inherit the raw +-500 terminal scale
-        # (O(400) targets) against a freshly initialized critic that outputs
-        # ~0 -- see RunningMeanStd's docstring (algorithms/common.py) for why
-        # that gap matters. The worker's intrinsic reward (progress toward
-        # the goal, O(0.1) per step) is already well scaled, so there this is
-        # close to a no-op; it is applied to both heads anyway so they never
-        # differ in the space their critic regresses in, which would make
-        # their metrics incomparable.
+        # c-step segment, so its returns inherit the environment's raw scale
+        # -- by the time the benchmark seeds stop, manager ret_rms sits at mean
+        # ~530-630 / std ~250-310 on the slalom and mean ~75-85 / std ~85-100
+        # on the tunnel -- against a freshly initialized critic that outputs
+        # ~0; see RunningMeanStd's docstring (algorithms/common.py) for why
+        # that gap matters. The worker's returns are smaller but not O(1)
+        # either since its reward mixes in 0.02 x the environment's (see
+        # --worker-extrinsic-coef): mean ~10-14 / std ~5-7 on the slalom,
+        # ~1.5-2.5 / ~2 on the tunnel. Applied to both heads regardless, so
+        # they never differ in the space their critic regresses in, which
+        # would make their metrics incomparable. (This comment used to call
+        # the worker's normalization "close to a no-op" and quote O(400)
+        # manager targets: true of a purely intrinsic worker reward and of
+        # gamma=0.999, neither of which is the configuration any more.)
         self.manager_ret_rms = RunningMeanStd()
         self.worker_ret_rms = RunningMeanStd()
 
@@ -553,9 +569,11 @@ class HPPOAgent:
             action, _, _ = self.manager_policy_forward(state, deterministic=deterministic)
         return action
 
-    def get_manager_action_and_value(self, state, action=None, deterministic=False):
-        action, logprob, entropy = self.manager_policy_forward(state, action, deterministic)
-        return action, logprob, entropy, self.get_manager_value(state)
+    def get_manager_action_and_value(self, state):
+        """Sampled goal, its log-probability and the state's value: what a
+        manager transition stores."""
+        action, logprob, _ = self.manager_policy_forward(state)
+        return action, logprob, self.get_manager_value(state)
 
     def get_manager_value(self, state):
         """Value on the raw reward scale, for GAE and truncation bootstrapping."""
@@ -579,9 +597,11 @@ class HPPOAgent:
             action, _, _ = self.worker_policy_forward(obs_goal, deterministic=deterministic)
         return action
 
-    def get_worker_action_and_value(self, obs_goal, action=None, deterministic=False):
-        action, logprob, entropy = self.worker_policy_forward(obs_goal, action, deterministic)
-        return action, logprob, entropy, self.get_worker_value(obs_goal)
+    def get_worker_action_and_value(self, obs_goal):
+        """Sampled action, its log-probability and the input's value: what a
+        worker transition stores."""
+        action, logprob, _ = self.worker_policy_forward(obs_goal)
+        return action, logprob, self.get_worker_value(obs_goal)
 
     def get_worker_value(self, obs_goal):
         """Value on the raw reward scale, for GAE and truncation bootstrapping."""
@@ -589,7 +609,7 @@ class HPPOAgent:
 
     # --- advantage estimation ---------------------------------------------
 
-    def compute_manager_returns_and_advantage(self, buffer, next_value, next_done):
+    def compute_manager_returns_and_advantage(self, buffer, next_value):
         """Run GAE over the manager's `buffer` at the segment-level discount.
 
         The agent is the single source of truth for the discounts: they are
@@ -597,13 +617,13 @@ class HPPOAgent:
         two independent copies is how those silently drift apart.
         """
         buffer.compute_returns_and_advantage(
-            next_value, next_done, gamma=self.gamma_manager, gae_lambda=self.gae_lambda
+            next_value, gamma=self.gamma_manager, gae_lambda=self.gae_lambda
         )
 
-    def compute_worker_returns_and_advantage(self, buffer, next_value, next_done):
+    def compute_worker_returns_and_advantage(self, buffer, next_value):
         """Run GAE over the worker's `buffer` at the environment-step discount."""
         buffer.compute_returns_and_advantage(
-            next_value, next_done, gamma=self.gamma_worker, gae_lambda=self.gae_lambda
+            next_value, gamma=self.gamma_worker, gae_lambda=self.gae_lambda
         )
 
     # --- persistence ------------------------------------------------------
@@ -637,32 +657,22 @@ class HPPOAgent:
         self.manager_critic.load_state_dict(checkpoint["manager_critic"])
         self.worker_actor.load_state_dict(checkpoint["worker_actor"])
         self.worker_critic.load_state_dict(checkpoint["worker_critic"])
-        # Guarded: checkpoints written before each head had its own critic
-        # parameter group hold a single-group optimiser state, which Adam
-        # refuses to load into the two-group optimisers built above. The
-        # weights are what matter for evaluation and there is no --resume path
-        # that would need the moment estimates, so a stale optimiser state is
-        # dropped loudly rather than made fatal.
-        try:
-            self.manager_optimizer.load_state_dict(checkpoint["manager_optimizer"])
-            self.worker_optimizer.load_state_dict(checkpoint["worker_optimizer"])
-        except (ValueError, KeyError):
-            print(f"warning: {path} predates the two-group optimisers; actor and "
-                  "critic weights loaded, optimiser state discarded")
-        if "manager_ret_rms" in checkpoint:
-            self.manager_ret_rms.load_state_dict(checkpoint["manager_ret_rms"])
-        if "worker_ret_rms" in checkpoint:
-            self.worker_ret_rms.load_state_dict(checkpoint["worker_ret_rms"])
-        # Guarded: checkpoints written before these keys existed still load.
-        if checkpoint.get("obs_low") is not None:
+        self.manager_optimizer.load_state_dict(checkpoint["manager_optimizer"])
+        self.worker_optimizer.load_state_dict(checkpoint["worker_optimizer"])
+        self.manager_ret_rms.load_state_dict(checkpoint["manager_ret_rms"])
+        self.worker_ret_rms.load_state_dict(checkpoint["worker_ret_rms"])
+        # None only when the saving agent had no bounds either; this agent
+        # then keeps whatever it was constructed with.
+        if checkpoint["obs_low"] is not None:
             self.obs_low = np.asarray(checkpoint["obs_low"], dtype=np.float32)
-        if checkpoint.get("obs_high") is not None:
             self.obs_high = np.asarray(checkpoint["obs_high"], dtype=np.float32)
-        if checkpoint.get("max_goal_bound") is not None:
-            self.max_goal_bound = checkpoint["max_goal_bound"]
-        if checkpoint.get("manager_freq") is not None:
-            self.manager_freq = checkpoint["manager_freq"]
-            self.gamma_manager = self.gamma ** self.manager_freq
+        self.max_goal_bound = checkpoint["max_goal_bound"]
+        self.manager_freq = checkpoint["manager_freq"]
+        self.gamma_manager = self.gamma ** self.manager_freq
+        # Guards for checkpoints older than the two-group optimisers, ret_rms,
+        # the observation/goal bounds or the saved cadence used to live here;
+        # no such hPPO checkpoint is left (all 45 under scenarios/tunnel/
+        # scripts/checkpoints carry every key), so they were dropped.
         # Checkpoints from before the entropy autotuner was removed also carry
         # `{manager,worker}_log_ent_coef` and their optimiser states. They are
         # ignored: ent_coef only enters training, and the tuned values never
@@ -810,8 +820,10 @@ class HPPOAgent:
                 entropy_losses.append(entropy_loss.item())
                 approx_kls.append(approx_kl.item())
 
-        # Values are compared on the raw return scale, so explained_variance
-        # stays comparable across runs with and without value normalization.
+        # Final metrics, on the raw return scale GAE works in. explained_variance
+        # would come out the same in the critic's standardized space (it is
+        # invariant to an affine map shared by values and returns); value_bias
+        # would not, and reads in reward units here.
         returns_np = returns.detach().cpu().numpy()
         values_np = values.detach().cpu().numpy()
         var_y = np.var(returns_np)

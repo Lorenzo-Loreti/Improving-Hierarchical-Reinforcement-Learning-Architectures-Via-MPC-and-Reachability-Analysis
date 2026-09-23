@@ -526,7 +526,7 @@ if __name__ == "__main__":
     # Initial manager action, for every environment at once.
     manager_obs_norm = obs_norm.copy()
     with torch.no_grad():
-        manager_action, manager_logprob, _, manager_value = agent.get_manager_action_and_value(
+        manager_action, manager_logprob, manager_value = agent.get_manager_action_and_value(
             torch.tensor(manager_obs_norm, dtype=torch.float32, device=device)
         )
     current_goal = agent.scale_goal(manager_action.cpu().numpy())
@@ -565,12 +565,6 @@ if __name__ == "__main__":
             for group, base_lr in zip(agent.worker_optimizer.param_groups, base_lrs_worker):
                 group["lr"] = frac * base_lr
 
-        last_worker_done = np.zeros(args.num_envs, dtype=bool)
-        # The done flag of each environment's most recently *stored* manager
-        # transition. Per environment, because their segments end at different
-        # steps -- and False until an environment has stored one at all.
-        last_manager_done = np.zeros(args.num_envs, dtype=bool)
-
         completed_returns = []
         completed_lengths = []
         completed_successes = []
@@ -591,7 +585,7 @@ if __name__ == "__main__":
             # Worker action selection, one batched forward pass over all envs
             obs_goal_tensor = worker_input(obs_norm, current_goal)
             with torch.no_grad():
-                worker_action, worker_logprob, _, worker_value = agent.get_worker_action_and_value(
+                worker_action, worker_logprob, worker_value = agent.get_worker_action_and_value(
                     obs_goal_tensor
                 )
 
@@ -678,8 +672,6 @@ if __name__ == "__main__":
                 worker_done.astype(np.float32)
             )
 
-            last_worker_done = worker_done
-
             worker_step_in_c += 1
 
             # Which managers act now? An environment's segment ends after c
@@ -734,8 +726,6 @@ if __name__ == "__main__":
                     done.astype(np.float32)
                 )
 
-                last_manager_done[manager_act_now] = done[manager_act_now]
-
                 worker_step_in_c[manager_act_now] = 0
                 accumulated_env_reward[manager_act_now] = 0.0
 
@@ -750,7 +740,7 @@ if __name__ == "__main__":
                 sel = manager_act_now
                 sel_t = torch.as_tensor(sel, device=device)
                 with torch.no_grad():
-                    new_action, new_logprob, _, new_value = agent.get_manager_action_and_value(
+                    new_action, new_logprob, new_value = agent.get_manager_action_and_value(
                         torch.tensor(next_obs_norm[sel], dtype=torch.float32, device=device)
                     )
                 manager_obs_norm[sel] = next_obs_norm[sel]
@@ -779,24 +769,20 @@ if __name__ == "__main__":
             # rest -- which is what the next step's goal decrement needs.
             current_pos = next_obs[:, :2].copy()
 
-        # Bootstrap value if not done
+        # Bootstrap values for the states after the rollout. GAE bootstraps
+        # from them only where a column's last stored transition did not end
+        # its episode -- each buffer reads that from its own last done flag.
         with torch.no_grad():
             # Worker bootstrap, per environment
             next_worker_value = agent.get_worker_value(worker_input(obs_norm, current_goal))
-            agent.compute_worker_returns_and_advantage(
-                worker_buffer, next_worker_value,
-                next_done=torch.as_tensor(last_worker_done.astype(np.float32), device=device)
-            )
+            agent.compute_worker_returns_and_advantage(worker_buffer, next_worker_value)
 
             # Manager bootstrap. `manager_value` is the value of each
             # environment's segment currently in flight, whose start is exactly
             # the state that environment's last stored manager transition led
             # to -- so it is already the per-column bootstrap the ragged GAE
             # wants.
-            agent.compute_manager_returns_and_advantage(
-                manager_buffer, manager_value,
-                next_done=torch.as_tensor(last_manager_done.astype(np.float32), device=device)
-            )
+            agent.compute_manager_returns_and_advantage(manager_buffer, manager_value)
 
         # Optimize the policies
         manager_minibatch_size = max(1, manager_buffer.total_steps // args.num_minibatches_manager)

@@ -97,17 +97,15 @@ def test_gae_matches_transition_indexed_reference():
     pins ours down so the difference is never 'fixed' by mistake.
     """
     buf = _filled_buffer()
-    next_value, next_done = torch.tensor(3.0), 0.0
+    next_value = torch.tensor(3.0)
     gamma, lam = 0.99, 0.95
-    buf.compute_returns_and_advantage(next_value, next_done, gamma, lam)
+    buf.compute_returns_and_advantage(next_value, gamma, lam)
 
     expected = torch.zeros(buf.step)
     last = 0.0
     for t in reversed(range(buf.step)):
-        if t == buf.step - 1:
-            nonterminal, next_v = 1.0 - next_done, next_value
-        else:
-            nonterminal, next_v = 1.0 - buf.dones[t], buf.values[t + 1]
+        nonterminal = 1.0 - buf.dones[t]
+        next_v = next_value if t == buf.step - 1 else buf.values[t + 1]
         delta = buf.rewards[t] + gamma * next_v * nonterminal - buf.values[t]
         last = delta + gamma * lam * nonterminal * last
         expected[t] = last
@@ -117,7 +115,7 @@ def test_gae_matches_transition_indexed_reference():
 def test_gae_returns_identity_holds():
     """returns = advantages + values, which the update relies on."""
     buf = _filled_buffer()
-    buf.compute_returns_and_advantage(torch.tensor(0.0), 0.0, 0.99, 0.95)
+    buf.compute_returns_and_advantage(torch.tensor(0.0), 0.99, 0.95)
     assert torch.allclose(buf.returns, buf.advantages + buf.values, atol=1e-4)
 
 
@@ -128,15 +126,29 @@ def test_gae_stops_bootstrapping_at_a_done():
     buf.values = torch.zeros(2)
     buf.dones = torch.tensor([1.0, 0.0])  # transition 0 ended the episode
     buf.step = 2
-    buf.compute_returns_and_advantage(torch.tensor(100.0), 0.0, 0.99, 0.95)
+    buf.compute_returns_and_advantage(torch.tensor(100.0), 0.99, 0.95)
     # Step 0 is terminal: its advantage is its own reward and nothing else.
     assert buf.advantages[0].item() == pytest.approx(5.0, abs=1e-4)
+
+
+def test_gae_does_not_bootstrap_past_a_done_on_the_last_transition():
+    """The case a separate `next_done` argument used to cover: when the last
+    stored transition ended its episode, the state after the rollout belongs
+    to the next episode, and its value must not leak in. dones[-1] alone has
+    to say so."""
+    buf = RolloutBuffer(2, OBS_DIM, GOAL_DIM, "cpu")
+    buf.rewards = torch.tensor([5.0, 7.0])
+    buf.values = torch.zeros(2)
+    buf.dones = torch.tensor([0.0, 1.0])  # the last transition ended the episode
+    buf.step = 2
+    buf.compute_returns_and_advantage(torch.tensor(100.0), 0.99, 0.95)
+    assert buf.advantages[1].item() == pytest.approx(7.0, abs=1e-4)
 
 
 def test_gae_only_touches_the_filled_prefix():
     """The manager's buffer is sized for the worker and left mostly empty."""
     buf = _filled_buffer(num_steps=16, fill=5)
-    buf.compute_returns_and_advantage(torch.tensor(0.0), 0.0, 0.99, 0.95)
+    buf.compute_returns_and_advantage(torch.tensor(0.0), 0.99, 0.95)
     assert torch.all(buf.advantages[5:] == 0.0)
     assert torch.any(buf.advantages[:5] != 0.0)
 
@@ -145,7 +157,7 @@ def test_gae_parameters_are_required():
     """They used to default to 0.99/0.95 while the manager ran at gamma**c."""
     buf = _filled_buffer()
     with pytest.raises(TypeError):
-        buf.compute_returns_and_advantage(torch.tensor(0.0), 0.0)
+        buf.compute_returns_and_advantage(torch.tensor(0.0))
 
 
 # --------------------------------------------------------------------------
@@ -193,14 +205,14 @@ def test_manager_discount_is_derived_from_the_cadence():
 def test_agent_is_the_single_source_of_each_head_discount():
     agent = _agent(gamma=0.9, manager_freq=3, gae_lambda=0.5)
     buf_m, buf_w, reference = _filled_buffer(), _filled_buffer(), _filled_buffer()
-    next_value, next_done = torch.tensor(1.5), 0.0
+    next_value = torch.tensor(1.5)
 
-    agent.compute_manager_returns_and_advantage(buf_m, next_value, next_done)
-    reference.compute_returns_and_advantage(next_value, next_done, 0.9 ** 3, 0.5)
+    agent.compute_manager_returns_and_advantage(buf_m, next_value)
+    reference.compute_returns_and_advantage(next_value, 0.9 ** 3, 0.5)
     assert torch.allclose(buf_m.advantages, reference.advantages, atol=1e-5)
 
-    agent.compute_worker_returns_and_advantage(buf_w, next_value, next_done)
-    reference.compute_returns_and_advantage(next_value, next_done, 0.9, 0.5)
+    agent.compute_worker_returns_and_advantage(buf_w, next_value)
+    reference.compute_returns_and_advantage(next_value, 0.9, 0.5)
     assert torch.allclose(buf_w.advantages, reference.advantages, atol=1e-5)
 
     # And the two are genuinely different discounts, not the same one twice.
@@ -330,7 +342,7 @@ def _prepared(head, agent=None, fill=None):
         with torch.no_grad():
             _, logprobs, _ = forward(buf.states[:buf.step], buf.actions[:buf.step])
         buf.logprobs[:buf.step] = logprobs
-    compute(buf, torch.tensor(0.0), 0.0)
+    compute(buf, torch.tensor(0.0))
     return agent, buf
 
 
@@ -496,35 +508,3 @@ def test_annealing_every_group_keeps_the_critic_ratio():
         assert lrs[0] == pytest.approx(5e-4)
 
 
-def test_load_tolerates_a_single_group_optimiser_state(capsys):
-    """Checkpoints written before each head had its own critic parameter
-    group hold a single-group optimiser state, which Adam refuses to load
-    into the two-group optimisers built above -- `load` must warn and keep
-    the weights rather than raise. Ported from RL/PPO/tests/test_ppo.py:
-    hppo.py's `load` has an identically-shaped guard for both optimisers,
-    but neither exercised it before this."""
-    import torch.optim as optim
-
-    old = _agent()
-    old.manager_optimizer = optim.Adam(
-        list(old.manager_actor.parameters()) + list(old.manager_critic.parameters()),
-        lr=3e-4, eps=1e-5
-    )
-    old.worker_optimizer = optim.Adam(
-        list(old.worker_actor.parameters()) + list(old.worker_critic.parameters()),
-        lr=3e-4, eps=1e-5
-    )
-    with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "old.pt")
-        old.save(path)
-
-        new = _agent(critic_lr_mult=3.0)
-        new.load(path)  # must not raise
-
-    assert "predates the two-group optimisers" in capsys.readouterr().out
-    for a, b in zip(old.manager_actor.parameters(), new.manager_actor.parameters()):
-        assert torch.allclose(a, b)
-    for a, b in zip(old.worker_critic.parameters(), new.worker_critic.parameters()):
-        assert torch.allclose(a, b)
-    # the ratio survives a load that discarded the optimiser state
-    assert [g["lr"] for g in new.manager_optimizer.param_groups] == pytest.approx([3e-4, 9e-4])

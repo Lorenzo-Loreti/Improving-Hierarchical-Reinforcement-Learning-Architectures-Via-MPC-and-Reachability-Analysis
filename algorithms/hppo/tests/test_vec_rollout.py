@@ -30,7 +30,7 @@ GAMMA, LAM = 0.99, 0.95
 
 
 def _serial_reference(states, actions, logprobs, rewards, values, dones,
-                      next_value, next_done, gamma=GAMMA, gae_lambda=LAM):
+                      next_value, gamma=GAMMA, gae_lambda=LAM):
     """Run the single-environment buffer over one column, as the reference."""
     n = rewards.shape[0]
     buf = RolloutBuffer(max(n, 1), states.shape[-1], actions.shape[-1], "cpu")
@@ -41,7 +41,7 @@ def _serial_reference(states, actions, logprobs, rewards, values, dones,
     buf.values[:n] = values
     buf.dones[:n] = dones
     buf.step = n
-    buf.compute_returns_and_advantage(next_value, next_done, gamma, gae_lambda)
+    buf.compute_returns_and_advantage(next_value, gamma, gae_lambda)
     return buf.advantages[:n].clone(), buf.returns[:n].clone()
 
 
@@ -57,15 +57,15 @@ def test_dense_gae_matches_the_serial_buffer_column_by_column():
         buf.add(torch.randn(N, OBS_DIM), torch.rand(N, ACT_DIM) * 2 - 1,
                 torch.randn(N), torch.randn(N) * 10, torch.randn(N) * 10,
                 (torch.rand(N) < 0.25).float())
-    next_value, next_done = torch.randn(N) * 10, (torch.rand(N) < 0.5).float()
+    next_value = torch.randn(N) * 10
 
-    buf.compute_returns_and_advantage(next_value, next_done, GAMMA, LAM)
+    buf.compute_returns_and_advantage(next_value, GAMMA, LAM)
 
     for i in range(N):
         adv, ret = _serial_reference(
             buf.states[:, i], buf.actions[:, i], buf.logprobs[:, i],
             buf.rewards[:, i], buf.values[:, i], buf.dones[:, i],
-            next_value[i], next_done[i])
+            next_value[i])
         assert torch.allclose(buf.advantages[:, i], adv, atol=1e-5)
         assert torch.allclose(buf.returns[:, i], ret, atol=1e-5)
 
@@ -128,15 +128,14 @@ def test_ragged_gae_matches_the_serial_buffer_column_by_column():
     buf = _fill_ragged(ManagerVecRolloutBuffer(12, N, OBS_DIM, GOAL_DIM, "cpu"),
                        lengths, seed=3)
     next_value = torch.randn(N) * 50
-    next_done = (torch.rand(N) < 0.5).float()
 
-    buf.compute_returns_and_advantage(next_value, next_done, GAMMA, LAM)
+    buf.compute_returns_and_advantage(next_value, GAMMA, LAM)
 
     for i, n in enumerate(lengths):
         adv, ret = _serial_reference(
             buf.states[:n, i], buf.actions[:n, i], buf.logprobs[:n, i],
             buf.rewards[:n, i], buf.values[:n, i], buf.dones[:n, i],
-            next_value[i], next_done[i])
+            next_value[i])
         assert torch.allclose(buf.advantages[:n, i], adv, atol=1e-4), f"env {i}"
         assert torch.allclose(buf.returns[:n, i], ret, atol=1e-4), f"env {i}"
 
@@ -148,7 +147,7 @@ def test_ragged_gae_does_not_chain_one_environment_onto_another():
     lengths = np.array([5, 0, 5])
     buf = _fill_ragged(ManagerVecRolloutBuffer(8, N, OBS_DIM, GOAL_DIM, "cpu"),
                        lengths, seed=4)
-    buf.compute_returns_and_advantage(torch.randn(N) * 50, torch.zeros(N), GAMMA, LAM)
+    buf.compute_returns_and_advantage(torch.randn(N) * 50, GAMMA, LAM)
     assert buf.steps[1] == 0
     assert torch.equal(buf.advantages[:, 1], torch.zeros(8))
 
@@ -161,10 +160,28 @@ def test_ragged_gae_bootstraps_each_column_off_its_own_in_flight_value():
     for _ in range(3):
         buf.add(np.array([True, True]), np.zeros((N, OBS_DIM)), np.zeros((N, GOAL_DIM)),
                 np.zeros(N), np.zeros(N), np.zeros(N), np.zeros(N))
-    buf.compute_returns_and_advantage(torch.tensor([10.0, 20.0]), torch.zeros(N), GAMMA, LAM)
+    buf.compute_returns_and_advantage(torch.tensor([10.0, 20.0]), GAMMA, LAM)
     # Undiscounted-to-the-end with zero rewards and zero values, the advantage
     # is a pure function of the bootstrap, so the columns scale exactly 2:1.
     assert torch.allclose(buf.advantages[:3, 1], 2 * buf.advantages[:3, 0], atol=1e-5)
+
+
+def test_ragged_gae_does_not_bootstrap_a_column_whose_last_segment_ended_its_episode():
+    """Each column's own last done flag decides whether its in-flight value
+    is bootstrapped from -- what a separate next_done argument used to say,
+    and what it got wrong after a collision-forced re-plan (the stored done
+    was a pseudo-done, the next_done the real one). Two columns, identical
+    except that column 1's last segment ended its episode: only column 0
+    may pick up the bootstrap."""
+    N = 2
+    buf = ManagerVecRolloutBuffer(4, N, OBS_DIM, GOAL_DIM, "cpu")
+    for t in range(3):
+        done = np.array([0.0, 1.0 if t == 2 else 0.0], dtype=np.float32)
+        buf.add(np.array([True, True]), np.zeros((N, OBS_DIM)), np.zeros((N, GOAL_DIM)),
+                np.zeros(N), np.ones(N), np.zeros(N), done)
+    buf.compute_returns_and_advantage(torch.tensor([100.0, 100.0]), GAMMA, LAM)
+    assert buf.advantages[2, 1].item() == pytest.approx(1.0, abs=1e-5)
+    assert buf.advantages[2, 0].item() == pytest.approx(1.0 + GAMMA * 100.0, abs=1e-3)
 
 
 def test_ragged_flattening_keeps_values_aligned_with_the_batch():
@@ -242,14 +259,14 @@ def test_update_consumes_a_vectorized_buffer(head):
     if head == "manager":
         buf = _fill_ragged(ManagerVecRolloutBuffer(8, 4, OBS_DIM, GOAL_DIM, "cpu"),
                            np.array([8, 3, 6, 5]), seed=6)
-        buf.compute_returns_and_advantage(torch.zeros(4), torch.zeros(4), GAMMA, LAM)
+        buf.compute_returns_and_advantage(torch.zeros(4), GAMMA, LAM)
         metrics = agent.update_manager(buf, minibatch_size=8, update_epochs=2)
     else:
         buf = VecRolloutBuffer(8, 4, OBS_DIM + GOAL_DIM, ACT_DIM, "cpu")
         for _ in range(8):
             buf.add(torch.randn(4, OBS_DIM + GOAL_DIM), torch.rand(4, ACT_DIM) * 2 - 1,
                     torch.randn(4), torch.randn(4), torch.randn(4), torch.zeros(4))
-        buf.compute_returns_and_advantage(torch.zeros(4), torch.zeros(4), GAMMA, LAM)
+        buf.compute_returns_and_advantage(torch.zeros(4), GAMMA, LAM)
         metrics = agent.update_worker(buf, minibatch_size=8, update_epochs=2)
     # Parenthesized explicitly: `A == B if cond else True` parses as
     # `(A == B) if cond else True`, so an unparenthesized version silently
@@ -270,7 +287,7 @@ def test_explained_variance_uses_the_vectorized_pre_update_values():
                       obs_low=[-1.0, -2.0, -2.0, -2.0], obs_high=[11.0, 2.0, 2.0, 2.0])
     buf = _fill_ragged(ManagerVecRolloutBuffer(8, 4, OBS_DIM, GOAL_DIM, "cpu"),
                        np.array([8, 3, 6, 5]), seed=7)
-    buf.compute_returns_and_advantage(torch.zeros(4), torch.zeros(4), GAMMA, LAM)
+    buf.compute_returns_and_advantage(torch.zeros(4), GAMMA, LAM)
     returns = buf.get()[3].numpy()
     values = buf.get_values().numpy()
     expected = 1 - np.var(returns - values) / np.var(returns)
