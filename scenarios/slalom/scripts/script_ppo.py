@@ -240,7 +240,7 @@ if __name__ == "__main__":
             # Action selection
             obs_tensor = torch.tensor(agent.normalize_obs(obs), dtype=torch.float32).to(device)
             with torch.no_grad():
-                action, logprob, _, value = agent.get_action_and_value(obs_tensor)
+                action, logprob, value = agent.get_action_and_value(obs_tensor)
 
             action_np = action.cpu().numpy()
 
@@ -283,12 +283,12 @@ if __name__ == "__main__":
                 ep_reward[i] = 0
                 ep_length[i] = 0
 
-        # Bootstrap value if not done
+        # Value of the observation after the rollout; GAE bootstraps from it
+        # only where the last transition did not end its episode (dones[-1]).
         next_obs_tensor = torch.tensor(agent.normalize_obs(obs), dtype=torch.float32).to(device)
         with torch.no_grad():
             next_value = agent.get_value(next_obs_tensor)
-        next_done = torch.tensor(done.astype(np.float32)).to(device)
-        agent.compute_returns_and_advantage(buffer, next_value, next_done)
+        agent.compute_returns_and_advantage(buffer, next_value)
 
         # Optimize the policy and value network
         metrics = agent.update(buffer, args.minibatch_size, args.update_epochs)
@@ -345,7 +345,7 @@ if __name__ == "__main__":
                 while not done_eval:
                     with torch.no_grad():
                         obs_tensor = torch.tensor(agent.normalize_obs(eval_obs), dtype=torch.float32).to(device)
-                        action, _, _, _ = agent.get_action_and_value(obs_tensor.unsqueeze(0), deterministic=True)
+                        action = agent.act(obs_tensor.unsqueeze(0))
                     next_obs_eval, reward_eval, terminated_eval, truncated_eval, info_eval = eval_env.step(action.cpu().numpy()[0])
                     eval_ep_reward += reward_eval
                     eval_ep_length += 1
@@ -388,7 +388,7 @@ if __name__ == "__main__":
             def policy_fn(obs):
                 with torch.no_grad():
                     obs_tensor = torch.tensor(agent.normalize_obs(obs), dtype=torch.float32).to(device)
-                    action, _, _, _ = agent.get_action_and_value(obs_tensor.unsqueeze(0), deterministic=True)
+                    action = agent.act(obs_tensor.unsqueeze(0))
                 return action.cpu().numpy()[0]
 
             solved_result = check_solved(lambda: policy_fn, eval_env, optimal_grid, args.solved_tolerance)

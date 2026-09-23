@@ -69,8 +69,9 @@ class RolloutBuffer:
         self.dones[self.step] = done
         self.step += 1
 
-    def compute_returns_and_advantage(self, next_value, next_done, gamma, gae_lambda):
-        """GAE(lambda) over the stored rollout.
+    def compute_returns_and_advantage(self, next_value, gamma, gae_lambda):
+        """GAE(lambda) over the stored rollout. `next_value` is the value of
+        the observation that follows the last stored transition.
 
         `gamma` and `gae_lambda` are required rather than defaulted: they used
         to default to 0.99/0.95 while every real call site passed 0.999, so a
@@ -84,16 +85,16 @@ class RolloutBuffer:
         `dones[t+1]`. Both are correct; they are the same quantity indexed
         differently, and this one is the natural fit for an auto-resetting
         vector env, where the observation after a done already belongs to the
-        next episode.
+        next episode. It is also why there is no `next_done` argument: CleanRL
+        needs one for the observation after the rollout, whereas here the last
+        transition's own `dones[-1]` already says whether `next_value` may be
+        bootstrapped from. (This method used to take a `next_done` anyway,
+        which every caller filled with exactly `dones[-1]`.)
         """
         lastgaelam = torch.zeros(self.num_envs, device=self.device)
         for t in reversed(range(self.num_steps)):
-            if t == self.num_steps - 1:
-                nextnonterminal = 1.0 - next_done
-                nextvalues = next_value
-            else:
-                nextnonterminal = 1.0 - self.dones[t]
-                nextvalues = self.values[t + 1]
+            nextvalues = next_value if t == self.num_steps - 1 else self.values[t + 1]
+            nextnonterminal = 1.0 - self.dones[t]
             delta = self.rewards[t] + gamma * nextvalues * nextnonterminal - self.values[t]
             self.advantages[t] = lastgaelam = delta + gamma * gae_lambda * nextnonterminal * lastgaelam
         self.returns = self.advantages + self.values
@@ -179,10 +180,12 @@ class PPOAgent:
 
         # The critic learns in standardized-return space; these statistics map
         # its output back to the raw reward scale that GAE works in. Raw
-        # returns here are O(400) (a +-500 terminal reward, barely discounted
-        # at gamma=0.999) against a freshly initialized critic that outputs
-        # ~0 -- see RunningMeanStd's docstring (algorithms/common.py) for why
-        # that gap matters.
+        # returns here are large -- by the time the benchmark seeds solve the
+        # task, ret_rms sits at mean ~700 / std ~170 on the slalom and mean
+        # ~90 / std ~90 on the tunnel -- against a freshly initialized critic
+        # that outputs ~0; see RunningMeanStd's docstring (algorithms/common.py)
+        # for why that gap matters. (This comment used to quote O(400) at
+        # gamma=0.999, the discount before the switch to 0.99.)
         self.ret_rms = RunningMeanStd()
 
         # Two parameter groups, so the critic can run at a higher learning
@@ -212,15 +215,22 @@ class PPOAgent:
         # Log probability of a continuous action is the sum of the log probs of its dimensions
         return action, probs.log_prob(action).sum(1), probs.entropy().sum(1)
 
-    def get_action_and_value(self, state, action=None, deterministic=False):
-        action, logprob, entropy = self.policy_forward(state, action, deterministic)
-        return action, logprob, entropy, self.get_value(state)
+    def get_action_and_value(self, state):
+        """Sampled action, its log-probability and the state's value: what a
+        rollout step stores."""
+        action, logprob, _ = self.policy_forward(state)
+        return action, logprob, self.get_value(state)
+
+    def act(self, state, deterministic=True):
+        """Action only, with no critic pass -- for evaluation and the
+        solved-check, which never use the value."""
+        return self.policy_forward(state, deterministic=deterministic)[0]
 
     def get_value(self, state):
         """Value on the raw reward scale, for GAE and truncation bootstrapping."""
         return self.critic(state).squeeze(-1) * self.ret_rms.std + self.ret_rms.mean
 
-    def compute_returns_and_advantage(self, buffer, next_value, next_done):
+    def compute_returns_and_advantage(self, buffer, next_value):
         """Run GAE over `buffer` using this agent's discount parameters.
 
         The agent is the single source of truth for gamma/gae_lambda: they are
@@ -228,7 +238,7 @@ class PPOAgent:
         two independent copies is how those silently drift apart.
         """
         buffer.compute_returns_and_advantage(
-            next_value, next_done, gamma=self.gamma, gae_lambda=self.gae_lambda
+            next_value, gamma=self.gamma, gae_lambda=self.gae_lambda
         )
 
     def normalize_obs(self, obs):
@@ -259,24 +269,18 @@ class PPOAgent:
         checkpoint = torch.load(path, map_location=self.device)
         self.actor.load_state_dict(checkpoint["actor"])
         self.critic.load_state_dict(checkpoint["critic"])
-        # Guarded: checkpoints written before the critic had its own parameter
-        # group hold a single-group optimiser state, which Adam refuses to load
-        # into the two-group optimiser built above. The weights are what matter
-        # for evaluation and there is no --resume path that would need the
-        # moment estimates, so a stale optimiser state is dropped loudly rather
-        # than made fatal.
-        try:
-            self.optimizer.load_state_dict(checkpoint["optimizer"])
-        except (ValueError, KeyError):
-            print(f"warning: {path} predates the two-group optimiser; actor and "
-                  "critic weights loaded, optimiser state discarded")
-        if "ret_rms" in checkpoint:
-            self.ret_rms.load_state_dict(checkpoint["ret_rms"])
-        # Guarded: checkpoints written before these keys existed still load.
-        if checkpoint.get("obs_low") is not None:
+        self.optimizer.load_state_dict(checkpoint["optimizer"])
+        self.ret_rms.load_state_dict(checkpoint["ret_rms"])
+        # None only when the saving agent had no bounds either; this agent
+        # then keeps whatever it was constructed with.
+        if checkpoint["obs_low"] is not None:
             self.obs_low = np.asarray(checkpoint["obs_low"], dtype=np.float32)
-        if checkpoint.get("obs_high") is not None:
             self.obs_high = np.asarray(checkpoint["obs_high"], dtype=np.float32)
+        # Guards for checkpoints older than the two-group optimiser, the
+        # observation bounds or ret_rms used to live here; no such flat-PPO
+        # checkpoint is left (all nine under scenarios/tunnel/scripts/
+        # checkpoints/bench_ppo_* carry all three), so they were dropped.
+        #
         # Checkpoints from before the entropy autotuner was removed also carry
         # `log_ent_coef` and `ent_coef_optimizer`. They are ignored: ent_coef
         # only enters training, and the tuned value never left 0.01 +- 2%.
@@ -368,9 +372,10 @@ class PPOAgent:
                 entropy_losses.append(entropy_loss.item())
                 approx_kls.append(approx_kl.item())
 
-        # Calculate some final metrics. Values are compared on the raw return
-        # scale, so explained_variance stays comparable across runs with and
-        # without value normalization.
+        # Final metrics, on the raw return scale GAE works in. explained_variance
+        # would come out the same in the critic's standardized space (it is
+        # invariant to an affine map shared by values and returns); value_bias
+        # would not, and reads in reward units here.
         returns_np = returns.detach().cpu().numpy()
         values_np = values.detach().cpu().numpy()
         var_y = np.var(returns_np)
@@ -399,6 +404,5 @@ class PPOAgent:
             "loss/explained_variance": float(explained_var),
             # Pre-normalization advantage std.
             "loss/adv_std_raw": adv_std_raw,
-            "loss/batch_size": float(batch_size),
         }
         return metrics

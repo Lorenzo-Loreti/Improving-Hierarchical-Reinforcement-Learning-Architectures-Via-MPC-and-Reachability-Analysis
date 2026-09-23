@@ -136,17 +136,15 @@ def test_gae_matches_transition_indexed_reference():
     pins ours down so the difference is never 'fixed' by mistake.
     """
     buf = _filled_buffer()
-    next_value, next_done = torch.randn(2), torch.tensor([0.0, 1.0])
+    next_value = torch.randn(2)
     gamma, lam = 0.999, 0.95
-    buf.compute_returns_and_advantage(next_value, next_done, gamma, lam)
+    buf.compute_returns_and_advantage(next_value, gamma, lam)
 
     expected = torch.zeros(buf.num_steps, buf.num_envs)
     last = torch.zeros(buf.num_envs)
     for t in reversed(range(buf.num_steps)):
-        if t == buf.num_steps - 1:
-            nonterminal, next_v = 1.0 - next_done, next_value
-        else:
-            nonterminal, next_v = 1.0 - buf.dones[t], buf.values[t + 1]
+        nonterminal = 1.0 - buf.dones[t]
+        next_v = next_value if t == buf.num_steps - 1 else buf.values[t + 1]
         delta = buf.rewards[t] + gamma * next_v * nonterminal - buf.values[t]
         last = delta + gamma * lam * nonterminal * last
         expected[t] = last
@@ -156,7 +154,7 @@ def test_gae_matches_transition_indexed_reference():
 def test_gae_returns_identity_holds():
     """returns = advantages + values, which update() relies on."""
     buf = _filled_buffer()
-    buf.compute_returns_and_advantage(torch.randn(2), torch.zeros(2), 0.999, 0.95)
+    buf.compute_returns_and_advantage(torch.randn(2), 0.999, 0.95)
     assert torch.allclose(buf.returns, buf.advantages + buf.values, atol=1e-5)
 
 
@@ -166,30 +164,43 @@ def test_gae_stops_bootstrapping_at_a_done():
     buf.rewards = torch.tensor([[5.0], [7.0]])
     buf.values = torch.zeros(2, 1)
     buf.dones = torch.tensor([[1.0], [0.0]])  # transition 0 ended the episode
-    buf.compute_returns_and_advantage(torch.tensor([100.0]), torch.zeros(1), 0.999, 0.95)
+    buf.compute_returns_and_advantage(torch.tensor([100.0]), 0.999, 0.95)
     # Step 0 is terminal: its advantage is its own reward and nothing else.
     assert buf.advantages[0, 0].item() == pytest.approx(5.0, abs=1e-5)
+
+
+def test_gae_does_not_bootstrap_past_a_done_on_the_last_transition():
+    """The case a separate `next_done` argument used to cover: when the last
+    stored transition ended its episode, the observation after the rollout
+    belongs to the next episode, and its value must not leak in. dones[-1]
+    alone has to say so."""
+    buf = RolloutBuffer(2, 1, 4, 2, "cpu")
+    buf.rewards = torch.tensor([[5.0], [7.0]])
+    buf.values = torch.zeros(2, 1)
+    buf.dones = torch.tensor([[0.0], [1.0]])  # the last transition ended the episode
+    buf.compute_returns_and_advantage(torch.tensor([100.0]), 0.999, 0.95)
+    assert buf.advantages[1, 0].item() == pytest.approx(7.0, abs=1e-5)
 
 
 def test_gae_parameters_are_required():
     """They used to default to 0.99 while every call site passed 0.999."""
     buf = _filled_buffer()
     with pytest.raises(TypeError):
-        buf.compute_returns_and_advantage(torch.randn(2), torch.zeros(2))
+        buf.compute_returns_and_advantage(torch.randn(2))
 
 
 def test_agent_is_the_single_source_of_the_discount():
     """agent.gamma/gae_lambda drive GAE; they used to be set and never read."""
     agent = PPOAgent(4, 2, gamma=0.5, gae_lambda=0.5, device="cpu")
     buf_a, buf_b = _filled_buffer(), _filled_buffer()
-    next_value, next_done = torch.randn(2), torch.zeros(2)
+    next_value = torch.randn(2)
 
-    agent.compute_returns_and_advantage(buf_a, next_value, next_done)
-    buf_b.compute_returns_and_advantage(next_value, next_done, 0.5, 0.5)
+    agent.compute_returns_and_advantage(buf_a, next_value)
+    buf_b.compute_returns_and_advantage(next_value, 0.5, 0.5)
     assert torch.allclose(buf_a.advantages, buf_b.advantages, atol=1e-6)
 
     agent.gamma = 0.999
-    agent.compute_returns_and_advantage(buf_a, next_value, next_done)
+    agent.compute_returns_and_advantage(buf_a, next_value)
     assert not torch.allclose(buf_a.advantages, buf_b.advantages, atol=1e-6)
 
 
@@ -290,7 +301,7 @@ def _prepared_agent_and_buffer(agent=None):
         flat = buf.states.reshape(-1, 4)
         _, logprobs, _ = agent.policy_forward(flat, buf.actions.reshape(-1, 2))
     buf.logprobs = logprobs.reshape(8, 4)
-    agent.compute_returns_and_advantage(buf, torch.zeros(4), torch.zeros(4))
+    agent.compute_returns_and_advantage(buf, torch.zeros(4))
     return agent, buf
 
 
@@ -316,7 +327,7 @@ def test_update_reports_the_expected_metrics():
         "loss/approx_kl_max", "loss/ratio_max_dev",
         "loss/clipfrac", "loss/value_bias",
         "loss/value_target_mean", "loss/value_target_std", "loss/explained_variance",
-        "loss/adv_std_raw", "loss/batch_size",
+        "loss/adv_std_raw",
     }
     assert all(isinstance(v, float) for v in metrics.values())
 
@@ -389,32 +400,6 @@ def test_annealing_every_group_keeps_the_critic_ratio():
     assert lrs[1] / lrs[0] == pytest.approx(3.0)
 
 
-def test_load_tolerates_a_single_group_optimiser_state(capsys):
-    """Checkpoints written before the split hold a one-group optimiser state.
-    Adam rejects it; `load` must warn and keep the weights rather than raise,
-    because nothing downstream needs the moment estimates (PPO chapter §8.2)."""
-    import torch.optim as optim
-
-    old = PPOAgent(4, 2, device="cpu")
-    old.optimizer = optim.Adam(
-        list(old.actor.parameters()) + list(old.critic.parameters()), lr=3e-4, eps=1e-5
-    )
-    with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "old.pt")
-        old.save(path)
-
-        new = PPOAgent(4, 2, critic_lr_mult=3.0, device="cpu")
-        new.load(path)          # must not raise
-
-    assert "predates the two-group optimiser" in capsys.readouterr().out
-    for a, b in zip(old.actor.parameters(), new.actor.parameters()):
-        assert torch.allclose(a, b)
-    for a, b in zip(old.critic.parameters(), new.critic.parameters()):
-        assert torch.allclose(a, b)
-    # the ratio survives a load that discarded the optimiser state
-    assert [g["lr"] for g in new.optimizer.param_groups] == pytest.approx([3e-4, 9e-4])
-
-
 def test_checkpoint_from_the_autotuning_era_still_loads():
     """Every checkpoint trained before the entropy autotuner was removed
     carries log_ent_coef and its optimiser state. Loading one must restore
@@ -435,6 +420,20 @@ def test_checkpoint_from_the_autotuning_era_still_loads():
     assert reloaded.ent_coef == 0.01
     for a, b in zip(agent.actor.parameters(), reloaded.actor.parameters()):
         assert torch.equal(a, b)
+
+
+def test_act_is_the_deterministic_action_without_a_critic_pass():
+    """Evaluation and the solved-check only need the action; they used to go
+    through get_action_and_value and throw its value away."""
+    agent = PPOAgent(4, 2, device="cpu")
+    state = torch.randn(3, 4)
+    expected = agent.policy_forward(state, deterministic=True)[0]
+
+    def no_critic(*_):
+        raise AssertionError("act() must not evaluate the critic")
+
+    agent.critic.forward = no_critic
+    assert torch.equal(agent.act(state), expected)
 
 
 def test_agent_default_discount_is_the_documented_one():
