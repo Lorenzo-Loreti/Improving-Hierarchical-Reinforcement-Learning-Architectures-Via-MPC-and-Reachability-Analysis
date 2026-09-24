@@ -33,6 +33,7 @@ import wandb
 from ppo import PPOAgent, RolloutBuffer
 from optimal_solver import spawn_grid, precompute_optimal_grid, MinTimeSolver
 from solved_check import check_solved
+from metrics_log import MetricsLog
 
 
 def _str2bool(x):
@@ -77,6 +78,13 @@ def parse_args(scenario):
         help="number of episodes to evaluate the agent")
     parser.add_argument("--checkpoint-dir", type=str, default="checkpoints",
         help="directory (relative to the scenario's script) to save model checkpoints in")
+    parser.add_argument("--save-eval-checkpoints", type=_str2bool, default=False,
+        help="if toggled, also save the agent at every evaluation, as "
+             "eval_<global_step>.pt next to best.pt and final.pt, so the policy "
+             "can be replayed at any point of its learning curve (the study "
+             "scripts' progression figure, algorithms/study.py, uses them). Off "
+             "by default: each is a few hundred kB. Saving touches no random "
+             "number generator, so the run itself is unchanged")
     parser.add_argument("--solved-early-stop", type=_str2bool, default=True,
         help="if toggled, actually stop training once the solved criterion below "
              "is met. The check, its logging, and the one-time solved.pt checkpoint "
@@ -153,6 +161,44 @@ def parse_args(scenario):
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     return args
+
+
+def make_policy_fn(agent):
+    """The controller evaluation scores: one raw observation in, the
+    deterministic action out. The random-start evaluation, the solved-check
+    and the study scripts (algorithms/study.py) all run exactly this, so they
+    cannot drift apart. Memoryless -- hPPO's counterpart needs a fresh closure
+    per episode (algorithms/hppo/hppo_train.py), this one does not.
+
+    At module level rather than a closure inside `train` so that a policy
+    reloaded from a checkpoint (`load_agent`) is driven by the same code the
+    training run evaluated it with."""
+    def policy_fn(obs):
+        with torch.no_grad():
+            obs_tensor = torch.tensor(agent.normalize_obs(obs), dtype=torch.float32).to(agent.device)
+            action = agent.act(obs_tensor.unsqueeze(0))
+        return action.cpu().numpy()[0]
+
+    return policy_fn
+
+
+def load_agent(path, env, device="cpu"):
+    """A trained agent rebuilt from the checkpoint at `path`, for evaluation.
+
+    `env` is an instance of the environment it was trained on: its spaces give
+    the network sizes and the action limits, the same way `train` reads them.
+    The observation map travels in the checkpoint itself (see PPOAgent.save)."""
+    agent = PPOAgent(
+        obs_dim=env.observation_space.shape[0],
+        act_dim=env.action_space.shape[0],
+        act_limit_low=float(env.action_space.low[0]),
+        act_limit_high=float(env.action_space.high[0]),
+        device=device,
+    )
+    agent.load(path)
+    agent.actor.eval()
+    agent.critic.eval()
+    return agent
 
 
 def main(scenario):
@@ -254,16 +300,8 @@ def train(args, scenario):
     # on the first update.
     base_lrs = [group["lr"] for group in agent.optimizer.param_groups]
 
-    def policy_fn(obs):
-        """The controller evaluation scores: one raw observation in, the
-        deterministic action out. The random-start evaluation and the
-        solved-check both run exactly this, so they cannot drift apart.
-        Memoryless -- hPPO's counterpart needs a fresh closure per episode
-        (algorithms/hppo/hppo_train.py), this one does not."""
-        with torch.no_grad():
-            obs_tensor = torch.tensor(agent.normalize_obs(obs), dtype=torch.float32).to(device)
-            action = agent.act(obs_tensor.unsqueeze(0))
-        return action.cpu().numpy()[0]
+    # See make_policy_fn: the controller evaluation and the solved-check score.
+    policy_fn = make_policy_fn(agent)
 
     buffer = RolloutBuffer(args.num_steps, args.num_envs, obs_dim, act_dim, device)
 
@@ -284,6 +322,17 @@ def train(args, scenario):
              f"dropped by integer division)" if actual_timesteps != args.total_timesteps else ""))
     if args.track:
         wandb.config.update({"num_updates": num_updates, "actual_timesteps": actual_timesteps})
+
+    # A local copy of every W&B log call, written whether or not --track is
+    # on; see algorithms/metrics_log.py.
+    metrics_log = MetricsLog(checkpoint_dir, config={
+        "scenario": scenario.name, "algorithm": "ppo", "run_name": run_name,
+        "num_updates": num_updates, "actual_timesteps": actual_timesteps, **vars(args)})
+
+    def log(metrics, step):
+        metrics_log.log(metrics, step)
+        if args.track:
+            wandb.log(metrics, step=step)
 
     ep_reward = np.zeros(args.num_envs)
     ep_length = np.zeros(args.num_envs, dtype=np.int64)
@@ -391,8 +440,7 @@ def train(args, scenario):
                 metrics["charts/collision_impact_worst"] = float(np.min(completed_collision_impacts))
         print(log_line)
 
-        if args.track:
-            wandb.log(metrics, step=global_step)
+        log(metrics, global_step)
 
         buffer.reset()
 
@@ -438,8 +486,10 @@ def train(args, scenario):
             if eval_collision_impacts:
                 eval_metrics["eval/collision_impact_mean"] = float(np.mean(eval_collision_impacts))
                 eval_metrics["eval/collision_impact_worst"] = float(np.min(eval_collision_impacts))
-            if args.track:
-                wandb.log(eval_metrics, step=global_step)
+            log(eval_metrics, global_step)
+
+            if args.save_eval_checkpoints:
+                agent.save(os.path.join(checkpoint_dir, f"eval_{global_step:07d}.pt"))
 
             if mean_eval_return > best_eval_return:
                 best_eval_return = mean_eval_return
@@ -454,12 +504,11 @@ def train(args, scenario):
                   f"worst_gap={solved_result.worst_gap:.2f} at "
                   f"p_x0={solved_result.worst_point[0]:.2f} p_y0={solved_result.worst_point[1]:.2f} "
                   f"(consecutive={consecutive_solved})")
-            if args.track:
-                wandb.log({
-                    "solved/is_solved": float(solved_result.solved),
-                    "solved/worst_gap": solved_result.worst_gap,
-                    "solved/mean_gap": float(solved_result.gaps.mean()),
-                }, step=global_step)
+            log({
+                "solved/is_solved": float(solved_result.solved),
+                "solved/worst_gap": solved_result.worst_gap,
+                "solved/mean_gap": float(solved_result.gaps.mean()),
+            }, global_step)
 
             consecutive_solved = consecutive_solved + 1 if solved_result.solved else 0
 
@@ -476,8 +525,7 @@ def train(args, scenario):
                           f"(tolerance={args.solved_tolerance}) at global_step={global_step}.")
                     agent.save(os.path.join(checkpoint_dir, "solved.pt"))
                     solved_checkpoint_saved = True
-                    if args.track:
-                        wandb.log({"solved/first_solved_step": global_step}, step=global_step)
+                    log({"solved/first_solved_step": global_step}, global_step)
                 if args.solved_early_stop:
                     print("--solved-early-stop is on -- stopping training early.")
                     break
@@ -485,6 +533,7 @@ def train(args, scenario):
     agent.save(os.path.join(checkpoint_dir, "final.pt"))
     print(f"Saved checkpoints to {checkpoint_dir}")
 
+    metrics_log.close()
     eval_env.close()
     if args.track:
         wandb.finish()

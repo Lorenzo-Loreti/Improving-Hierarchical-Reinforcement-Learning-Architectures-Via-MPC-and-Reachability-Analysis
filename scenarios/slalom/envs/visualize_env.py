@@ -32,9 +32,26 @@ def resolve_profile(config: SlalomEnvConfig):
     )
 
 
-def plot_env(config: SlalomEnvConfig, ax=None):
-    """Draw SlalomEnv's track layout onto `ax` (a new figure if omitted)."""
+def plot_env(config: SlalomEnvConfig, ax=None, overlay=False):
+    """Draw SlalomEnv's track layout onto `ax` (a new figure if omitted).
+
+    `overlay=True` draws the same geometry in neutral greys and leaves out the
+    title and the parameter footer: the style for figures that draw
+    trajectories on top of the track (algorithms/study.py), where color has to
+    belong to the trajectories alone -- orange gates and a blue spawn box
+    would read as two more series. The footer is also a figure-level text, so
+    it cannot be drawn once per panel of a multi-panel figure.
+    """
     profile = resolve_profile(config)
+    wall_ink, wall_width = ("0.3", 1.2) if overlay else ("black", 2)
+    gate_color = "0.72" if overlay else "tab:orange"
+    spawn_color = "0.45" if overlay else "tab:blue"
+    goal_color = "0.4" if overlay else "tab:green"
+    # In an overlay, dashes are left to the trajectories (the study figures
+    # draw the oracle dashed), so the spawn box is dotted and the goal solid.
+    spawn_ls, spawn_lw = (":", 1.1) if overlay else ("--", 1.3)
+    goal_ls, goal_lw = ("-", 1.3) if overlay else ("--", 1.8)
+    label_box = dict(fc="white", ec="none", pad=0.8) if overlay else None
 
     if ax is None:
         _, ax = plt.subplots(figsize=(9, 4.5))
@@ -53,38 +70,41 @@ def plot_env(config: SlalomEnvConfig, ax=None):
 
         y_lo, y_hi = seg.center_y - seg.half_width, seg.center_y + seg.half_width
         is_gate = seg.half_width < full_half - 1e-9
-        color = "tab:orange" if is_gate else "0.85"
+        color = gate_color if is_gate else "0.85"
 
         # Shaded wall regions (above y_hi, below y_lo), so narrow segments
         # visibly cut further into the corridor than full-width ones.
         ax.fill_between([x_start, x_end], y_hi, y_hi_env + pad, color=color, alpha=0.7, linewidth=0)
         ax.fill_between([x_start, x_end], y_lo_env - pad, y_lo, color=color, alpha=0.7, linewidth=0)
-        ax.hlines([y_lo, y_hi], x_start, x_end, color="black", linewidth=2)
+        ax.hlines([y_lo, y_hi], x_start, x_end, color=wall_ink, linewidth=wall_width)
         ax.axvline(seg.x_start, color="0.5", linewidth=0.5, linestyle=":")
 
         if is_gate:
             gate_num += 1
             ax.text((x_start + x_end) / 2.0, y_hi_env + pad * 0.6, f"gate {gate_num}",
-                    ha="center", va="bottom", fontsize=8, color="tab:orange")
+                    ha="center", va="bottom", fontsize=8,
+                    color="0.35" if overlay else "tab:orange")
 
     # Spawn box: p_x in [0, 2], p_y in [-W/4, W/4] -- matches SlalomEnv.reset().
     ax.add_patch(plt.Rectangle(
         (0.0, -config.tunnel_width / 4.0), 2.0, config.tunnel_width / 2.0,
-        fill=False, edgecolor="tab:blue", linestyle="--", linewidth=1.3,
+        fill=False, edgecolor=spawn_color, linestyle=spawn_ls, linewidth=spawn_lw,
     ))
     ax.text(1.0, -config.tunnel_width / 4.0 - pad * 0.4, "spawn box",
-            ha="center", va="top", fontsize=8, color="tab:blue")
+            ha="center", va="top", fontsize=8, color=spawn_color)
 
     # Goal line.
-    ax.axvline(config.tunnel_length, color="tab:green", linestyle="--", linewidth=1.8)
+    ax.axvline(config.tunnel_length, color=goal_color, linestyle=goal_ls, linewidth=goal_lw)
     ax.text(config.tunnel_length, y_hi_env + pad * 0.6, "goal",
-            ha="center", va="bottom", fontsize=8, color="tab:green")
+            ha="center", va="bottom", fontsize=8, color=goal_color, bbox=label_box)
 
     ax.set_xlim(x_lo, x_hi)
     ax.set_ylim(y_lo_env - pad, y_hi_env + pad * 1.6)
     ax.set_aspect("equal")
     ax.set_xlabel("p_x")
     ax.set_ylabel("p_y")
+    if overlay:
+        return ax
     ax.set_title(f"SlalomEnv track layout  (num_gates={gate_num})")
 
     param_text = (

@@ -35,6 +35,7 @@ import wandb
 from hppo import HPPOAgent, VecRolloutBuffer, ManagerVecRolloutBuffer
 from optimal_solver import spawn_grid, precompute_optimal_grid, MinTimeSolver
 from solved_check import check_solved
+from metrics_log import MetricsLog
 
 
 # `type=bool` would be a no-op for the boolean flags below: argparse applies
@@ -73,6 +74,13 @@ def parse_args(scenario):
         help="the wandb's project name")
     parser.add_argument("--checkpoint-dir", type=str, default="checkpoints",
         help="directory (relative to the scenario's script) to save model checkpoints in")
+    parser.add_argument("--save-eval-checkpoints", type=_str2bool, default=False,
+        help="if toggled, also save the agent at every evaluation, as "
+             "eval_<global_step>.pt next to best.pt and final.pt, so the "
+             "hierarchy can be replayed at any point of its learning curve (the "
+             "study scripts' progression figure, algorithms/study.py, uses "
+             "them). Off by default: each is ~250 kB. Saving touches no random "
+             "number generator, so the run itself is unchanged")
 
     # Reward-scale overrides. Default to the scenario env config's own defaults, so
     # omitting these reproduces exactly the environment every other script
@@ -414,6 +422,104 @@ def parse_args(scenario):
     return args
 
 
+def worker_input(agent, obs_norm, goal_phys):
+    """The worker's network input: normalized observation ++ normalized goal.
+
+    Concatenates on the last axis, so it takes either a single
+    (obs_dim,)/(goal_dim,) pair -- what evaluation has -- or the
+    (num_envs, obs_dim)/(num_envs, goal_dim) batch the rollout carries.
+    """
+    return torch.tensor(
+        np.concatenate([obs_norm, agent.normalize_goal(goal_phys)], axis=-1),
+        dtype=torch.float32, device=agent.device
+    )
+
+
+def make_policy_fn(agent, goal_trace=None):
+    """The controller evaluation scores, as a fresh closure per episode:
+    one raw observation in, the worker's deterministic action out. The
+    manager issues a deterministic goal at the episode's first step and
+    every manager_freq steps after it, and the goal decays by the agent's
+    displacement in between -- the rollout's cadence and goal transition
+    exactly, without the sampling. The random-start evaluation, the
+    solved-check and the study scripts (algorithms/study.py) all run exactly
+    this, so they cannot drift apart. Flat PPO's counterpart is memoryless
+    (algorithms/ppo/ppo_train.py).
+
+    A *factory*, not a single shared closure: the re-plan cadence
+    (state["goal"]/state["step_in_c"]) is per-episode state, so every
+    caller builds a fresh policy_fn right after each env.reset() -- see
+    algorithms/solved_check.py.
+
+    `goal_trace`, if given, is a list the policy appends one
+    `(replanned, goal)` pair to per step: whether the manager issued a fresh
+    goal on that step, and the physical goal displacement the worker acted
+    on. Only the study scripts' figures read it; it changes nothing the
+    controller does.
+
+    The evaluation loop used to carry its own inline copy of this
+    controller, a second implementation to keep in step with this one
+    and with the rollout. That copy had, earlier still, reused the names
+    the rollout carries its in-flight segment in (`current_goal`,
+    `current_pos`, `manager_obs_tensor`), so each evaluation silently
+    overwrote the training state with whatever its last episode ended on
+    and the rollout resumed against a goal from a different episode.
+    Vectorizing turned that into a shape error, which is how it was
+    found; it was a live bug in the single-environment version too. With
+    the controller's state inside this closure it cannot recur. It is at
+    module level, rather than a closure inside `train`, so that a
+    hierarchy reloaded from a checkpoint (`load_agent`) is driven by this
+    same code instead of a third copy. Its cadence is the agent's own
+    `manager_freq`, which `train` constructs from --manager-freq and every
+    checkpoint carries.
+    """
+    state = {}
+
+    def policy_fn(obs):
+        obs_norm = agent.normalize_obs(obs)
+        pos = np.array([obs[0], obs[1]])
+        if state:
+            state["step_in_c"] += 1
+        with torch.no_grad():
+            replanned = not state or state["step_in_c"] == agent.manager_freq
+            if replanned:
+                # First step of the episode or of a new segment.
+                manager_obs = torch.tensor(obs_norm, dtype=torch.float32, device=agent.device).unsqueeze(0)
+                state["goal"] = agent.scale_goal(agent.manager_act(manager_obs).cpu().numpy()[0])
+                state["step_in_c"] = 0
+            else:
+                state["goal"] = state["goal"] - (pos - state["pos"])
+            state["pos"] = pos
+            action = agent.worker_act(worker_input(agent, obs_norm, state["goal"]).unsqueeze(0))
+        if goal_trace is not None:
+            goal_trace.append((replanned, np.array(state["goal"], dtype=float)))
+        return action.cpu().numpy()[0]
+
+    return policy_fn
+
+
+def load_agent(path, env, device="cpu"):
+    """A trained hierarchy rebuilt from the checkpoint at `path`, for
+    evaluation.
+
+    `env` is an instance of the environment it was trained on: its spaces give
+    the network sizes and the worker's action limits, the same way `train`
+    reads them. The observation and goal maps and the manager's cadence
+    travel in the checkpoint itself (see HPPOAgent.save)."""
+    agent = HPPOAgent(
+        obs_dim=env.observation_space.shape[0],
+        goal_dim=2,  # delta x, delta y, as in `train`
+        act_dim=env.action_space.shape[0],
+        worker_act_limit_low=float(env.action_space.low[0]),
+        worker_act_limit_high=float(env.action_space.high[0]),
+        device=device,
+    )
+    agent.load(path)
+    for net in (agent.manager_actor, agent.manager_critic, agent.worker_actor, agent.worker_critic):
+        net.eval()
+    return agent
+
+
 def main(scenario):
     train(parse_args(scenario), scenario)
 
@@ -558,65 +664,6 @@ def train(args, scenario):
     os.makedirs(checkpoint_dir, exist_ok=True)
     best_eval_return = -float("inf")
 
-    def worker_input(obs_norm, goal_phys):
-        """The worker's network input: normalized observation ++ normalized goal.
-
-        Concatenates on the last axis, so it takes either a single
-        (obs_dim,)/(goal_dim,) pair -- what evaluation has -- or the
-        (num_envs, obs_dim)/(num_envs, goal_dim) batch the rollout carries.
-        """
-        return torch.tensor(
-            np.concatenate([obs_norm, agent.normalize_goal(goal_phys)], axis=-1),
-            dtype=torch.float32, device=device
-        )
-
-    def make_policy_fn():
-        """The controller evaluation scores, as a fresh closure per episode:
-        one raw observation in, the worker's deterministic action out. The
-        manager issues a deterministic goal at the episode's first step and
-        every manager_freq steps after it, and the goal decays by the agent's
-        displacement in between -- the rollout's cadence and goal transition
-        exactly, without the sampling. The random-start evaluation and the
-        solved-check both run exactly this, so they cannot drift apart. Flat
-        PPO's counterpart is memoryless (algorithms/ppo/ppo_train.py).
-
-        A *factory*, not a single shared closure: the re-plan cadence
-        (state["goal"]/state["step_in_c"]) is per-episode state, so both
-        callers build a fresh policy_fn right after each env.reset() -- see
-        algorithms/solved_check.py.
-
-        The evaluation loop used to carry its own inline copy of this
-        controller, a second implementation to keep in step with this one
-        and with the rollout. That copy had, earlier still, reused the names
-        the rollout carries its in-flight segment in (`current_goal`,
-        `current_pos`, `manager_obs_tensor`), so each evaluation silently
-        overwrote the training state with whatever its last episode ended on
-        and the rollout resumed against a goal from a different episode.
-        Vectorizing turned that into a shape error, which is how it was
-        found; it was a live bug in the single-environment version too. With
-        the controller's state inside this closure it cannot recur.
-        """
-        state = {}
-
-        def policy_fn(obs):
-            obs_norm = agent.normalize_obs(obs)
-            pos = np.array([obs[0], obs[1]])
-            if state:
-                state["step_in_c"] += 1
-            with torch.no_grad():
-                if not state or state["step_in_c"] == args.manager_freq:
-                    # First step of the episode or of a new segment.
-                    manager_obs = torch.tensor(obs_norm, dtype=torch.float32, device=device).unsqueeze(0)
-                    state["goal"] = agent.scale_goal(agent.manager_act(manager_obs).cpu().numpy()[0])
-                    state["step_in_c"] = 0
-                else:
-                    state["goal"] = state["goal"] - (pos - state["pos"])
-                state["pos"] = pos
-                action = agent.worker_act(worker_input(obs_norm, state["goal"]).unsqueeze(0))
-            return action.cpu().numpy()[0]
-
-        return policy_fn
-
     # Initialize environments. Every quantity the serial rollout held as a
     # scalar is now a per-environment array: the environments run independent
     # episodes, so they sit at different points in their manager cadence, carry
@@ -655,6 +702,17 @@ def train(args, scenario):
                              "worker_minibatch_size": worker_minibatch_size,
                              "num_steps_per_env": args.num_steps_per_env})
 
+    # A local copy of every W&B log call, written whether or not --track is
+    # on; see algorithms/metrics_log.py.
+    metrics_log = MetricsLog(checkpoint_dir, config={
+        "scenario": scenario.name, "algorithm": "hppo", "run_name": run_name,
+        "num_updates": num_updates, "actual_timesteps": actual_timesteps, **vars(args)})
+
+    def log(metrics, step):
+        metrics_log.log(metrics, step)
+        if args.track:
+            wandb.log(metrics, step=step)
+
     ep_reward = np.zeros(args.num_envs, dtype=np.float64)
     ep_length = np.zeros(args.num_envs, dtype=np.int64)
 
@@ -690,7 +748,7 @@ def train(args, scenario):
             global_step += args.num_envs
 
             # Worker action selection, one batched forward pass over all envs
-            obs_goal_tensor = worker_input(obs_norm, current_goal)
+            obs_goal_tensor = worker_input(agent, obs_norm, current_goal)
             with torch.no_grad():
                 worker_action, worker_logprob, worker_value = agent.get_worker_action_and_value(
                     obs_goal_tensor
@@ -768,7 +826,7 @@ def train(args, scenario):
             if np.any(trunc_only):
                 with torch.no_grad():
                     true_next_worker_value = agent.get_worker_value(
-                        worker_input(term_obs_norm[trunc_only], next_goal[trunc_only])
+                        worker_input(agent, term_obs_norm[trunc_only], next_goal[trunc_only])
                     )
                 worker_reward[trunc_only] += (
                     agent.gamma_worker * true_next_worker_value.cpu().numpy())
@@ -889,7 +947,7 @@ def train(args, scenario):
         # its episode -- each buffer reads that from its own last done flag.
         with torch.no_grad():
             # Worker bootstrap, per environment
-            next_worker_value = agent.get_worker_value(worker_input(obs_norm, current_goal))
+            next_worker_value = agent.get_worker_value(worker_input(agent, obs_norm, current_goal))
             agent.compute_worker_returns_and_advantage(worker_buffer, next_worker_value)
 
             # Manager bootstrap. `manager_value` is the value of each
@@ -966,8 +1024,7 @@ def train(args, scenario):
                 metrics["charts/collision_impact_worst"] = float(np.min(completed_collision_impacts))
         print(log_line)
 
-        if args.track:
-            wandb.log(metrics, step=global_step)
+        log(metrics, global_step)
 
         worker_buffer.reset()
         manager_buffer.reset()
@@ -985,7 +1042,7 @@ def train(args, scenario):
             eval_collision_impacts = []
             for i in range(args.eval_episodes):
                 eval_obs, info_eval = eval_env.reset(seed=args.seed + i)
-                policy_fn = make_policy_fn()
+                policy_fn = make_policy_fn(agent)
                 eval_ep_reward = 0
                 eval_ep_length = 0
                 done_eval = False
@@ -1017,8 +1074,10 @@ def train(args, scenario):
             if eval_collision_impacts:
                 eval_metrics["eval/collision_impact_mean"] = float(np.mean(eval_collision_impacts))
                 eval_metrics["eval/collision_impact_worst"] = float(np.min(eval_collision_impacts))
-            if args.track:
-                wandb.log(eval_metrics, step=global_step)
+            log(eval_metrics, global_step)
+
+            if args.save_eval_checkpoints:
+                agent.save(os.path.join(checkpoint_dir, f"eval_{global_step:07d}.pt"))
 
             if mean_eval_return > best_eval_return:
                 best_eval_return = mean_eval_return
@@ -1028,17 +1087,16 @@ def train(args, scenario):
             # controller as the random eval above on every pass, compared
             # point-by-point against the oracle's precomputed optimal return
             # for that exact starting position -- see algorithms/solved_check.py.
-            solved_result = check_solved(make_policy_fn, eval_env, optimal_grid, args.solved_tolerance)
+            solved_result = check_solved(lambda: make_policy_fn(agent), eval_env, optimal_grid, args.solved_tolerance)
             print(f"Solved-check at update {update}: solved={solved_result.solved} "
                   f"worst_gap={solved_result.worst_gap:.2f} at "
                   f"p_x0={solved_result.worst_point[0]:.2f} p_y0={solved_result.worst_point[1]:.2f} "
                   f"(consecutive={consecutive_solved})")
-            if args.track:
-                wandb.log({
-                    "solved/is_solved": float(solved_result.solved),
-                    "solved/worst_gap": solved_result.worst_gap,
-                    "solved/mean_gap": float(solved_result.gaps.mean()),
-                }, step=global_step)
+            log({
+                "solved/is_solved": float(solved_result.solved),
+                "solved/worst_gap": solved_result.worst_gap,
+                "solved/mean_gap": float(solved_result.gaps.mean()),
+            }, global_step)
 
             consecutive_solved = consecutive_solved + 1 if solved_result.solved else 0
 
@@ -1060,8 +1118,7 @@ def train(args, scenario):
                       f"{args.early_stop_success_rate} and eval/episodic_return "
                       f">= {early_stop_min_return:.1f} ({args.early_stop_optimal_frac:.0%} "
                       f"of mean optimal) for {consecutive_high_success} consecutive evaluations")
-                if args.track:
-                    wandb.log({"charts/early_stopped_at_update": update}, step=global_step)
+                log({"charts/early_stopped_at_update": update}, global_step)
                 break
 
             # Independent of --early-stop-success-rate above: either one can
@@ -1075,8 +1132,7 @@ def train(args, scenario):
                           f"(tolerance={args.solved_tolerance}) at global_step={global_step}.")
                     agent.save(os.path.join(checkpoint_dir, "solved.pt"))
                     solved_checkpoint_saved = True
-                    if args.track:
-                        wandb.log({"solved/first_solved_step": global_step}, step=global_step)
+                    log({"solved/first_solved_step": global_step}, global_step)
                 if args.solved_early_stop:
                     print("--solved-early-stop is on -- stopping training early.")
                     break
@@ -1084,6 +1140,7 @@ def train(args, scenario):
     agent.save(os.path.join(checkpoint_dir, "final.pt"))
     print(f"Saved checkpoints to {checkpoint_dir}")
 
+    metrics_log.close()
     eval_env.close()
     if args.track:
         wandb.finish()
