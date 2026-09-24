@@ -261,14 +261,14 @@ def test_update_consumes_a_vectorized_buffer(head):
         buf = _fill_ragged(ManagerVecRolloutBuffer(8, 4, OBS_DIM, GOAL_DIM, "cpu"),
                            np.array([8, 3, 6, 5]), seed=6)
         buf.compute_returns_and_advantage(torch.zeros(4), GAMMA, LAM)
-        metrics = agent.update_manager(buf, minibatch_size=8, update_epochs=2)
+        metrics = agent.update_manager(buf, num_minibatches=4, update_epochs=2)
     else:
         buf = VecRolloutBuffer(8, 4, OBS_DIM + GOAL_DIM, ACT_DIM, "cpu")
         for _ in range(8):
             buf.add(torch.randn(4, OBS_DIM + GOAL_DIM), torch.rand(4, ACT_DIM) * 2 - 1,
                     torch.randn(4), torch.randn(4), torch.randn(4), torch.zeros(4))
         buf.compute_returns_and_advantage(torch.zeros(4), GAMMA, LAM)
-        metrics = agent.update_worker(buf, minibatch_size=8, update_epochs=2)
+        metrics = agent.update_worker(buf, num_minibatches=4, update_epochs=2)
     # Parenthesized explicitly: `A == B if cond else True` parses as
     # `(A == B) if cond else True`, so an unparenthesized version silently
     # never checks anything for the worker branch (`else True` always wins)
@@ -292,7 +292,7 @@ def test_explained_variance_uses_the_vectorized_pre_update_values():
     _, _, _, values, returns, _ = (x.numpy() for x in buf.get())
     expected = 1 - np.var(returns - values) / np.var(returns)
 
-    metrics = agent.update_manager(buf, minibatch_size=8, update_epochs=1)
+    metrics = agent.update_manager(buf, num_minibatches=4, update_epochs=1)
 
     assert metrics["manager/explained_variance"] == pytest.approx(expected, abs=1e-5)
     assert metrics["manager/value_bias"] == pytest.approx(float(np.mean(values - returns)), abs=1e-4)

@@ -256,14 +256,14 @@ def test_explained_variance_uses_pre_update_values():
     values = buf.values.reshape(-1).numpy()
     expected = 1 - np.var(returns - values) / np.var(returns)
 
-    metrics = agent.update(buf, minibatch_size=8, update_epochs=10)
+    metrics = agent.update(buf, num_minibatches=4, update_epochs=10)
     assert metrics["loss/explained_variance"] == pytest.approx(expected, abs=1e-4)
     assert metrics["loss/value_bias"] == pytest.approx(float(np.mean(values - returns)), abs=1e-2)
 
 
 def test_update_reports_the_expected_metrics():
     agent, buf = _prepared_agent_and_buffer()
-    metrics = agent.update(buf, minibatch_size=8, update_epochs=2)
+    metrics = agent.update(buf, num_minibatches=4, update_epochs=2)
     assert set(metrics) == {
         "loss/policy_loss", "loss/value_loss", "loss/entropy", "loss/approx_kl",
         "loss/approx_kl_max", "loss/ratio_max_dev",
@@ -285,11 +285,27 @@ def test_actor_and_critic_share_no_parameters():
     assert actor_ids.isdisjoint(critic_ids)
 
 
+def test_update_takes_num_minibatches_equal_steps_per_epoch():
+    """The update takes the minibatch count, as HPPOAgent's does; on this
+    fixed-size batch that is the same partition a fixed size gave."""
+    agent, buf = _prepared_agent_and_buffer()  # 8 steps x 4 envs = 32
+    sizes = []
+    forward = agent.policy_forward
+
+    def recording_forward(states, actions):
+        sizes.append(states.shape[0])
+        return forward(states, actions)
+
+    agent.policy_forward = recording_forward
+    agent.update(buf, num_minibatches=4, update_epochs=3)
+    assert sizes == [8] * 12
+
+
 def test_update_changes_both_heads():
     agent, buf = _prepared_agent_and_buffer()
     actor_before = [p.clone() for p in agent.actor.parameters()]
     critic_before = [p.clone() for p in agent.critic.parameters()]
-    agent.update(buf, minibatch_size=8, update_epochs=2)
+    agent.update(buf, num_minibatches=4, update_epochs=2)
     assert any(not torch.allclose(a, b) for a, b in zip(actor_before, agent.actor.parameters()))
     assert any(not torch.allclose(a, b) for a, b in zip(critic_before, agent.critic.parameters()))
 
@@ -299,7 +315,7 @@ def test_update_reports_the_pre_normalization_advantage_std():
     something post-normalization or otherwise disconnected from them."""
     agent, buf = _prepared_agent_and_buffer()
     expected = float(buf.advantages.reshape(-1).std())
-    metrics = agent.update(buf, minibatch_size=8, update_epochs=2)
+    metrics = agent.update(buf, num_minibatches=4, update_epochs=2)
     assert metrics["loss/adv_std_raw"] == pytest.approx(expected, rel=1e-4)
 
 

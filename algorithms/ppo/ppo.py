@@ -288,7 +288,7 @@ class PPOAgent:
         # `log_ent_coef` and `ent_coef_optimizer`. They are ignored: ent_coef
         # only enters training, and the tuned value never left 0.01 +- 2%.
 
-    def update(self, buffer, minibatch_size, update_epochs):
+    def update(self, buffer, num_minibatches, update_epochs):
         # `values` are the pre-update value predictions, on the raw reward
         # scale. These are the estimates that actually produced the
         # advantages, which is what explained_variance is defined against.
@@ -323,11 +323,13 @@ class PPOAgent:
         ratio_max_dev = 0.0
 
         for _ in range(update_epochs):
+            # Exactly `num_minibatches` minibatches per epoch, as even as the
+            # batch allows. With the fixed batch here (1024 = 4 x 256 at the
+            # defaults) that is the partition fixed-size slicing gives; the
+            # count is what HPPOAgent needs for its ragged manager batch, and
+            # taking it here too keeps the two updates the same code.
             b_inds = torch.randperm(batch_size, device=self.device)
-            for start in range(0, batch_size, minibatch_size):
-                end = start + minibatch_size
-                mb_inds = b_inds[start:end]
-                
+            for mb_inds in torch.tensor_split(b_inds, num_minibatches):
                 _, newlogprob, entropy = self.policy_forward(
                     states[mb_inds], actions[mb_inds]
                 )

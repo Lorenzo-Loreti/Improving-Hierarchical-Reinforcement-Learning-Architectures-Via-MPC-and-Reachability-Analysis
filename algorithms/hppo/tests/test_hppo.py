@@ -374,7 +374,7 @@ def test_explained_variance_uses_pre_update_values(head):
     expected = 1 - np.var(returns - values) / np.var(returns)
 
     update = agent.update_manager if head == "manager" else agent.update_worker
-    metrics = update(buf, 8, 10)
+    metrics = update(buf, 4, 10)
     assert metrics[f"{head}/explained_variance"] == pytest.approx(expected, abs=1e-4)
     assert metrics[f"{head}/value_bias"] == pytest.approx(float(np.mean(values - returns)), abs=1e-2)
 
@@ -384,6 +384,29 @@ def test_update_only_consumes_the_filled_prefix(head):
     agent, buf = _prepared(head, fill=9)
     update = agent.update_manager if head == "manager" else agent.update_worker
     assert update(buf, 4, 2)[f"{head}/batch_size"] == 9
+
+
+@pytest.mark.parametrize("fill, num_minibatches, expected_sizes", [
+    (9, 4, [3, 2, 2, 2]),  # the old fixed size, 9 // 4 = 2, made 2, 2, 2, 2 and a runt of 1
+    (32, 4, [8, 8, 8, 8]),  # an even batch: the partition fixed-size slicing gave
+    (2, 4, [1, 1]),         # fewer samples than minibatches: no empty minibatch
+])
+def test_update_splits_the_batch_into_num_minibatches_near_equal_parts(
+        fill, num_minibatches, expected_sizes):
+    """The manager's batch size is whatever the rollout produced, so a fixed
+    minibatch size left a runt of 1-3 samples on most updates -- each one
+    still a full Adam step. The update takes a count instead."""
+    agent, buf = _prepared("manager", fill=fill)
+    sizes = []
+    forward = agent.manager_policy_forward
+
+    def recording_forward(states, actions):
+        sizes.append(states.shape[0])
+        return forward(states, actions)
+
+    agent.manager_policy_forward = recording_forward
+    agent.update_manager(buf, num_minibatches, update_epochs=3)
+    assert sizes == expected_sizes * 3
 
 
 @pytest.mark.parametrize("head", ["manager", "worker"])
@@ -396,7 +419,7 @@ def test_update_with_empty_batch_does_not_crash(head):
     autotuner's log_ent_coef with a NaN.)"""
     agent, buf = _prepared(head, fill=0)
     update = agent.update_manager if head == "manager" else agent.update_worker
-    metrics = update(buf, 8, 2)
+    metrics = update(buf, 4, 2)
     assert metrics[f"{head}/batch_size"] == 0
     assert math.isnan(metrics[f"{head}/loss_policy"])
 
@@ -411,14 +434,14 @@ def test_empty_batch_metrics_have_the_same_keys_as_a_real_update(head):
     empty_agent, empty_buf = _prepared(head, agent=_agent(), fill=0)
     update = agent.update_manager if head == "manager" else agent.update_worker
     empty_update = empty_agent.update_manager if head == "manager" else empty_agent.update_worker
-    assert set(update(buf, 8, 2)) == set(empty_update(empty_buf, 8, 2))
+    assert set(update(buf, 4, 2)) == set(empty_update(empty_buf, 4, 2))
 
 
 @pytest.mark.parametrize("head", ["manager", "worker"])
 def test_update_reports_the_expected_metrics(head):
     agent, buf = _prepared(head)
     update = agent.update_manager if head == "manager" else agent.update_worker
-    metrics = update(buf, 8, 2)
+    metrics = update(buf, 4, 2)
     assert set(metrics) == {
         f"{head}/loss_policy", f"{head}/loss_value", f"{head}/entropy",
         f"{head}/approx_kl", f"{head}/approx_kl_max", f"{head}/ratio_max_dev",
@@ -451,7 +474,7 @@ def test_update_changes_both_networks_of_the_head_and_neither_of_the_other():
     critic_before = [p.clone() for p in agent.manager_critic.parameters()]
     worker_before = [p.clone() for p in agent.worker_actor.parameters()]
 
-    agent.update_manager(buf, 8, 2)
+    agent.update_manager(buf, 4, 2)
 
     assert any(not torch.allclose(a, b) for a, b in zip(manager_before, agent.manager_actor.parameters()))
     assert any(not torch.allclose(a, b) for a, b in zip(critic_before, agent.manager_critic.parameters()))
@@ -477,7 +500,7 @@ def test_manager_update_reports_the_pre_normalization_advantage_std():
     post-normalization or otherwise disconnected from them."""
     agent, buf = _prepared("manager")
     expected = float(buf.advantages[:buf.step].std())
-    metrics = agent.update_manager(buf, 8, 2)
+    metrics = agent.update_manager(buf, 4, 2)
     assert metrics["manager/adv_std_raw"] == pytest.approx(expected, rel=1e-4)
 
 

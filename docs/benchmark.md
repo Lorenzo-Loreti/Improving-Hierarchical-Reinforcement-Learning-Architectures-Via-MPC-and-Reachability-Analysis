@@ -143,6 +143,35 @@ unchanged: PPO 20k on all 3 seeds before and after, hPPO 31k / 41k / 41k →
 (hPPO slalom 72k / 82k / 82k against 71k / 81k / 81k, within one evaluation
 interval), so these rows and the table are one protocol.
 
+### Since measured: hPPO's manager minibatches evened out (2026-09-24)
+
+A review of hPPO against flat PPO found one place where the update did not do
+what PPO does. The manager's batch is ragged (201–222 transitions per update,
+median 216, over the first 100 updates of slalom seed 1), and it was sliced
+into a fixed minibatch size of `total // 4`, so whenever the total was not a
+multiple of 4 — 73 updates in 100 — each epoch ended on an extra minibatch of
+1–3 samples, still a full Adam step. Every update now takes the minibatch
+*count* and splits the batch into that many near-equal parts. Flat PPO and the
+worker, whose batches divide evenly, are unchanged bit for bit (checked on
+seeds 1–3 of both scenarios); the manager is not, so it was re-measured under
+the same protocol. Alongside it, as a separate arm on the unchanged code,
+`--clip-vloss false`, the one remaining algorithmic difference between an
+hPPO head's update and flat PPO's:
+
+| hPPO, slalom, 13 seeds | solved | steps to solve, median / mean | Mann–Whitney vs HEAD | final return | contacts/ep |
+| --- | --- | --- | --- | --- | --- |
+| before (the "after" row above, re-run) | 13/13 | 82k / 96k | — | 1016.1 | 0 |
+| even manager minibatches | 13/13 | 92k / 97k | p = 0.47 | 1016.0 | 0 |
+| before, `--clip-vloss false` | 13/13 | 72k / 80k | p = 0.10 | 1015.5 | 0 |
+
+The re-run reproduces the "after" row exactly, seed for seed. Neither change
+moves sample efficiency measurably, and final quality is the same in all three.
+The minibatch split is kept because it is what PPO's update means, not because
+it is faster. `--clip-vloss` stays on: this protocol stops at "solved" and so
+cannot see the late-run stability it was adopted for, which has not been
+re-tested since the collapse was traced to the worker's reward. On the tunnel
+all three arms solve 3/3 in 31k–41k.
+
 ## What the numbers say
 
 **1. The tunnel does not discriminate.** Every algorithm solves it 3/3, within

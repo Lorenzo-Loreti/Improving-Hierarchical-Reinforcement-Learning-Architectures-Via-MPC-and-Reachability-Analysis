@@ -341,7 +341,7 @@ def train(args, scenario):
         agent.compute_returns_and_advantage(buffer, next_value)
 
         # Optimize the policy and value network
-        metrics = agent.update(buffer, args.minibatch_size, args.update_epochs)
+        metrics = agent.update(buffer, args.num_minibatches, args.update_epochs)
 
         # Logging
         sps = int(global_step / (time.time() - start_time))

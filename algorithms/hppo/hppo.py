@@ -682,7 +682,7 @@ class HPPOAgent:
 
     # --- update -----------------------------------------------------------
 
-    def _update_head(self, buffer, minibatch_size, update_epochs, policy_forward,
+    def _update_head(self, buffer, num_minibatches, update_epochs, policy_forward,
                      actor, critic, optimizer, ent_coef, ret_rms, prefix):
         """One PPO update for a single head.
 
@@ -693,9 +693,10 @@ class HPPOAgent:
         have landed in one and not the other.
 
         Value-loss clipping follows the agent's `clip_vloss`, for both heads.
-        Without it, this is line for line flat PPO's `PPOAgent.update`
-        (algorithms/ppo/ppo.py) plus the empty-batch guard; keep the two in
-        step.
+        Without it this is flat PPO's `PPOAgent.update` (algorithms/ppo/
+        ppo.py) step for step; what it adds is only what a ragged manager
+        batch needs (the empty-batch guard, the cap on the minibatch count)
+        and the per-head metric prefix. Keep the two in step.
         """
         # `values` are the pre-update value predictions, on the raw reward
         # scale. These are the estimates that actually produced the
@@ -766,12 +767,25 @@ class HPPOAgent:
         pg_losses, v_losses, entropy_losses, approx_kls = [], [], [], []
         ratio_max_dev = 0.0
 
+        # Exactly `num_minibatches` minibatches per epoch, as even as the
+        # batch allows (sizes differ by at most one) -- never more than there
+        # are samples, since an empty minibatch has no loss to take.
+        #
+        # A count rather than a size because of the manager: its batch is
+        # ragged, however many segments happened to end this rollout, and
+        # the fixed size this used to take (the caller's total // 4) left a
+        # runt whenever the total was not a multiple of 4 -- 221 transitions
+        # made four minibatches of 55 and a fifth of *one*. Measured over the
+        # first 100 updates of slalom seed 1, the manager's batch ran 201-222
+        # (median 216) and was not a multiple of 4 on 73 of them, so on ~3
+        # updates in 4, 10 of the manager's 50 Adam steps were each driven by
+        # 1-3 samples. For a batch that divides evenly (the worker's 2048 = 8
+        # x 256, and flat PPO's) the partition is the same one slicing gave.
+        num_minibatches = min(num_minibatches, batch_size)
+
         for _ in range(update_epochs):
             b_inds = torch.randperm(batch_size, device=self.device)
-            for start in range(0, batch_size, minibatch_size):
-                end = start + minibatch_size
-                mb_inds = b_inds[start:end]
-
+            for mb_inds in torch.tensor_split(b_inds, num_minibatches):
                 _, newlogprob, entropy = policy_forward(states[mb_inds], actions[mb_inds])
                 # Raw critic output: standardized space, matching norm_returns.
                 newvalue = critic(states[mb_inds]).squeeze(-1)
@@ -858,9 +872,9 @@ class HPPOAgent:
         }
         return metrics
 
-    def update_manager(self, buffer, minibatch_size, update_epochs):
+    def update_manager(self, buffer, num_minibatches, update_epochs):
         return self._update_head(
-            buffer, minibatch_size, update_epochs,
+            buffer, num_minibatches, update_epochs,
             policy_forward=self.manager_policy_forward,
             actor=self.manager_actor,
             critic=self.manager_critic,
@@ -870,12 +884,12 @@ class HPPOAgent:
             prefix="manager",
         )
 
-    def update_worker(self, buffer, minibatch_size, update_epochs):
+    def update_worker(self, buffer, num_minibatches, update_epochs):
         # buffer.states holds the CONCATENATED (normalized obs, normalized
         # goal) that the worker networks take as input; see worker_input in
         # hppo_train.py.
         return self._update_head(
-            buffer, minibatch_size, update_epochs,
+            buffer, num_minibatches, update_epochs,
             policy_forward=self.worker_policy_forward,
             actor=self.worker_actor,
             critic=self.worker_critic,

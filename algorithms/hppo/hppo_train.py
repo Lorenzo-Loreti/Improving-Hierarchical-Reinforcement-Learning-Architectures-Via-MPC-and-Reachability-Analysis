@@ -285,9 +285,10 @@ def parse_args(scenario):
              "does; the previous 32 gave minibatches of 64")
     parser.add_argument("--num-minibatches-manager", type=int, default=4,
         help="the number of mini-batches the *manager's* rollout is split "
-             "into. Separate from --num-minibatches because the manager's "
-             "buffer is roughly manager_freq times smaller: splitting it 32 "
-             "ways left ~6 samples per gradient step")
+             "into, near-equal whatever that rollout's manager batch size "
+             "turns out to be. Separate from --num-minibatches because the "
+             "manager's buffer is roughly manager_freq times smaller: "
+             "splitting it 32 ways left ~6 samples per gradient step")
     parser.add_argument("--update-epochs", type=int, default=10,
         help="the K epochs to update each policy")
     parser.add_argument("--clip-coef", type=float, default=0.2,
@@ -632,7 +633,8 @@ def train(args, scenario):
 
     num_updates = args.total_timesteps // args.num_steps_worker
     actual_timesteps = num_updates * args.num_steps_worker
-    worker_minibatch_size = max(1, args.num_steps_worker // args.num_minibatches)
+    # Informational only: the update takes the minibatch *count*.
+    worker_minibatch_size = args.num_steps_worker // args.num_minibatches
     print(f"num_envs={args.num_envs} num_steps_per_env={args.num_steps_per_env} "
           f"worker_batch_size={args.num_steps_worker} "
           f"worker_minibatch_size={worker_minibatch_size} "
@@ -897,16 +899,16 @@ def train(args, scenario):
             # that rollout, and GAE's return target for step t does not depend
             # on V(s_t), so it acts only as that one transition's baseline
             # (and clip_vloss anchor). One transition per environment, 8 of
-            # the manager's ~200 per update at the defaults. Flat PPO and the
+            # the manager's ~215 per update at the defaults. Flat PPO and the
             # worker have no such straddle: each of their transitions is a
             # single step.
             agent.compute_manager_returns_and_advantage(manager_buffer, manager_value)
 
-        # Optimize the policies
-        manager_minibatch_size = max(1, manager_buffer.total_steps // args.num_minibatches_manager)
-
-        worker_metrics = agent.update_worker(worker_buffer, worker_minibatch_size, args.update_epochs)
-        manager_metrics = agent.update_manager(manager_buffer, manager_minibatch_size, args.update_epochs)
+        # Optimize the policies. Each head's batch is split into a fixed
+        # *number* of minibatches, not a fixed size: the manager's batch size
+        # varies from rollout to rollout (see HPPOAgent._update_head).
+        worker_metrics = agent.update_worker(worker_buffer, args.num_minibatches, args.update_epochs)
+        manager_metrics = agent.update_manager(manager_buffer, args.num_minibatches_manager, args.update_epochs)
 
         # Logging
         sps = int(global_step / (time.time() - start_time))
