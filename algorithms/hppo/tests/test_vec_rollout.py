@@ -10,8 +10,8 @@ of the right shape, and training would just be quietly worse.
 
 The manager's buffer is the one with teeth. Its columns are *ragged*: an
 environment stores a transition every `manager_freq` steps or whenever its
-episode ends, and no two environments agree on when that is. See section 8 of
-HPPOAgent's own docstrings in algorithms/hppo/hppo.py.
+episode ends, and no two environments agree on when that is. See
+ManagerVecRolloutBuffer's docstrings in algorithms/hppo/hppo.py.
 """
 
 import numpy as np
@@ -71,8 +71,10 @@ def test_dense_gae_matches_the_serial_buffer_column_by_column():
 
 
 def test_dense_flattening_keeps_values_aligned_with_the_batch():
-    """`get_values()` must index the same transitions, in the same order, as
-    `get()` -- explained_variance and value_bias pair them elementwise."""
+    """The values `get()` returns must index the same transitions, in the
+    same order, as its other fields -- explained_variance and value_bias pair
+    them elementwise with the returns. (They used to come from a separate
+    `get_values()`, where that alignment was each buffer's to maintain.)"""
     torch.manual_seed(1)
     T, N = 6, 4
     buf = VecRolloutBuffer(T, N, OBS_DIM, ACT_DIM, "cpu")
@@ -82,10 +84,10 @@ def test_dense_flattening_keeps_values_aligned_with_the_batch():
         buf.add(torch.zeros(N, OBS_DIM), torch.zeros(N, ACT_DIM), torch.zeros(N),
                 torch.zeros(N), torch.arange(N, dtype=torch.float32) + 100 * t,
                 torch.zeros(N))
-    _, _, _, _, _ = buf.get()
+    values = buf.get()[3]
     expected = torch.stack([torch.arange(N, dtype=torch.float32) + 100 * t
                             for t in range(T)]).reshape(-1)
-    assert torch.equal(buf.get_values(), expected)
+    assert torch.equal(values, expected)
 
 
 def test_dense_get_returns_the_full_batch():
@@ -93,10 +95,10 @@ def test_dense_get_returns_the_full_batch():
     for _ in range(7):
         buf.add(torch.zeros(3, OBS_DIM), torch.zeros(3, ACT_DIM), torch.zeros(3),
                 torch.zeros(3), torch.zeros(3), torch.zeros(3))
-    states, actions, logprobs, returns, advantages = buf.get()
+    states, actions, logprobs, values, returns, advantages = buf.get()
     assert states.shape == (21, OBS_DIM)
     assert actions.shape == (21, ACT_DIM)
-    for x in (logprobs, returns, advantages):
+    for x in (logprobs, values, returns, advantages):
         assert x.shape == (21,)
 
 
@@ -196,8 +198,7 @@ def test_ragged_flattening_keeps_values_aligned_with_the_batch():
         buf.add(mask, np.tile(addr[:, None], (1, OBS_DIM)), np.zeros((N, GOAL_DIM)),
                 np.zeros(N), np.zeros(N), addr, np.zeros(N))
 
-    states, _, _, _, _ = buf.get()
-    values = buf.get_values()
+    states, _, _, values, _, _ = buf.get()
     assert values.shape[0] == buf.total_steps == int(lengths.sum())
     assert torch.equal(states[:, 0], values)
     # Environment-major order: env 0's transitions first.
@@ -213,7 +214,7 @@ def test_ragged_total_steps_and_reset():
     assert buf.total_steps == 12
     buf.reset()
     assert buf.total_steps == 0
-    assert buf.get_values().numel() == 0
+    assert buf.get()[3].numel() == 0
 
 
 def test_ragged_add_ignores_an_empty_mask():
@@ -282,14 +283,13 @@ def test_update_consumes_a_vectorized_buffer(head):
 
 def test_explained_variance_uses_the_vectorized_pre_update_values():
     """The metric must pair each return with the value that produced it; a
-    misaligned `get_values()` would show up here as a wrong figure."""
+    misaligned `get()` would show up here as a wrong figure."""
     agent = HPPOAgent(OBS_DIM, GOAL_DIM, ACT_DIM, device="cpu",
                       obs_low=[-1.0, -2.0, -2.0, -2.0], obs_high=[11.0, 2.0, 2.0, 2.0])
     buf = _fill_ragged(ManagerVecRolloutBuffer(8, 4, OBS_DIM, GOAL_DIM, "cpu"),
                        np.array([8, 3, 6, 5]), seed=7)
     buf.compute_returns_and_advantage(torch.zeros(4), GAMMA, LAM)
-    returns = buf.get()[3].numpy()
-    values = buf.get_values().numpy()
+    _, _, _, values, returns, _ = (x.numpy() for x in buf.get())
     expected = 1 - np.var(returns - values) / np.var(returns)
 
     metrics = agent.update_manager(buf, minibatch_size=8, update_epochs=1)

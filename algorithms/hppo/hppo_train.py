@@ -401,31 +401,6 @@ def parse_args(scenario):
     args.num_steps_per_env = args.num_steps_worker // args.num_envs
     return args
 
-def make_env(scenario, config=None):
-    """A bare scenario env, for evaluation.
-
-    Rollouts come from the scenario's batched vector env instead; this is the
-    single-environment path, which evaluation still wants because it runs one
-    seeded episode at a time and has no throughput problem to solve. Flat PPO
-    splits the two the same way.
-
-    No wrappers. `RecordEpisodeStatistics` is replaced by counting returns and
-    lengths in the loop, which also gets the success and collision flags out of
-    `info` -- the two metrics that distinguish a stalled run from a converged
-    one, and which the wrapper does not carry.
-
-    `NormalizeReward` is gone for a substantive reason, not tidiness. It scaled
-    the reward stream by a running estimate of the return's standard deviation
-    to keep the critic's regression target O(1); the agent now standardises
-    that target directly (hppo.py, RunningMeanStd), which achieves the same
-    thing without altering the rewards GAE sees, without a wrapper statistic
-    that has to be checkpointed to reload a policy, and -- unlike the wrapper,
-    which normalises the *environment* reward only -- symmetrically for the
-    worker's intrinsic reward too. Runs from before this change saw a
-    different reward stream and are not directly comparable.
-    """
-    return scenario.env_cls(config=config)
-
 
 def main(scenario):
     train(parse_args(scenario), scenario)
@@ -470,10 +445,28 @@ def train(args, scenario):
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
     print(f"Using device: {device}")
 
-    # Env setup: a batched vector env for rollout collection, a plain env
-    # for evaluation -- the same split flat PPO uses.
+    # Env setup: a batched, auto-resetting vector env for rollout collection,
+    # a plain env for evaluation -- the same split flat PPO uses. Evaluation
+    # runs one seeded episode at a time and has no throughput problem to solve.
+    #
+    # No wrappers on either. `RecordEpisodeStatistics` is replaced by counting
+    # returns and lengths in the loop, which also gets the success and
+    # collision flags out of `info` -- the two metrics that distinguish a
+    # stalled run from a converged one, and which the wrapper does not carry.
+    #
+    # `NormalizeReward` is gone for a substantive reason, not tidiness. It
+    # scaled the reward stream by a running estimate of the return's standard
+    # deviation to keep the critic's regression target O(1); the agent now
+    # standardises that target directly (hppo.py, RunningMeanStd), which
+    # achieves the same thing without altering the rewards GAE sees, without a
+    # wrapper statistic that has to be checkpointed to reload a policy, and --
+    # unlike the wrapper, which normalises the *environment* reward only --
+    # symmetrically for the worker's intrinsic reward too. Runs from before
+    # this change saw a different reward stream and are not directly
+    # comparable. (This used to be the docstring of a one-line `make_env`
+    # helper, inlined for parity with flat PPO's loop.)
     vec_env = scenario.vec_env_cls(num_envs=args.num_envs, config=env_config)
-    eval_env = make_env(scenario, config=env_config)
+    eval_env = scenario.env_cls(config=env_config)
     obs_dim = eval_env.observation_space.shape[0]
     act_dim = eval_env.action_space.shape[0]
     goal_dim = 2 # delta x, delta y
@@ -566,6 +559,53 @@ def train(args, scenario):
             np.concatenate([obs_norm, agent.normalize_goal(goal_phys)], axis=-1),
             dtype=torch.float32, device=device
         )
+
+    def make_policy_fn():
+        """The controller evaluation scores, as a fresh closure per episode:
+        one raw observation in, the worker's deterministic action out. The
+        manager issues a deterministic goal at the episode's first step and
+        every manager_freq steps after it, and the goal decays by the agent's
+        displacement in between -- the rollout's cadence and goal transition
+        exactly, without the sampling. The random-start evaluation and the
+        solved-check both run exactly this, so they cannot drift apart. Flat
+        PPO's counterpart is memoryless (algorithms/ppo/ppo_train.py).
+
+        A *factory*, not a single shared closure: the re-plan cadence
+        (state["goal"]/state["step_in_c"]) is per-episode state, so both
+        callers build a fresh policy_fn right after each env.reset() -- see
+        algorithms/solved_check.py.
+
+        The evaluation loop used to carry its own inline copy of this
+        controller, a second implementation to keep in step with this one
+        and with the rollout. That copy had, earlier still, reused the names
+        the rollout carries its in-flight segment in (`current_goal`,
+        `current_pos`, `manager_obs_tensor`), so each evaluation silently
+        overwrote the training state with whatever its last episode ended on
+        and the rollout resumed against a goal from a different episode.
+        Vectorizing turned that into a shape error, which is how it was
+        found; it was a live bug in the single-environment version too. With
+        the controller's state inside this closure it cannot recur.
+        """
+        state = {}
+
+        def policy_fn(obs):
+            obs_norm = agent.normalize_obs(obs)
+            pos = np.array([obs[0], obs[1]])
+            if state:
+                state["step_in_c"] += 1
+            with torch.no_grad():
+                if not state or state["step_in_c"] == args.manager_freq:
+                    # First step of the episode or of a new segment.
+                    manager_obs = torch.tensor(obs_norm, dtype=torch.float32, device=device).unsqueeze(0)
+                    state["goal"] = agent.scale_goal(agent.manager_act(manager_obs).cpu().numpy()[0])
+                    state["step_in_c"] = 0
+                else:
+                    state["goal"] = state["goal"] - (pos - state["pos"])
+                state["pos"] = pos
+                action = agent.worker_act(worker_input(obs_norm, state["goal"]).unsqueeze(0))
+            return action.cpu().numpy()[0]
+
+        return policy_fn
 
     # Initialize environments. Every quantity the serial rollout held as a
     # scalar is now a per-environment array: the environments run independent
@@ -705,6 +745,14 @@ def train(args, scenario):
             # not end, the clock did: fold the value of the state it was cut at
             # into the reward, then mark the transition done so GAE stops
             # there. Discounts come from the agent, which is also what ran GAE.
+            #
+            # The value is taken under the decayed `next_goal`. That is the
+            # goal the worker would have carried on with, except when the cut
+            # falls on a segment's last step: there the continuation would
+            # have started under a fresh manager goal instead, which is not
+            # sampled just for a bootstrap. An approximation on ~1 in
+            # manager_freq truncations, and only while episodes still run
+            # into max_steps at all.
             trunc_only = truncated & ~terminated
             if np.any(trunc_only):
                 with torch.no_grad():
@@ -714,18 +762,18 @@ def train(args, scenario):
                 worker_reward[trunc_only] += (
                     agent.gamma_worker * true_next_worker_value.cpu().numpy())
 
-            # `terminated`, or forced True where truncated -- and the vector env
-            # makes the two mutually exclusive, so this is exactly `done`.
-            worker_done = done
-
-            # Store worker transitions (all envs, every step)
+            # Store worker transitions (all envs, every step). `done` stops GAE
+            # at a truncation too, as in flat PPO: the continuation value is
+            # already in the reward. (This used to go through a `worker_done`
+            # alias, "`terminated`, or forced True where truncated" -- which,
+            # the vector env making the two exclusive, is exactly `done`.)
             worker_buffer.add(
                 obs_goal_tensor,
                 worker_action,
                 worker_logprob,
                 worker_reward,
                 worker_value,
-                worker_done.astype(np.float32)
+                done.astype(np.float32)
             )
 
             worker_step_in_c += 1
@@ -838,6 +886,20 @@ def train(args, scenario):
             # the state that environment's last stored manager transition led
             # to -- so it is already the per-column bootstrap the ragged GAE
             # wants.
+            #
+            # That in-flight segment is stored only when it ends, early in the
+            # next rollout, so it straddles the update below: its goal,
+            # log-probability and value all come from the pre-update networks.
+            # The log-probability is the one to keep -- it is the behaviour
+            # policy's, which is what the importance ratio needs; the ratio
+            # just does not start at exactly 1 for that transition. The stale
+            # value biases nothing: the transition is its column's first in
+            # that rollout, and GAE's return target for step t does not depend
+            # on V(s_t), so it acts only as that one transition's baseline
+            # (and clip_vloss anchor). One transition per environment, 8 of
+            # the manager's ~200 per update at the defaults. Flat PPO and the
+            # worker have no such straddle: each of their transitions is a
+            # single step.
             agent.compute_manager_returns_and_advantage(manager_buffer, manager_value)
 
         # Optimize the policies
@@ -913,57 +975,15 @@ def train(args, scenario):
             eval_collision_impacts = []
             for i in range(args.eval_episodes):
                 eval_obs, info_eval = eval_env.reset(seed=args.seed + i)
-                eval_obs_norm = agent.normalize_obs(eval_obs)
+                policy_fn = make_policy_fn()
                 eval_ep_reward = 0
                 eval_ep_length = 0
                 done_eval = False
-
-                # Manager acts at step 0.
-                #
-                # Every name in this block is eval-local on purpose. It used to
-                # reuse `current_goal`/`current_pos`/`manager_obs_tensor`, the
-                # same names the rollout carries its in-flight segment in, so
-                # each evaluation silently overwrote the training state with
-                # whatever its last episode ended on and the rollout resumed
-                # against a goal from a different episode. Vectorizing turned
-                # that into a shape error, which is how it was found; it was a
-                # live bug in the single-environment version too.
-                eval_manager_obs = torch.tensor(eval_obs_norm, dtype=torch.float32).to(device)
-                with torch.no_grad():
-                    eval_manager_action = agent.get_manager_action(eval_manager_obs.unsqueeze(0), deterministic=True)
-                eval_goal = agent.scale_goal(eval_manager_action.cpu().numpy()[0])
-                eval_pos = np.array([eval_obs[0], eval_obs[1]])
-                eval_step_in_c = 0
-
                 while not done_eval:
-                    with torch.no_grad():
-                        eval_worker_action = agent.get_worker_action(
-                            worker_input(eval_obs_norm, eval_goal).unsqueeze(0), deterministic=True
-                        )
-
-                    eval_next_obs, reward_eval, terminated_eval, truncated_eval, info_eval = eval_env.step(eval_worker_action.cpu().numpy()[0])
-                    eval_next_obs_norm = agent.normalize_obs(eval_next_obs)
+                    eval_obs, reward_eval, terminated_eval, truncated_eval, info_eval = eval_env.step(policy_fn(eval_obs))
                     eval_ep_reward += reward_eval
                     eval_ep_length += 1
                     done_eval = terminated_eval or truncated_eval
-
-                    eval_next_pos = np.array([eval_next_obs[0], eval_next_obs[1]])
-                    eval_next_goal = eval_goal - (eval_next_pos - eval_pos)
-
-                    eval_step_in_c += 1
-                    if eval_step_in_c == args.manager_freq and not done_eval:
-                        eval_manager_obs = torch.tensor(eval_next_obs_norm, dtype=torch.float32).to(device)
-                        with torch.no_grad():
-                            eval_manager_action = agent.get_manager_action(eval_manager_obs.unsqueeze(0), deterministic=True)
-                        eval_goal = agent.scale_goal(eval_manager_action.cpu().numpy()[0])
-                        eval_step_in_c = 0
-                    elif not done_eval:
-                        eval_goal = eval_next_goal
-
-                    eval_obs = eval_next_obs
-                    eval_obs_norm = eval_next_obs_norm
-                    eval_pos = eval_next_pos
-
                 eval_returns.append(eval_ep_reward)
                 eval_lengths.append(eval_ep_length)
                 eval_successes.append(bool(info_eval["is_success"]))
@@ -994,49 +1014,10 @@ def train(args, scenario):
                 best_eval_return = mean_eval_return
                 agent.save(os.path.join(checkpoint_dir, "best.pt"))
 
-            # Solved-check: the same fixed grid, deterministic policy action
-            # (matching the random eval above) on every pass, compared
+            # Solved-check: the same fixed grid and the same deterministic
+            # controller as the random eval above on every pass, compared
             # point-by-point against the oracle's precomputed optimal return
             # for that exact starting position -- see algorithms/solved_check.py.
-            #
-            # A *factory*, not a single shared closure: the manager-replan
-            # cadence (state["goal"]/state["step_in_c"]) is per-episode state,
-            # and check_solved calls make_policy_fn() fresh right after each
-            # grid point's own env.reset() -- exactly like this eval loop's
-            # own eval_goal/eval_step_in_c above, just reattributed from
-            # "post-step, before the next loop iteration" to "start of the
-            # next policy_fn call" (same information either way).
-            def make_policy_fn():
-                state = {}
-
-                def policy_fn(obs):
-                    obs_norm = agent.normalize_obs(obs)
-                    pos = np.array([obs[0], obs[1]])
-                    if "goal" not in state:
-                        manager_obs = torch.tensor(obs_norm, dtype=torch.float32, device=device).unsqueeze(0)
-                        with torch.no_grad():
-                            manager_action = agent.get_manager_action(manager_obs, deterministic=True)
-                        state["goal"] = agent.scale_goal(manager_action.cpu().numpy()[0])
-                        state["step_in_c"] = 0
-                    else:
-                        decayed_goal = state["goal"] - (pos - state["pos"])
-                        state["step_in_c"] += 1
-                        if state["step_in_c"] == args.manager_freq:
-                            manager_obs = torch.tensor(obs_norm, dtype=torch.float32, device=device).unsqueeze(0)
-                            with torch.no_grad():
-                                manager_action = agent.get_manager_action(manager_obs, deterministic=True)
-                            state["goal"] = agent.scale_goal(manager_action.cpu().numpy()[0])
-                            state["step_in_c"] = 0
-                        else:
-                            state["goal"] = decayed_goal
-                    state["pos"] = pos
-                    with torch.no_grad():
-                        worker_action = agent.get_worker_action(
-                            worker_input(obs_norm, state["goal"]).unsqueeze(0), deterministic=True)
-                    return worker_action.cpu().numpy()[0]
-
-                return policy_fn
-
             solved_result = check_solved(make_policy_fn, eval_env, optimal_grid, args.solved_tolerance)
             print(f"Solved-check at update {update}: solved={solved_result.solved} "
                   f"worst_gap={solved_result.worst_gap:.2f} at "

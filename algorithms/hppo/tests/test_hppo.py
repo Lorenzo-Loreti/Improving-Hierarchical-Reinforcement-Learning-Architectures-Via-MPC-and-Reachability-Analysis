@@ -1,7 +1,7 @@
 """Regression tests for the hPPO implementation.
 
 Each test pins down a property that is either non-obvious from the source or
-easy to break silently. The set mirrors RL/PPO/tests/test_ppo.py for everything
+easy to break silently. The set mirrors algorithms/ppo/tests/test_ppo.py for everything
 hPPO inherited from flat PPO -- the GAE indexing convention, the value
 standardisation round trip, the self-describing checkpoint, the metric
 definitions -- and adds the ones specific to the hierarchy: the manager's
@@ -86,6 +86,22 @@ def test_a_fresh_goal_lands_on_the_worker_input_box():
     assert normalize_goal(np.array([10.0, -10.0]), 10.0) == pytest.approx([1.0, -1.0])
 
 
+@pytest.mark.parametrize("head", ["manager", "worker"])
+def test_act_is_the_deterministic_action_without_a_critic_pass(head):
+    """Flat PPO's `act`, per head: evaluation and the solved-check only need
+    the action, deterministically, and never the value."""
+    agent = _agent()
+    in_dim = OBS_DIM if head == "manager" else OBS_DIM + GOAL_DIM
+    state = torch.randn(3, in_dim)
+    expected = getattr(agent, f"{head}_policy_forward")(state, deterministic=True)[0]
+
+    def no_critic(*_):
+        raise AssertionError(f"{head}_act() must not evaluate the critic")
+
+    getattr(agent, f"{head}_critic").forward = no_critic
+    assert torch.equal(getattr(agent, f"{head}_act")(state), expected)
+
+
 # --------------------------------------------------------------------------
 # GAE
 # --------------------------------------------------------------------------
@@ -163,7 +179,7 @@ def test_gae_parameters_are_required():
 # --------------------------------------------------------------------------
 # Worker actor: the plain softplus + 1 floor (no cap -- see ManagerActor's
 # MAX_CONCENTRATION docstring for why the manager alone needed one).
-# Architecturally identical to flat PPO's ActorNetwork (RL/PPO/tests/
+# Architecturally identical to flat PPO's ActorNetwork (algorithms/ppo/tests/
 # test_ppo.py's test_actor_concentrations_never_drop_below_one/
 # test_actor_initial_policy_is_near_uniform), ported here because hppo.py's
 # WorkerActor is its own class, not a reuse of ActorNetwork.
@@ -282,8 +298,8 @@ def test_reloaded_policies_act_identically():
     agent = _agent()
     obs = torch.randn(4, OBS_DIM)
     obs_goal = torch.randn(4, OBS_DIM + GOAL_DIM)
-    manager_before = agent.get_manager_action(obs, deterministic=True)
-    worker_before = agent.get_worker_action(obs_goal, deterministic=True)
+    manager_before = agent.manager_act(obs)
+    worker_before = agent.worker_act(obs_goal)
 
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "ckpt.pt")
@@ -291,8 +307,8 @@ def test_reloaded_policies_act_identically():
         reloaded = HPPOAgent(OBS_DIM, GOAL_DIM, ACT_DIM, device="cpu")
         reloaded.load(path)
 
-    assert torch.allclose(reloaded.get_manager_action(obs, deterministic=True), manager_before, atol=1e-6)
-    assert torch.allclose(reloaded.get_worker_action(obs_goal, deterministic=True), worker_before, atol=1e-6)
+    assert torch.allclose(reloaded.manager_act(obs), manager_before, atol=1e-6)
+    assert torch.allclose(reloaded.worker_act(obs_goal), worker_before, atol=1e-6)
 
 
 def test_checkpoint_from_the_autotuning_era_still_loads():
@@ -315,8 +331,8 @@ def test_checkpoint_from_the_autotuning_era_still_loads():
         reloaded.load(path)  # must not raise, and must not need weights_only=False
 
     assert reloaded.ent_coef_manager == 0.01 and reloaded.ent_coef_worker == 0.01
-    assert torch.allclose(reloaded.get_manager_action(obs, deterministic=True),
-                          agent.get_manager_action(obs, deterministic=True), atol=1e-6)
+    assert torch.allclose(reloaded.manager_act(obs),
+                          agent.manager_act(obs), atol=1e-6)
 
 
 # --------------------------------------------------------------------------
@@ -376,8 +392,7 @@ def test_update_with_empty_batch_does_not_crash(head):
     short relative to manager_freq, or a run of environments that neither hit
     a c-step boundary nor terminated. The update must degrade to a metrics-only
     no-op rather than crash -- it once did, via the since-removed target_kl
-    check indexing an empty list. See
-    (The same empty batch also used to poison the since-removed entropy
+    check indexing an empty list. (The same empty batch also used to poison the since-removed entropy
     autotuner's log_ent_coef with a NaN.)"""
     agent, buf = _prepared(head, fill=0)
     update = agent.update_manager if head == "manager" else agent.update_worker
@@ -472,7 +487,7 @@ def test_manager_update_reports_the_pre_normalization_advantage_std():
 
 def test_optimisers_split_actor_and_critic_into_separate_groups():
     """Every parameter must still be covered by exactly one group -- ported
-    from RL/PPO/tests/test_ppo.py's id()-set check, absent here before this."""
+    from algorithms/ppo/tests/test_ppo.py's id()-set check, absent here before this."""
     agent = _agent(lr_manager=1e-3, lr_worker=2e-3, critic_lr_mult=3.0)
     for optimizer, base, actor, critic in (
         (agent.manager_optimizer, 1e-3, agent.manager_actor, agent.manager_critic),

@@ -103,12 +103,15 @@ class RolloutBuffer:
         self.step = 0
 
     def get(self):
+        """The rollout flattened to one batch, every field in the same order.
+        `values` are the pre-update predictions stored at collection time."""
         states = self.states.reshape(self.batch_size, self.obs_dim)
         actions = self.actions.reshape(self.batch_size, self.act_dim)
         logprobs = self.logprobs.reshape(self.batch_size)
+        values = self.values.reshape(self.batch_size)
         returns = self.returns.reshape(self.batch_size)
         advantages = self.advantages.reshape(self.batch_size)
-        return states, actions, logprobs, returns, advantages
+        return states, actions, logprobs, values, returns, advantages
 
 class PPOAgent:
     # Defaults deliberately match what ppo_train.py's flags default to, so an agent
@@ -213,7 +216,7 @@ class PPOAgent:
             else:
                 action = probs.sample()
         # Log probability of a continuous action is the sum of the log probs of its dimensions
-        return action, probs.log_prob(action).sum(1), probs.entropy().sum(1)
+        return action, probs.log_prob(action).sum(dim=-1), probs.entropy().sum(dim=-1)
 
     def get_action_and_value(self, state):
         """Sampled action, its log-probability and the state's value: what a
@@ -286,25 +289,24 @@ class PPOAgent:
         # only enters training, and the tuned value never left 0.01 +- 2%.
 
     def update(self, buffer, minibatch_size, update_epochs):
-        states, actions, logprobs, returns, advantages = buffer.get()
+        # `values` are the pre-update value predictions, on the raw reward
+        # scale. These are the estimates that actually produced the
+        # advantages, which is what explained_variance is defined against.
+        # Scoring the critic *after* its 10 epochs on this same batch
+        # measures training-set fit instead, and is optimistically biased --
+        # and not comparable with the figure other PPO implementations report.
+        states, actions, logprobs, values, returns, advantages = buffer.get()
         batch_size = states.shape[0]
-
-        # Pre-update value predictions, on the raw reward scale. These are the
-        # estimates that actually produced the advantages, which is what
-        # explained_variance is defined against. Scoring the critic *after* its
-        # 10 epochs on this same batch measures training-set fit instead, and
-        # is optimistically biased -- and not comparable with the figure other
-        # PPO implementations report.
-        values = buffer.values.reshape(batch_size)
 
         # Per-batch advantage normalization. The raw std is logged: it is the
         # scale of the signal the normalization is about to hide. The mean
-        # comes from `var_mean`, not `.mean()`: the two differ in the last
-        # bit on about half of all batches, and `var_mean`'s is the one every
-        # reported flat-PPO run was trained with -- `.mean()` shifts slalom
-        # seeds 2 and 3 to measurably different (if equally good) policies.
-        adv_std_raw = float(advantages.std())
-        _, adv_mean = torch.var_mean(advantages)
+        # comes from `std_mean`, not `.mean()`: the two differ in the last
+        # bit on about half of all batches, and `std_mean`'s -- bit-identical
+        # to the `var_mean` this used to call -- is the one every reported
+        # flat-PPO run was trained with; `.mean()` shifts slalom seeds 2 and
+        # 3 to measurably different (if equally good) policies.
+        adv_std, adv_mean = torch.std_mean(advantages)
+        adv_std_raw = float(adv_std)
         advantages = (advantages - adv_mean) / (adv_std_raw + 1e-8)
 
         # Value-target normalization: refresh the running statistics on this

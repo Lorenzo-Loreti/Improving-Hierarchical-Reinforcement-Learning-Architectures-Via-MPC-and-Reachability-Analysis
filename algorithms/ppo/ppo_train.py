@@ -236,6 +236,17 @@ def train(args, scenario):
     # on the first update.
     base_lrs = [group["lr"] for group in agent.optimizer.param_groups]
 
+    def policy_fn(obs):
+        """The controller evaluation scores: one raw observation in, the
+        deterministic action out. The random-start evaluation and the
+        solved-check both run exactly this, so they cannot drift apart.
+        Memoryless -- hPPO's counterpart needs a fresh closure per episode
+        (algorithms/hppo/hppo_train.py), this one does not."""
+        with torch.no_grad():
+            obs_tensor = torch.tensor(agent.normalize_obs(obs), dtype=torch.float32).to(device)
+            action = agent.act(obs_tensor.unsqueeze(0))
+        return action.cpu().numpy()[0]
+
     buffer = RolloutBuffer(args.num_steps, args.num_envs, obs_dim, act_dim, device)
 
     checkpoint_dir = os.path.join(scenario.script_dir, args.checkpoint_dir, run_name)
@@ -316,7 +327,7 @@ def train(args, scenario):
             for i in np.flatnonzero(done):
                 completed_returns.append(ep_reward[i])
                 completed_lengths.append(ep_length[i])
-                completed_successes.append(info["final_info"]["is_success"][i])
+                completed_successes.append(bool(info["final_info"]["is_success"][i]))
                 completed_collision_counts.append(int(info["final_info"]["collision_count"][i]))
                 completed_collision_impacts.extend(info["final_info"]["collision_impacts"][i])
                 ep_reward[i] = 0
@@ -382,17 +393,13 @@ def train(args, scenario):
                 eval_ep_length = 0
                 done_eval = False
                 while not done_eval:
-                    with torch.no_grad():
-                        obs_tensor = torch.tensor(agent.normalize_obs(eval_obs), dtype=torch.float32).to(device)
-                        action = agent.act(obs_tensor.unsqueeze(0))
-                    next_obs_eval, reward_eval, terminated_eval, truncated_eval, info_eval = eval_env.step(action.cpu().numpy()[0])
+                    eval_obs, reward_eval, terminated_eval, truncated_eval, info_eval = eval_env.step(policy_fn(eval_obs))
                     eval_ep_reward += reward_eval
                     eval_ep_length += 1
                     done_eval = terminated_eval or truncated_eval
-                    eval_obs = next_obs_eval
                 eval_returns.append(eval_ep_reward)
                 eval_lengths.append(eval_ep_length)
-                eval_successes.append(info_eval["is_success"])
+                eval_successes.append(bool(info_eval["is_success"]))
                 # collision_count/collision_impacts are cumulative over the
                 # whole episode (see the env's step()), so the last step's
                 # info already carries every contact the episode had.
@@ -420,16 +427,10 @@ def train(args, scenario):
                 best_eval_return = mean_eval_return
                 agent.save(os.path.join(checkpoint_dir, "best.pt"))
 
-            # Solved-check: the same fixed grid, deterministic policy action
-            # (matching the random eval above) on every pass, compared
+            # Solved-check: the same fixed grid and the same deterministic
+            # policy_fn as the random eval above on every pass, compared
             # point-by-point against the oracle's precomputed optimal return
             # for that exact starting position -- see algorithms/solved_check.py.
-            def policy_fn(obs):
-                with torch.no_grad():
-                    obs_tensor = torch.tensor(agent.normalize_obs(obs), dtype=torch.float32).to(device)
-                    action = agent.act(obs_tensor.unsqueeze(0))
-                return action.cpu().numpy()[0]
-
             solved_result = check_solved(lambda: policy_fn, eval_env, optimal_grid, args.solved_tolerance)
             print(f"Solved-check at update {update}: solved={solved_result.solved} "
                   f"worst_gap={solved_result.worst_gap:.2f} at "

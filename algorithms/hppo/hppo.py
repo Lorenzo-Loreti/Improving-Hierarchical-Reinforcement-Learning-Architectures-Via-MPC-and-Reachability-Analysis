@@ -126,20 +126,20 @@ class RolloutBuffer:
     def reset(self):
         self.step = 0
 
-    def get_values(self):
-        """The stored value predictions, in the same order as `get()`.
-
-        Exists so `_update_head` can read pre-update values without knowing
-        which buffer layout it was handed: the single-env buffer stores a flat
-        prefix, the vectorized ones a (T, N) grid or a ragged per-env one.
-        """
-        return self.values[:self.step]
-
     def get(self):
+        """The filled prefix as one batch, every field in the same order --
+        as flat PPO's `get()`. `values` are the pre-update predictions stored
+        at collection time. All three buffers return this same tuple, so
+        `_update_head` never needs to know which layout it was handed: this
+        one stores a flat prefix, the vectorized ones a (T, N) grid or a
+        ragged per-environment one. (The values used to come from a separate
+        `get_values()`, which each buffer had to keep lined up with `get()`.)
+        """
         return (
             self.states[:self.step],
             self.actions[:self.step],
             self.logprobs[:self.step],
+            self.values[:self.step],
             self.returns[:self.step],
             self.advantages[:self.step]
         )
@@ -210,15 +210,14 @@ class VecRolloutBuffer:
     def reset(self):
         self.step = 0
 
-    def get_values(self):
-        return self.values[:self.step].reshape(-1)
-
     def get(self):
+        """Time-major flattening, as flat PPO's; see RolloutBuffer.get()."""
         n = self.step * self.num_envs
         return (
             self.states[:self.step].reshape(n, self.obs_dim),
             self.actions[:self.step].reshape(n, self.act_dim),
             self.logprobs[:self.step].reshape(n),
+            self.values[:self.step].reshape(n),
             self.returns[:self.step].reshape(n),
             self.advantages[:self.step].reshape(n),
         )
@@ -353,14 +352,14 @@ class ManagerVecRolloutBuffer:
         """Concatenate each environment's filled prefix, environment-major."""
         return torch.cat([tensor[: self.steps[i], i] for i in range(self.num_envs)], dim=0)
 
-    def get_values(self):
-        return self._flat(self.values)
-
     def get(self):
+        """Each environment's filled prefix, concatenated environment-major;
+        see RolloutBuffer.get()."""
         return (
             self._flat(self.states),
             self._flat(self.actions),
             self._flat(self.logprobs),
+            self._flat(self.values),
             self._flat(self.returns),
             self._flat(self.advantages),
         )
@@ -565,10 +564,13 @@ class HPPOAgent:
         # Log probability of a continuous goal is the sum over its dimensions
         return action, probs.log_prob(action).sum(dim=-1), probs.entropy().sum(dim=-1)
 
-    def get_manager_action(self, state, deterministic=False):
-        with torch.no_grad():
-            action, _, _ = self.manager_policy_forward(state, deterministic=deterministic)
-        return action
+    def manager_act(self, state, deterministic=True):
+        """Goal only, with no critic pass -- for evaluation and the
+        solved-check, which never use the value. Flat PPO's `act`. (It used
+        to be `get_manager_action`, stochastic by default and wrapped in its
+        own no_grad, though every caller passed deterministic=True from
+        inside one.)"""
+        return self.manager_policy_forward(state, deterministic=deterministic)[0]
 
     def get_manager_action_and_value(self, state):
         """Sampled goal, its log-probability and the state's value: what a
@@ -593,10 +595,9 @@ class HPPOAgent:
                 action = probs.sample()
         return action, probs.log_prob(action).sum(dim=-1), probs.entropy().sum(dim=-1)
 
-    def get_worker_action(self, obs_goal, deterministic=False):
-        with torch.no_grad():
-            action, _, _ = self.worker_policy_forward(obs_goal, deterministic=deterministic)
-        return action
+    def worker_act(self, obs_goal, deterministic=True):
+        """Action only, with no critic pass; see `manager_act`."""
+        return self.worker_policy_forward(obs_goal, deterministic=deterministic)[0]
 
     def get_worker_action_and_value(self, obs_goal):
         """Sampled action, its log-probability and the input's value: what a
@@ -692,8 +693,19 @@ class HPPOAgent:
         have landed in one and not the other.
 
         Value-loss clipping follows the agent's `clip_vloss`, for both heads.
+        Without it, this is line for line flat PPO's `PPOAgent.update`
+        (algorithms/ppo/ppo.py) plus the empty-batch guard; keep the two in
+        step.
         """
-        states, actions, logprobs, returns, advantages = buffer.get()
+        # `values` are the pre-update value predictions, on the raw reward
+        # scale. These are the estimates that actually produced the
+        # advantages, which is what explained_variance is defined against.
+        # Scoring the critic *after* its update epochs on this same batch
+        # measures training-set fit instead, and is optimistically biased --
+        # and not comparable with the figure other PPO implementations
+        # report. That was the previous behaviour here, so explained_variance
+        # is not comparable across that change.
+        states, actions, logprobs, values, returns, advantages = buffer.get()
         batch_size = states.shape[0]
 
         if batch_size == 0:
@@ -724,30 +736,17 @@ class HPPOAgent:
             }
             return metrics
 
-        # Pre-update value predictions, on the raw reward scale. These are the
-        # estimates that actually produced the advantages, which is what
-        # explained_variance is defined against. Scoring the critic *after* its
-        # update epochs on this same batch measures training-set fit instead,
-        # and is optimistically biased -- and not comparable with the figure
-        # other PPO implementations report. That was the previous behaviour
-        # here, so explained_variance is not comparable across this change.
-        #
-        # Read through `get_values()` rather than by slicing `.values`
-        # directly: the three buffer layouts (single-env prefix, dense (T, N)
-        # grid, ragged per-environment) order their storage differently, and
-        # only the buffer knows how to line it up with what `get()` returned.
-        values = buffer.get_values()
-
         # Per-batch advantage normalization. `adv_std_raw`, the batch's own
         # std, is logged: the first manager-collapse hypothesis (see
         # ManagerActor's docstring) said it should crater right around a bad
         # update -- it climbed instead, which is part of how that hypothesis
-        # was refuted. The mean comes from `var_mean`, not `.mean()`: the two
-        # differ in the last bit on about half of all batches, and `var_mean`'s
-        # is the one every reported run was trained with (it is what the
-        # since-removed advantage-std floor computed).
-        adv_std_raw = float(advantages.std())
-        _, adv_mean = torch.var_mean(advantages)
+        # was refuted. The mean comes from `std_mean`, not `.mean()`: the two
+        # differ in the last bit on about half of all batches, and
+        # `std_mean`'s -- bit-identical to the `var_mean` this used to call,
+        # which is what the since-removed advantage-std floor computed -- is
+        # the one every reported run was trained with.
+        adv_std, adv_mean = torch.std_mean(advantages)
+        adv_std_raw = float(adv_std)
         advantages = (advantages - adv_mean) / (adv_std_raw + 1e-8)
 
         # Value-target normalization: refresh the running statistics on this
