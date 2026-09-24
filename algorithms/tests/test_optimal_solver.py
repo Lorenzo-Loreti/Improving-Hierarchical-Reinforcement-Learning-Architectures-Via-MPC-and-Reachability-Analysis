@@ -133,3 +133,21 @@ def test_infeasible_profile_raises_instead_of_lying():
     env = _make_env(width_profile=excluding_profile, seed=5)
     with pytest.raises(RuntimeError):
         solve_min_time(env)
+
+
+@pytest.mark.parametrize("start", [(0.0, -1.0), (1.0, 0.0), (2.0, 1.0)])
+def test_full_thrust_does_not_beat_the_oracle(start):
+    """Regression for the speed-limit defect fixed on 2026-09-24 (see
+    SlalomEnv.step): full thrust down the open corridor used to arrive 7
+    steps before the oracle, which was then no upper bound on the env. Now
+    the oracle's |v| <= v_max model is the env's, and it arrives no later."""
+    env = _make_env()
+    init = np.array([start[0], start[1], 0.0, 0.0], dtype=np.float32)
+    env.reset(options={"init_state": init})
+    steps, done = 0, False
+    while not done:
+        _, _, terminated, truncated, _ = env.step(np.array([env.u_max, 0.0], dtype=np.float32))
+        steps += 1
+        done = terminated or truncated
+    env.reset(options={"init_state": init})
+    assert steps >= MinTimeSolver().solve(env).length

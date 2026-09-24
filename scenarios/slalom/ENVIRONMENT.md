@@ -92,7 +92,7 @@ every time it had to move laterally away from center to line up with a gate.
 | Gate lateral offset | ±1 m from centerline | the two gates sit on opposite sides |
 | Gate 1 location | 4 m to 5 m along the corridor | offset toward one side |
 | Gate 2 location | 7 m to 8 m along the corridor | offset toward the opposite side |
-| Max speed | 1.2 m/s | velocity bound in either direction |
+| Max speed | 1.2 m/s | per-axis velocity bound; at it, more acceleration that way has no effect |
 | Max acceleration | 2.5 m/s² | the agent's control authority |
 | Control step | 0.1 s | simulated time between decisions |
 | Episode budget | 200 steps (20 s) | timeout if the goal isn't reached in time |

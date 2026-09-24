@@ -147,6 +147,18 @@ class TunnelEnv(gym.Env):
         # Clip action to bounds (just in case)
         u = np.clip(action, self.action_space.low, self.action_space.high)
 
+        # The speed limit acts on the acceleration the plant actually
+        # delivers: u is cut, per axis, to what brings the velocity exactly to
+        # +-v_max and no further, so a step at top speed covers v_max * dt and
+        # no more. Until 2026-09-24 the limit was only the state clip below,
+        # after the position had already taken u's u * dt**2 / 2 term, and
+        # agents gained 10% per step by thrusting at top speed -- enough to
+        # beat the min-time oracle. The full story is at the same place in
+        # SlalomEnv.step (scenarios/slalom/envs/slalom_env.py).
+        v = self.state[2:]
+        u = np.clip(u, (-np.float32(self.v_max) - v) / np.float32(self.dt),
+                    (np.float32(self.v_max) - v) / np.float32(self.dt))
+
         # Additive Gaussian noise
         if np.any(self.std_dev > 0):
             w = self.np_random.normal(loc=0.0, scale=self.std_dev)
@@ -156,7 +168,9 @@ class TunnelEnv(gym.Env):
         # LTI step
         next_state = self.A @ self.state + self.B @ u + w
 
-        # Clip to state bounds
+        # Clip to state bounds. For the velocity this is now only a guard
+        # against noise and float32 rounding: the speed limit is applied to u
+        # above.
         self.state = np.clip(next_state, self.x_min, self.x_max).astype(np.float32)
 
         # Extract positions

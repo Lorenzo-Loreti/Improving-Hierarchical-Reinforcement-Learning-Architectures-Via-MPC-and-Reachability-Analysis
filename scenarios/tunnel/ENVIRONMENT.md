@@ -19,7 +19,9 @@ velocity, and the velocity into a position. This is a *double integrator*:
 position depends on velocity, velocity depends on the chosen acceleration,
 and neither can change instantaneously. Concretely, this means the agent has
 inertia — it cannot stop or change direction on the spot, and has to plan a
-few steps ahead to avoid drifting into a wall.
+few steps ahead to avoid drifting into a wall. Speed along each axis is
+capped: once the agent is at top speed in a direction, pushing harder that
+way has no effect, on its velocity or on how far it travels in the step.
 
 Time advances in fixed increments of 0.1 seconds (so ten control decisions
 per simulated second). The corridor runs along one axis (call it the
@@ -98,7 +100,7 @@ and is what makes an honest attempt at reaching the goal worth the risk.
 |---|---|---|
 | Corridor length | 10 m | forward distance from start to goal |
 | Corridor width | 4 m | fixed lateral distance between the two walls |
-| Max speed | 1.2 m/s | velocity bound in either direction |
+| Max speed | 1.2 m/s | per-axis velocity bound; at it, more acceleration that way has no effect |
 | Max acceleration | 2.5 m/s² | the agent's control authority |
 | Control step | 0.1 s | simulated time between decisions |
 | Episode budget | 200 steps (20 s) | timeout if the goal isn't reached in time |

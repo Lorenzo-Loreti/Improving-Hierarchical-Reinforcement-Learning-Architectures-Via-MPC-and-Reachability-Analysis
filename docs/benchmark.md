@@ -27,6 +27,9 @@ while the evaluation return is over random initial conditions (`--eval-episodes`
 20 for PPO and hPPO, 10 for the two MPC arms — see the caveat below). They are
 different distributions, so values slightly above 100 % mean the random draws
 were marginally easier than the grid — not that the agent beat the optimum.
+**This turned out to be wrong:** the agents *were* beating the oracle, through
+a defect in the environment's speed limit, since fixed. See the correction at
+the end of the next section.
 
 ### Is the oracle actually optimal?
 
@@ -64,6 +67,29 @@ Two further things follow, and the second is a statement about the task:
   time/safety trade-off to balance. The trade-off only appears as the plant
   gets sluggish — which is exactly the axis
   [`reachability-regime-study.md`](reachability-regime-study.md) sweeps.
+
+#### Correction (2026-09-24): the oracle was not an upper bound on the environment
+
+The check above proves the oracle optimal for its own model of the plant, in
+which |v| ≤ v_max is a hard constraint on the state; `_x_only_min_time_steps` is
+a lower bound for that same model. The environment did not implement it. Its
+`step` applied the full LTI update and clipped the velocity afterwards, by which
+time the position had already taken the `u·dt²/2` term, so thrusting at top
+speed covered v_max·dt + u_max·dt²/2 = 0.1325 m per step instead of 0.12
+(+10 %). Trained agents use it. In the first seed studies (`algorithms/study.py`,
+slalom, 13 seeds, 163 840 steps), every flat-PPO seed reached the goal 5–6
+steps before the oracle from each of the 25 grid starts, and every hPPO seed
+3–5 steps before it, with no wall contact. Constant full thrust from (1, 0)
+down an open corridor arrived in 71 steps against the oracle's 78.
+
+So the values above 100 % in this document's tables are the agents beating the
+oracle this way, not the grid-versus-random gap described under *Reading
+`% of oracle`*. The environments (`SlalomEnv`, `TunnelEnv` and both vector
+environments) now apply the limit to the delivered acceleration: a step that
+reaches it lands exactly where the in-bounds action (v_max − v)/dt lands, so
+the oracle's model is exact again, and full thrust arrives on the oracle's step.
+**Every result in this document predates the fix and was measured on the old
+dynamics**; the tables are left as measured.
 
 ### The one place the protocol is *not* identical
 

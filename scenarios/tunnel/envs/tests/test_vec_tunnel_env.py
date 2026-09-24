@@ -332,3 +332,19 @@ def test_vec_env_collision_bookkeeping_resets_per_row_on_autoreset():
     # counters for row 0's fresh episode read cleared right away.
     assert vec_env._collision_counts[0] == 0
     assert vec_env._collision_impacts[0] == []
+
+
+def test_vec_env_applies_the_speed_limit_like_the_single_env():
+    """Rows at or near top speed, thrusting into the limit (see SlalomEnv.step)."""
+    config = TunnelEnvConfig(sigma_p=0.0, sigma_v=0.0)
+    starts = np.array([[5.0, 0.0, 1.2, -1.2], [5.0, 0.0, 1.0, 0.3], [2.0, 0.5, -1.1, 1.2]], dtype=np.float32)
+    actions = np.array([[2.5, -2.5], [2.5, 2.5], [-2.5, 2.5]], dtype=np.float32)
+    vec_env = TunnelVecEnv(num_envs=3, config=config)
+    vec_env.reset(seed=0)
+    vec_env.states[:] = starts
+    vec_obs, *_ = vec_env.step(actions)
+    for i in range(3):
+        env = TunnelEnv(config=config)
+        env.reset(options={"init_state": starts[i]})
+        obs, *_ = env.step(actions[i])
+        np.testing.assert_array_equal(vec_obs[i], obs)

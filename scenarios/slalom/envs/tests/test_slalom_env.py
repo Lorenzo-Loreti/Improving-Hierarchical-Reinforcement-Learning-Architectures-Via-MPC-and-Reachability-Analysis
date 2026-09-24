@@ -477,3 +477,30 @@ def test_render_rgb_array_returns_frame():
     assert frame is not None
     assert frame.ndim == 3 and frame.shape[2] == 3
     env.close()
+
+
+def test_a_step_at_top_speed_covers_v_max_dt_however_hard_the_thrust():
+    """The speed limit acts on the delivered acceleration. Before 2026-09-24
+    it was a clip of the state after the full LTI update, so thrusting at top
+    speed covered v_max*dt + u_max*dt**2/2 per step, 10% more, and trained
+    agents used it to beat the min-time oracle (see SlalomEnv.step)."""
+    env = make(sigma_p=0.0, sigma_v=0.0)
+    env.reset(seed=0)
+    for u in (0.0, env.u_max):
+        env.state = np.array([5.0, 0.0, env.v_max, -env.v_max], dtype=np.float32)
+        obs, *_ = env.step(np.array([u, -u], dtype=np.float32))
+        assert obs[0] - 5.0 == pytest.approx(env.v_max * env.dt, abs=1e-5)
+        assert obs[1] == pytest.approx(-env.v_max * env.dt, abs=1e-5)
+        assert obs[2] == pytest.approx(env.v_max) and obs[3] == pytest.approx(-env.v_max)
+
+
+def test_reaching_the_speed_limit_gives_the_in_bounds_actions_state():
+    """A step that hits the limit lands exactly where the in-bounds action
+    (v_max - v) / dt lands: the plant the oracle and MPCWorker model."""
+    env = make(sigma_p=0.0, sigma_v=0.0)
+    env.reset(seed=0)
+    start = np.array([5.0, 0.0, 1.0, -1.1], dtype=np.float32)
+    env.state = start.copy()
+    obs, *_ = env.step(np.array([env.u_max, -env.u_max], dtype=np.float32))
+    in_bounds = np.array([(env.v_max - 1.0) / env.dt, (-env.v_max + 1.1) / env.dt], dtype=np.float32)
+    np.testing.assert_allclose(obs, env.A @ start + env.B @ in_bounds, atol=1e-5)

@@ -102,6 +102,13 @@ class SlalomVecEnv:
 
     def step(self, actions: np.ndarray):
         actions = np.clip(actions, -self.u_max, self.u_max).astype(np.float32)
+        # The speed limit acts on the delivered acceleration, exactly as in
+        # SlalomEnv.step (see the comment there): cut per axis to what brings
+        # the velocity to +-v_max and no further, so a step at top speed
+        # covers v_max * dt and no more.
+        v = self.states[:, 2:]
+        actions = np.clip(actions, (-np.float32(self.v_max) - v) / np.float32(self.dt),
+                          (np.float32(self.v_max) - v) / np.float32(self.dt))
         self.steps += 1
 
         if np.any(self.std_dev > 0):

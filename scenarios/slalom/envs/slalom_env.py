@@ -147,6 +147,36 @@ class SlalomEnv(gym.Env):
         # Clip action to bounds (just in case)
         u = np.clip(action, self.action_space.low, self.action_space.high)
 
+        # The speed limit acts on the acceleration the plant actually
+        # delivers: u is cut, per axis, to what brings the velocity exactly to
+        # +-v_max and no further. A step that stays below the limit is the
+        # plain LTI step, unchanged. A step that reaches it integrates the
+        # position over the velocity the agent really had, the average of v
+        # and the capped v', so a step at top speed covers v_max * dt and no
+        # more.
+        #
+        # Until 2026-09-24 the limit was only the state clip below, applied
+        # after the full A @ s + B @ u update. The position had then already
+        # taken u's u * dt**2 / 2 term, so thrusting while at v_max covered
+        # v_max * dt + u_max * dt**2 / 2 = 0.1325 m per step instead of 0.12
+        # (+10%), for a velocity that was then clipped back to v_max. Trained
+        # agents found it: in the seed studies (algorithms/study.py, 13 seeds
+        # each, 163 840 steps) every flat-PPO seed reached the goal 5-6 steps
+        # before the min-time oracle from every one of the 25 grid starts, and
+        # every hPPO seed 3-5 steps before it, by holding a_x near u_max at
+        # top speed. The oracle (algorithms/optimal_solver.py) treats
+        # |v| <= v_max as a hard constraint on the state, as MPCWorker does, so
+        # it could not do the same, and it was not an upper bound on the
+        # environment as implemented; see docs/benchmark.md's "Is the oracle
+        # actually optimal?". With the limit applied here the two agree again:
+        # a step that reaches the limit gives exactly the state the in-bounds
+        # action (v_max - v) / dt gives, so the environment reaches no state
+        # the oracle's model cannot. TunnelEnv and both vector environments
+        # apply the same limit.
+        v = self.state[2:]
+        u = np.clip(u, (-np.float32(self.v_max) - v) / np.float32(self.dt),
+                    (np.float32(self.v_max) - v) / np.float32(self.dt))
+
         # Additive Gaussian noise
         if np.any(self.std_dev > 0):
             w = self.np_random.normal(loc=0.0, scale=self.std_dev)
@@ -156,7 +186,9 @@ class SlalomEnv(gym.Env):
         # LTI step
         next_state = self.A @ self.state + self.B @ u + w
 
-        # Clip to state bounds
+        # Clip to state bounds. For the velocity this is now only a guard
+        # against noise and float32 rounding: the speed limit is applied to u
+        # above.
         self.state = np.clip(next_state, self.x_min, self.x_max).astype(np.float32)
 
         # Extract positions
