@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import numpy as np
 
 from common import (
-    layer_init, normalize_obs, normalize_goal, clipped_value_loss,
+    layer_init, normalize_obs, normalize_goal,
     ScaledBeta, RunningMeanStd, ManagerActor, ManagerCritic,
 )
 
@@ -399,9 +399,31 @@ class HPPOAgent:
     # ret_rms memory (`ret_rms_horizon_manager`) gave seed-inconsistent
     # results. None was ever a default, and the collapse itself turned out
     # to be the worker's reward (see that docstring's addendum), so they were
-    # removed rather than kept as dead options. Of that investigation only
-    # `clip_vloss` survives, on by default. The removed code is in git
+    # removed rather than kept as dead options. The removed code is in git
     # history, before the commit that dropped them.
+    #
+    # Also absent since 2026-09-24: value-loss clipping (`clip_vloss`,
+    # PPO2/CleanRL-style -- a critic's new prediction clamped to within
+    # clip_coef of its pre-update one before the loss is scored), the one
+    # mitigation that investigation did adopt, on by default for both heads.
+    # On a 6-seed slalom ablation it took 4/6 seeds from never recovering
+    # after the collapse to a clean solve that triggered the then-default
+    # --early-stop-success-rate; a 5th only delayed the collapse from ~150k
+    # to ~230k steps, and 1/6 still collapsed with the same
+    # value_bias/explained_variance drift signature. Once the collapse was
+    # traced to the worker's reward, that read as clipping *slowing* the
+    # manager critic's re-calibration to a return distribution moving under
+    # it, not preventing anything. Re-measured on the fixed reward, 13 slalom
+    # seeds per arm (docs/benchmark.md): under the benchmark protocol,
+    # --clip-vloss false solved 13/13 at a median / mean of 72k / 80k steps
+    # against 82k / 96k with it (Mann-Whitney p = 0.10); over the full 500k
+    # budget with every early stop disabled, 72k / 89k to the first solve
+    # against 92k / 97k (p = 0.15), and identical afterwards -- no evaluation
+    # below 95% of the oracle in either arm, 91% of solved-checks passing in
+    # both. It no longer protected against anything, and it was the last
+    # algorithmic difference between a head's update and flat PPO's. The
+    # function, `clipped_value_loss`, stays in algorithms/common.py for the
+    # PPO+MPC managers, which still use it.
     #
     # Also absent, as in flat PPO (see PPOAgent in ../ppo/ppo.py), and
     # replaced by something simpler that does the same:
@@ -434,8 +456,7 @@ class HPPOAgent:
                  ent_coef_manager=0.01, ent_coef_worker=0.01,
                  max_grad_norm=0.5,
                  obs_low=None, obs_high=None, max_goal_bound=10.0,
-                 critic_lr_mult=3.0, device="cpu",
-                 clip_vloss=True):
+                 critic_lr_mult=3.0, device="cpu"):
         self.gamma = gamma
         self.manager_freq = manager_freq
         self.gamma_worker = gamma
@@ -445,15 +466,6 @@ class HPPOAgent:
         self.ent_coef_manager = ent_coef_manager
         self.ent_coef_worker = ent_coef_worker
         self.max_grad_norm = max_grad_norm
-        # PPO2/CleanRL-style value clipping: clip the critic's new prediction
-        # to within `clip_coef` of its pre-update one before scoring the loss,
-        # so one update cannot move the critic arbitrarily far on a noisy
-        # batch. Shared across heads rather than split -- see _update_head.
-        # On by default, as in both scripts: the only mitigation the 6-seed
-        # manager-collapse ablation supported (see ManagerActor's docstring).
-        # The default used to be False here while the scripts passed True,
-        # so an agent built directly silently differed from the trained one.
-        self.clip_vloss = clip_vloss
         self.device = device
 
         self.manager_limit_low = torch.tensor(-1.0, dtype=torch.float32, device=device)
@@ -692,11 +704,11 @@ class HPPOAgent:
         value-normalisation and pre-update explained-variance fixes below would
         have landed in one and not the other.
 
-        Value-loss clipping follows the agent's `clip_vloss`, for both heads.
-        Without it this is flat PPO's `PPOAgent.update` (algorithms/ppo/
-        ppo.py) step for step; what it adds is only what a ragged manager
-        batch needs (the empty-batch guard, the cap on the minibatch count)
-        and the per-head metric prefix. Keep the two in step.
+        This is flat PPO's `PPOAgent.update` (algorithms/ppo/ppo.py) step
+        for step -- tests/test_hppo.py checks that the two end on identical
+        weights -- and adds only what a ragged manager batch needs (the
+        empty-batch guard, the cap on the minibatch count) and the per-head
+        metric prefix. Keep the two in step.
         """
         # `values` are the pre-update value predictions, on the raw reward
         # scale. These are the estimates that actually produced the
@@ -755,13 +767,6 @@ class HPPOAgent:
         # `get_*_value` undoes this so GAE keeps working on the raw scale.
         ret_rms.update(returns)
         norm_returns = (returns - ret_rms.mean) / ret_rms.std
-        # Pre-update predictions, re-expressed in the same standardized space
-        # as `newvalue` below, for `clip_vloss`. Approximate: it re-derives
-        # them from the raw-scale `values` using this update's just-refreshed
-        # ret_rms rather than whatever stats were live when they were
-        # collected, in exchange for not carrying a second, already-
-        # standardized copy through the buffer. Unused when clip_vloss=False.
-        old_values_norm = (values - ret_rms.mean) / ret_rms.std
 
         clipfracs = []
         pg_losses, v_losses, entropy_losses, approx_kls = [], [], [], []
@@ -805,12 +810,8 @@ class HPPOAgent:
                 pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - self.clip_coef, 1 + self.clip_coef)
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-                # Value loss -- see clipped_value_loss for what `clip_vloss`
-                # changes and why.
-                v_loss = clipped_value_loss(
-                    newvalue, old_values_norm[mb_inds], norm_returns[mb_inds],
-                    self.clip_coef, self.clip_vloss
-                )
+                # Value loss: plain regression on the standardized targets.
+                v_loss = 0.5 * ((newvalue - norm_returns[mb_inds]) ** 2).mean()
 
                 # Entropy loss
                 entropy_loss = entropy.mean()
@@ -843,6 +844,11 @@ class HPPOAgent:
         var_y = np.var(returns_np)
         explained_var = np.nan if var_y == 0 else 1 - np.var(returns_np - values_np) / var_y
 
+        # The same metrics as flat PPO's update, under `{head}/` instead of
+        # `loss/` -- and with `loss_policy`/`loss_value` where flat PPO says
+        # `policy_loss`/`value_loss`. Kept that way because the PPO+MPC
+        # managers log under these same names (algorithms/ppo_mpc), and it
+        # is their manager curves that are compared head to head with these.
         metrics = {
             f"{prefix}/loss_policy": float(np.mean(pg_losses)),
             f"{prefix}/loss_value": float(np.mean(v_losses)),

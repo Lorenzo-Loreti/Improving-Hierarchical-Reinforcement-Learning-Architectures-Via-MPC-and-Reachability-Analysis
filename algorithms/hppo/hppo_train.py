@@ -116,7 +116,17 @@ def parse_args(scenario):
              "collapses to ~0), burning the tail of --total-timesteps on a "
              "policy that can no longer move; a --lr-floor-frac that stopped "
              "the decay short of 0 existed for that, and was removed along "
-             "with the other options no run enabled by default")
+             "with the other options no run enabled by default. That escape "
+             "predates the worker-reward fix; re-measured after it "
+             "(2026-09-24, 13 slalom seeds, full 500k budget, every early "
+             "stop disabled, with clip_vloss still on), annealing reached the "
+             "first solve no faster (median / mean 82k / 89k steps against "
+             "92k / 97k, p = 0.22) and held the strict solved criterion on "
+             "fewer checks after it (80%% against 91%%; one seed not solved "
+             "at the end), though no evaluation fell below 95%% of the "
+             "oracle in either arm. So it stays off -- while flat PPO keeps "
+             "annealing, which does help it hold the solved criterion (see "
+             "--num-steps in algorithms/ppo/ppo_train.py)")
     parser.add_argument("--manager-freq", type=int, default=10,
         help="c: the number of steps the manager's goal is valid for. Also "
              "fixes the manager's discount, gamma**c")
@@ -272,7 +282,21 @@ def parse_args(scenario):
              "keeps the minibatch at 256 and the update count where they were; "
              "what changed is that the 2048 now come from --num-envs parallel "
              "streams of 2048/--num-envs steps instead of one serial stream. "
-             "Must be divisible by --num-envs")
+             "Must be divisible by --num-envs. A total over environments, as "
+             "in the PPO+MPC scripts' flag of the same name -- where flat "
+             "PPO's --num-steps counts steps *per* environment (its 1024-step "
+             "batch is --num-steps 128 x 8 envs). The name is kept for the "
+             "hierarchical family's sake rather than renamed to flat PPO's. "
+             "Its 1024-step batch was measured here too (2026-09-24, 13 "
+             "slalom seeds, full 500k budget, every early stop disabled, "
+             "clip_vloss still on): --num-steps-worker 1024 with "
+             "--num-minibatches 4, --num-minibatches-manager 2 and "
+             "--eval-freq 10, so the minibatch sizes and the evaluation "
+             "cadence in steps stay put, solved no faster (median / mean "
+             "82k / 91k steps against 92k / 97k, p = 0.29) and passed fewer "
+             "solved-checks afterwards (80%% against 91%%, p = 0.07; 11/13 "
+             "solved at the end). Flat PPO on this 2048-step setting did worse "
+             "too, so the two keep different rollouts on purpose")
     parser.add_argument("--gamma", type=float, default=0.99,
         help="the environment-step discount factor. 0.99, not the 0.999 this "
              "script used to train at: see the thesis PPO chapter, 11.1. The "
@@ -300,23 +324,6 @@ def parse_args(scenario):
         help="coefficient of the worker's entropy bonus, fixed for the whole run")
     parser.add_argument("--max-grad-norm", type=float, default=0.5,
         help="the maximum norm for the gradient clipping")
-    parser.add_argument("--clip-vloss", type=_str2bool, default=True,
-        help="PPO2/CleanRL-style value-loss clipping: bound how far the "
-             "critic's new prediction may move from its pre-update one (by "
-             "--clip-coef) before scoring the value loss, so one update "
-             "cannot push either critic arbitrarily far on a noisy batch. "
-             "Applied to both heads -- see algorithms/hppo/hppo.py's "
-             "_update_head. On by default as of a 6-seed slalom ablation "
-             "(seeds 1-6): 4/6 seeds went from never recovering after the "
-             "manager-collapse instability to a clean solve that triggers "
-             "the existing --early-stop-success-rate; a 5th delayed the "
-             "collapse from ~150k to ~230k steps; only 1/6 still collapsed, "
-             "with the same value_bias/explained_variance drift signature "
-             "as every unclipped run. The tunnel uses the same default "
-             "without an independent re-validation: the mechanism (a "
-             "multi-update value_bias/explained_variance drift in the "
-             "manager) is architecture-level, not scenario-specific. Pass "
-             "--clip-vloss false to restore the previous unclipped behaviour")
     parser.add_argument("--eval-freq", type=int, default=5,
         help="evaluate the agent every eval_freq updates. 5 rather than 1 "
              "because an evaluation of --eval-episodes episodes costs up to "
@@ -332,7 +339,8 @@ def parse_args(scenario):
              "meant to be plotted against each other on the same x-axis (fixed "
              "--total-timesteps for every seed) can set this false and still see "
              "where each seed crossed the threshold. Independent of "
-             "--early-stop-success-rate below -- either can stop training")
+             "--early-stop-success-rate below (off by default) -- either can "
+             "stop training")
     parser.add_argument("--solved-tolerance", type=float, default=5.0,
         help="stop training once the agent's return is within this many reward "
              "units of the oracle's optimal return (see algorithms/optimal_solver.py) "
@@ -346,11 +354,12 @@ def parse_args(scenario):
              "eval passes in a row before actually stopping training -- guards "
              "against stopping on a momentary crossing while the policy is "
              "still moving")
-    parser.add_argument("--early-stop-success-rate", type=float, default=1.0,
+    parser.add_argument("--early-stop-success-rate", type=float, default=None,
         help="stop training once eval/success_rate has been >= this AND "
              "eval/episodic_return >= --early-stop-optimal-frac, both for "
-             "--early-stop-patience consecutive evaluations. On by default: "
-             "on the slalom task, seed 1's manager reliably reaches 100%% "
+             "--early-stop-patience consecutive evaluations. Off by default "
+             "(None) since 2026-09-24; it used to default to 1.0, for this "
+             "reason: on the slalom task, seed 1's manager reliably reaches 100%% "
              "eval success by ~1/5 of a 500k-step run and then, under "
              "continued training, its goal distribution keeps sharpening "
              "past that point -- one goal dimension's Beta collapses toward "
@@ -360,15 +369,17 @@ def parse_args(scenario):
              "to 0%% within a few evaluations and never recovers for the "
              "rest of the budget. This has no in-run recovery mechanism, so "
              "rather than fight it, stop as soon as the policy has "
-             "demonstrably solved the task. (That collapse was later traced "
-             "to the worker's reward and fixed -- see the termination-"
-             "avoidance block above -- but this stays the default stopping "
-             "rule.) On the tunnel the manager can likewise reach 100%% eval "
-             "success while still threading the corridor with avoidable wall "
-             "contacts, well short of the return --solved-early-stop's tight "
-             "tolerance needs. Set > 1.0 to disable; the benchmark protocol "
-             "(docs/benchmark.md) passes 2.0, so that runs stop on the solved "
-             "criterion instead")
+             "demonstrably solved the task. On the tunnel the manager can "
+             "likewise reach 100%% eval success while still threading the "
+             "corridor with avoidable wall contacts, well short of the return "
+             "--solved-early-stop's tight tolerance needs. That collapse was "
+             "later traced to the worker's reward and fixed (see the "
+             "termination-avoidance block above), and a default of 1.0 then "
+             "only meant that every default run stopped at ~95%% of the "
+             "oracle, under a looser rule than flat PPO, which stops on "
+             "--solved-early-stop alone -- the benchmark protocol "
+             "(docs/benchmark.md) had to pass 2.0 to disable it. Pass 1.0 "
+             "to restore the old rule; any value > 1.0 also leaves it off")
     parser.add_argument("--early-stop-optimal-frac", type=float, default=0.95,
         help="the eval/episodic_return floor --early-stop-success-rate also "
              "requires, as a fraction of the solved-check oracle's mean "
@@ -490,8 +501,9 @@ def train(args, scenario):
     # return rather than a fixed value, so it stays meaningful whatever
     # goal_reward/contact_penalty balance this run is training against.
     early_stop_min_return = args.early_stop_optimal_frac * float(optimal_returns.mean())
-    print(f"Early-stop return floor: {early_stop_min_return:.1f} "
-          f"({args.early_stop_optimal_frac:.0%} of mean optimal)")
+    if args.early_stop_success_rate is not None:
+        print(f"Early-stop return floor: {early_stop_min_return:.1f} "
+              f"({args.early_stop_optimal_frac:.0%} of mean optimal)")
     consecutive_solved = 0
     solved_checkpoint_saved = False
 
@@ -521,9 +533,6 @@ def train(args, scenario):
         obs_high=obs_high,
         max_goal_bound=max_goal_bound,
         device=device,
-        # The one manager-collapse mitigation kept -- see --clip-vloss's
-        # help and ManagerActor's docstring in algorithms/common.py.
-        clip_vloss=args.clip_vloss,
     )
 
     # One base learning rate per parameter group (actor, then critic) for each
@@ -897,11 +906,10 @@ def train(args, scenario):
             # just does not start at exactly 1 for that transition. The stale
             # value biases nothing: the transition is its column's first in
             # that rollout, and GAE's return target for step t does not depend
-            # on V(s_t), so it acts only as that one transition's baseline
-            # (and clip_vloss anchor). One transition per environment, 8 of
-            # the manager's ~215 per update at the defaults. Flat PPO and the
-            # worker have no such straddle: each of their transitions is a
-            # single step.
+            # on V(s_t), so it acts only as that one transition's baseline.
+            # One transition per environment, 8 of the manager's ~215 per
+            # update at the defaults. Flat PPO and the worker have no such
+            # straddle: each of their transitions is a single step.
             agent.compute_manager_returns_and_advantage(manager_buffer, manager_value)
 
         # Optimize the policies. Each head's batch is split into a fixed
@@ -1041,7 +1049,8 @@ def train(args, scenario):
 
             # See --early-stop-success-rate. Checked after best.pt so the
             # qualifying evaluation is always banked before we might stop.
-            if (success_rate >= args.early_stop_success_rate
+            if (args.early_stop_success_rate is not None
+                    and success_rate >= args.early_stop_success_rate
                     and mean_eval_return >= early_stop_min_return):
                 consecutive_high_success += 1
             else:

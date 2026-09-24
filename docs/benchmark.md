@@ -167,10 +167,66 @@ hPPO head's update and flat PPO's:
 The re-run reproduces the "after" row exactly, seed for seed. Neither change
 moves sample efficiency measurably, and final quality is the same in all three.
 The minibatch split is kept because it is what PPO's update means, not because
-it is faster. `--clip-vloss` stays on: this protocol stops at "solved" and so
-cannot see the late-run stability it was adopted for, which has not been
-re-tested since the collapse was traced to the worker's reward. On the tunnel
-all three arms solve 3/3 in 31k–41k.
+it is faster. `--clip-vloss` was left on at this point, because this protocol
+stops at "solved" and so cannot see the late-run stability it was adopted for;
+the full-budget measurement below settled it. On the tunnel all three arms
+solve 3/3 in 31k–41k.
+
+### Since measured: the last PPO/hPPO differences, over the full budget (2026-09-24)
+
+After the minibatch fix, four differences remained between the two algorithms:
+hPPO's looser default early stop (`--early-stop-success-rate 1.0`), its value
+clipping (`--clip-vloss`), and two hyperparameters: flat PPO anneals its
+learning rate and collects 1 024 steps per update, hPPO keeps a constant rate
+and collects 2 048. The last three were measured under a protocol that sees
+both sample efficiency and late-run behaviour: the full 500k budget with every
+early stop disabled (`--solved-early-stop false`), 13 slalom seeds per arm,
+one variable per arm. The first solve gives this document's "steps to solve"
+(for the default arms it matches the benchmark-protocol runs seed for seed);
+after it, the table counts the share of solved-checks that still pass, over
+the rest of the run and over its last 100k steps, how many seeds pass the
+final one, and evaluations below 95 % of the oracle, which is where a collapse
+would show.
+
+| slalom, 13 seeds, 500k | first solve, median / mean | checks passing after it | … in the last 100k | solved at the end | evals < 95 % |
+| --- | --- | --- | --- | --- | --- |
+| hPPO, defaults (`clip_vloss` on) | 92k / 97k | 91 % | 97 % | 13/13 | 0 |
+| hPPO, `--clip-vloss false` | 72k / 89k (p = 0.15) | 91 % (p = 0.78) | 99 % (p = 0.31) | 13/13 | 0 |
+| hPPO, `--anneal-lr true` | 82k / 89k (p = 0.22) | 80 % (p = 0.21) | 90 % (p = 0.62) | 12/13 | 0 |
+| hPPO, 1 024-step rollout ¹ | 82k / 91k (p = 0.29) | 80 % (p = 0.07) | 91 % (p = 0.43) | 11/13 | 0 |
+| PPO, defaults | 51k / 51k | 97 % | 100 % | 13/13 | 0 |
+| PPO, `--anneal-lr false` | 51k / 50k (p = 0.60) | 97 % (p = 0.89) | 97 % (p = 0.08) | 13/13 | 0 |
+| PPO, 2 048-step rollout ² | 51k / 53k (p = 0.78) | 99 % (p = 0.16) | 100 % (p = 1.00) | 13/13 | 0 |
+| PPO, both — hPPO's settings | 51k / 54k (p = 0.25) | 91 % (p = 0.06) | **88 % (p = 0.02)** | 11/13 | 0 |
+
+¹ `--num-steps-worker 1024 --num-minibatches 4 --num-minibatches-manager 2 --eval-freq 10`;
+² `--num-steps 256 --num-minibatches 8 --eval-freq 5` — each keeps the minibatch
+sizes and the evaluation cadence in steps where they were. p: Mann–Whitney
+against the same algorithm's defaults.
+
+What it settles:
+
+- **Nothing collapses any more.** Across all 104 runs, no evaluation after the
+  first solve fell below 95 % of the oracle. The late-run failure that hPPO's
+  early stop and value clipping were guarding against went with the
+  worker-reward fix.
+- **`--early-stop-success-rate` is now off by default** in hPPO, so a default
+  hPPO run stops on the same criterion as flat PPO and this protocol. The
+  `2.0` in the reproduction block below is a no-op for hPPO now.
+- **`--clip-vloss` is removed from hPPO.** Late-run behaviour is identical
+  without it, and it reaches the first solve no slower — p = 0.15 here and 0.10
+  in the section above, in the same direction. It was the last algorithmic
+  difference between an hPPO head's update and flat PPO's, which
+  `algorithms/hppo/tests/test_hppo.py` now pins down to identical weights. The
+  new default reproduces the `--clip-vloss false` row seed for seed (seeds 1–3:
+  identical logs and `solved.pt`), so that row *is* the current hPPO.
+- **The two hyperparameters stay different, on purpose.** Neither algorithm
+  solves faster under the other's settings, and both hold the strict criterion
+  less well — significantly so for flat PPO on hPPO's settings together (88 %
+  against 100 % of checks in the last 100k steps, 11/13 seeds solved at the end,
+  and the tunnel solved one evaluation later: 31k against 20k on all 3 seeds).
+  Each script's help records why. hPPO's two arms were measured with
+  `clip_vloss` still on.
 
 ## What the numbers say
 

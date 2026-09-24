@@ -15,6 +15,7 @@ from there.
 
 import math
 import os
+import sys
 import tempfile
 
 import numpy as np
@@ -24,6 +25,7 @@ import torch
 from hppo import (
     HPPOAgent,
     RolloutBuffer,
+    VecRolloutBuffer,
     WorkerActor,
     normalize_goal,
 )
@@ -481,17 +483,55 @@ def test_update_changes_both_networks_of_the_head_and_neither_of_the_other():
     assert all(torch.allclose(a, b) for a, b in zip(worker_before, agent.worker_actor.parameters()))
 
 
-# --------------------------------------------------------------------------
-# Manager-collapse diagnostics and the one mitigation kept (see
-# ManagerActor's docstring)
-# --------------------------------------------------------------------------
+def test_a_head_update_is_flat_ppos_update():
+    """With value-loss clipping gone (2026-09-24) a head's update is flat
+    PPO's, step for step. The worker is architecturally flat PPO's actor and
+    critic over the (obs, goal) input, so given the same weights, the same
+    rollout and the same seed the two must end on identical weights and
+    report identical metrics -- which pins the two implementations together
+    far more tightly than any single property could."""
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "ppo")))
+    import ppo
 
-def test_clip_vloss_is_on_by_default_as_in_the_scripts():
-    """The only mitigation the 6-seed ablation supported, and hppo_train.py's
-    --clip-vloss default. The agent's own default used to be False, so an
-    agent built directly (an evaluation notebook, a test) silently trained
-    differently from the scripts."""
-    assert _agent().clip_vloss is True
+    in_dim, T, N = OBS_DIM + GOAL_DIM, 8, 4
+    hppo_agent = _agent()
+    ppo_agent = ppo.PPOAgent(in_dim, ACT_DIM, device="cpu")
+    ppo_agent.actor.load_state_dict(hppo_agent.worker_actor.state_dict())
+    ppo_agent.critic.load_state_dict(hppo_agent.worker_critic.state_dict())
+
+    torch.manual_seed(0)
+    worker_buf = VecRolloutBuffer(T, N, in_dim, ACT_DIM, "cpu")
+    ppo_buf = ppo.RolloutBuffer(T, N, in_dim, ACT_DIM, "cpu")
+    for _ in range(T):
+        states = torch.randn(N, in_dim)
+        with torch.no_grad():
+            actions, logprobs, _ = hppo_agent.worker_policy_forward(states)
+        step = (states, actions, logprobs, torch.randn(N) * 10, torch.randn(N) * 10,
+                (torch.rand(N) < 0.2).float())
+        worker_buf.add(*step)
+        ppo_buf.add(*step)
+    next_value = torch.randn(N) * 10
+    hppo_agent.compute_worker_returns_and_advantage(worker_buf, next_value)
+    ppo_agent.compute_returns_and_advantage(ppo_buf, next_value)
+
+    torch.manual_seed(1)
+    hppo_metrics = hppo_agent.update_worker(worker_buf, 4, 3)
+    torch.manual_seed(1)
+    ppo_metrics = ppo_agent.update(ppo_buf, 4, 3)
+
+    for a, b in zip(list(hppo_agent.worker_actor.parameters()) + list(hppo_agent.worker_critic.parameters()),
+                    list(ppo_agent.actor.parameters()) + list(ppo_agent.critic.parameters())):
+        assert torch.equal(a, b)
+    renamed = {"loss_policy": "policy_loss", "loss_value": "value_loss"}
+    for key, value in hppo_metrics.items():
+        name = key.split("/", 1)[1]
+        if name != "batch_size":
+            assert value == ppo_metrics["loss/" + renamed.get(name, name)], key
+
+
+# --------------------------------------------------------------------------
+# Manager-collapse diagnostics (see ManagerActor's docstring)
+# --------------------------------------------------------------------------
 
 
 def test_manager_update_reports_the_pre_normalization_advantage_std():

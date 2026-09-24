@@ -129,13 +129,16 @@ class PPOAgent:
     # variance. At 0.99 the return signal stays wide and the critic stays
     # accurate. See the thesis PPO chapter, section 11.1 (kept outside this repo).
     #
-    # Deliberately absent, although HPPOAgent has them: value-loss clipping
-    # (`clip_vloss`), the advantage-std floor (`adv_std_floor_frac`), a
-    # configurable ret_rms horizon and an early-stopping `target_kl`. They
-    # were once ported here for API parity but were never enabled in any
-    # flat-PPO run, and the evidence behind them is about hPPO's manager
-    # head, not about this agent -- see `clipped_value_loss` and
-    # `floor_normalize` in algorithms/common.py.
+    # Deliberately absent: value-loss clipping (`clip_vloss`), the
+    # advantage-std floor (`adv_std_floor_frac`), a configurable ret_rms
+    # horizon and an early-stopping `target_kl`. They were once ported here
+    # from HPPOAgent for API parity but were never enabled in any flat-PPO
+    # run, and the evidence behind them was about hPPO's manager head, not
+    # about this agent -- see `clipped_value_loss` and `floor_normalize` in
+    # algorithms/common.py. HPPOAgent has since dropped all four too,
+    # clip_vloss last (2026-09-24), so its heads now run this update
+    # unchanged; algorithms/hppo/tests/test_hppo.py checks that they end on
+    # identical weights.
     #
     # Also absent, and replaced by something simpler that does the same:
     #

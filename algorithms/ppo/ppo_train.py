@@ -9,9 +9,11 @@ T as a hardcoded 1.0 s in one and as 10 * dt in the other (the same number
 today). Each script is now a thin wrapper that describes its scenario in a
 `Scenario` and hands it to `main`.
 
-hPPO and the two PPO+MPC variants deliberately keep a full script per
-scenario: theirs differ in substance (scenario-specific diagnostics, and
-the investigations documented in their comments), not just in names.
+The two PPO+MPC variants deliberately keep a full script per scenario:
+theirs differ in substance (scenario-specific diagnostics, and the
+investigations documented in their comments), not just in names. hPPO
+used to as well, until its two copies turned out to be identical code and
+were merged the same way, into algorithms/hppo/hppo_train.py.
 
 Imported by bare name, like `ppo`, once algorithms/ppo and algorithms/ are
 on sys.path -- each script_ppo.py puts them there.
@@ -102,14 +104,30 @@ def parse_args(scenario):
     parser.add_argument("--learning-rate", type=float, default=3e-4,
         help="the learning rate of the optimizer")
     parser.add_argument("--anneal-lr", type=_str2bool, default=True,
-        help="if toggled, the learning rate decays linearly to 0 over training")
+        help="if toggled, the learning rate decays linearly to 0 over training. "
+             "On by default, unlike hPPO's: see --num-steps for the "
+             "measurement that settled both")
     parser.add_argument("--num-envs", type=int, default=8,
         help=f"the number of parallel {scenario.name} environments to collect rollouts from")
     parser.add_argument("--num-steps", type=int, default=128,
         help="the number of steps to run in each environment per policy rollout. "
              "128 rather than 256 halves the batch and so doubles the number of "
              "policy updates for the same sample budget, the same minibatch size "
-             "and (to within 0.5%%) the same number of gradient steps")
+             "and (to within 0.5%%) the same number of gradient steps. Both this "
+             "and --anneal-lr differ from the hPPO worker's defaults (2048 "
+             "steps per rollout, constant LR), and aligning the two was "
+             "measured both ways on 2026-09-24 (13 slalom seeds, full 500k "
+             "budget, every early stop disabled; docs/benchmark.md). Flat PPO "
+             "on hPPO's settings (--anneal-lr false --num-steps 256 "
+             "--num-minibatches 8 --eval-freq 5) solved no faster (median / "
+             "mean 51k / 54k steps against 51k / 51k, p = 0.25) and held the "
+             "strict solved criterion less well afterwards: 88%% of checks in "
+             "the last 100k steps against 100%% (p = 0.02), 11/13 seeds solved "
+             "at the end against 13/13, and the tunnel solved one evaluation "
+             "later (31k against 20k on all 3 seeds). Each change alone was "
+             "within noise (no annealing: 97%% in the last 100k, p = 0.08; the "
+             "longer rollout: 100%%). hPPO on flat PPO's settings did no better "
+             "either (see hppo_train.py), so each keeps its own")
     parser.add_argument("--gamma", type=float, default=0.99,
         help="the discount factor gamma. 0.99, not the 0.999 the reward scale "
              "was designed around: see the thesis PPO chapter, 11.1")

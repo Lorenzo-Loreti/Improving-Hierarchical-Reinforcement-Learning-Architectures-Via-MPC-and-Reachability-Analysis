@@ -102,7 +102,11 @@ def clipped_value_loss(newvalue, old_value, target, clip_coef, clip_vloss):
     (hPPO, PPO+MPC, PPO+MPC-reach) for diagnostic/API parity, not because the
     underlying finding is specific to hPPO's manager head. Flat PPO carried
     it too, never enabled, and has since dropped it along with
-    `floor_normalize` below. `clip_vloss=False` reproduces plain regression
+    `floor_normalize` below. hPPO, where it was on by default, dropped it on
+    2026-09-24: re-measured on 13 slalom seeds after the worker-reward fix,
+    it no longer protected against anything (see HPPOAgent's class comment
+    in `hppo.py`), so only the two PPO+MPC variants still call this.
+    `clip_vloss=False` reproduces plain regression
     MSE exactly, so an agent built without opting in behaves exactly as
     before this function existed.
 
@@ -417,6 +421,13 @@ class ManagerActor(nn.Module):
     checkpoint does now sit pinned at the cap (alpha=[46.7, 6.7],
     beta=[1.00, 6.86], the skewed shape described above) -- but neither is
     what was wrong.
+
+    (2026-09-24: `clip_vloss` has since been removed from hPPO. Over the
+    full 500k budget with every early stop disabled, 13 slalom seeds per arm
+    on the fixed reward behaved identically with and without it after the
+    first solve -- no evaluation below 95% of the oracle in either -- and
+    reached that solve no slower without it; see HPPOAgent's class comment.
+    The PPO+MPC variants keep it. `MAX_CONCENTRATION` stays.)
     """
     MAX_CONCENTRATION = 50.0
 
