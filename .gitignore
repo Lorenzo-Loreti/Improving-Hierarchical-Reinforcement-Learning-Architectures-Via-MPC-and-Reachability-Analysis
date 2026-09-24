@@ -4,3 +4,4 @@ __pycache__/
 **/checkpoints/
 **/wandb/
 **/studies/
+.claude/settings.local.json
