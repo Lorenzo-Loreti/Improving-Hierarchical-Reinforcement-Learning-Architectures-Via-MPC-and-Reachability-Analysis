@@ -284,7 +284,30 @@ def parse_args(scenario):
              "against an intrinsic stream of ~0.12/step -- which is why it "
              "is the default: unlike the success bonus, it makes the "
              "worker itself avoid walls, and the _reach variants need that. "
-             "0.0 restores the pre-fix reward, which collapses")
+             "The coefficient has a floor: "
+             "stalling in front of the line is worth about "
+             "(r_orbit - coef)/(1-gamma) to the worker, where r_orbit is the "
+             "goal progress an orbit harvests per step (the step penalty is "
+             "the only extrinsic term that survives an orbit), and crossing it "
+             "about coef*goal_reward, so the terminal only wins above "
+             "coef = (r_orbit/(1-gamma)) / (goal_reward + 1/(1-gamma)). "
+             "Bounding r_orbit by v_max*dt = 0.12 gives ~0.011 on the slalom "
+             "and ~0.04 on the tunnel, and that bound proved conservative. "
+             "The sweep (scenarios/slalom/scripts/sweep_extrinsic_coef.py, "
+             "2026-09-24; 10 seeds per arm at 500k with every early stop off) "
+             "found 0.01 and 0.005 as sound as 0.02: 10/10 solved, first "
+             "solve median 72k / 82k against 72k (p = 0.78 / 0.46), 10/10 "
+             "still solved at the end, and no collapse. The collapsed runs at "
+             "0 harvest r_orbit ~0.055, which puts the measured floor near "
+             "0.005 on the slalom (no margin left there) and ~0.018 on the "
+             "tunnel, where 0.02 therefore sits just above it. The same "
+             "sweep found the cost of a larger coefficient on the "
+             "hierarchy side: at 0.02 the worker threads the slalom almost "
+             "unaided, with ~1 wall contact per episode when the manager is "
+             "replaced by a fixed forward goal, against ~6 at 0.005. See "
+             "that script's summary. "
+             "0.0 restores the pre-fix reward, which collapses (2/10 seeds "
+             "ever solved in the sweep, 0/10 at the end)")
     parser.add_argument("--num-envs", type=int, default=8,
         help=f"the number of parallel {scenario.name} environments to collect "
              "rollouts from. Rollouts come from a batched vector env; each "
@@ -442,7 +465,7 @@ def worker_input(agent, obs_norm, goal_phys):
     )
 
 
-def make_policy_fn(agent, goal_trace=None):
+def make_policy_fn(agent, goal_trace=None, replan_goal=None):
     """The controller evaluation scores, as a fresh closure per episode:
     one raw observation in, the worker's deterministic action out. The
     manager issues a deterministic goal at the episode's first step and
@@ -463,6 +486,13 @@ def make_policy_fn(agent, goal_trace=None):
     goal on that step, and the physical goal displacement the worker acted
     on. Only the study scripts' figures read it; it changes nothing the
     controller does.
+
+    `replan_goal`, if given, maps the manager's physical goal to the one the
+    worker is handed at each re-plan (it then decays as usual), so the
+    manager can be knocked out -- replaced by a fixed goal, or overruled --
+    while the worker runs under exactly this controller. Only the manager
+    knock-out probes of scenarios/slalom/scripts/sweep_extrinsic_coef.py
+    pass it; evaluation and the solved-check never do.
 
     The evaluation loop used to carry its own inline copy of this
     controller, a second implementation to keep in step with this one
@@ -493,6 +523,8 @@ def make_policy_fn(agent, goal_trace=None):
                 # First step of the episode or of a new segment.
                 manager_obs = torch.tensor(obs_norm, dtype=torch.float32, device=agent.device).unsqueeze(0)
                 state["goal"] = agent.scale_goal(agent.manager_act(manager_obs).cpu().numpy()[0])
+                if replan_goal is not None:
+                    state["goal"] = np.asarray(replan_goal(state["goal"]), dtype=np.float32)
                 state["step_in_c"] = 0
             else:
                 state["goal"] = state["goal"] - (pos - state["pos"])
@@ -751,6 +783,20 @@ def train(args, scenario):
         # in the same plot as the eval success rate it precedes by ~30 updates.
         near_goal_ax = []
         near_goal_value = []
+        # What the worker's reward is made of: the intrinsic goal-closing
+        # term against the extrinsic mix (--worker-extrinsic-coef times the
+        # environment's reward), summed over every worker step of the rollout
+        # and, for the share, in absolute value. Logged so that whether the
+        # extrinsic term swamps the intrinsic one -- the worst case for the
+        # hierarchy being a worker that no longer needs its manager -- is a
+        # curve rather than a guess. The intrinsic mean is also the worker's
+        # goal progress per step (about v_max*dt = 0.12 m at most; the speed
+        # limit is per axis, so diagonal motion can exceed it slightly, up to
+        # ~0.126 measured): it falling while the return holds would mean the
+        # worker has stopped following goals.
+        # Read-only, like the near-goal diagnostic.
+        reward_intrinsic_sum = reward_intrinsic_abs = 0.0
+        reward_extrinsic_sum = reward_extrinsic_abs = 0.0
 
         for step in range(0, args.num_steps_per_env):
             global_step += args.num_envs
@@ -801,6 +847,16 @@ def train(args, scenario):
             worker_reward = (np.linalg.norm(current_goal, axis=-1)
                              - np.linalg.norm(next_goal, axis=-1))
 
+            # See reward_intrinsic_sum above. Read here, before either term
+            # below is added: with the coefficient at 0, `worker_reward` is
+            # still this very array when the truncation bootstrap adds into
+            # it in place.
+            extrinsic_reward = args.worker_extrinsic_coef * env_reward
+            reward_intrinsic_sum += float(worker_reward.sum())
+            reward_intrinsic_abs += float(np.abs(worker_reward).sum())
+            reward_extrinsic_sum += float(extrinsic_reward.sum())
+            reward_extrinsic_abs += float(np.abs(extrinsic_reward).sum())
+
             # Put the environment's own outcome back into the worker's return
             # -- see --worker-extrinsic-coef for the termination-avoidance
             # pathology this exists to remove. Applied here, before the
@@ -810,7 +866,7 @@ def train(args, scenario):
             # applied right after it; see the comment above that flag's
             # former place in parse_args.)
             if args.worker_extrinsic_coef != 0.0:
-                worker_reward = worker_reward + args.worker_extrinsic_coef * env_reward
+                worker_reward = worker_reward + extrinsic_reward
 
             # Handle truncation bootstrapping for the worker. The episode did
             # not end, the clock did: fold the value of the state it was cut at
@@ -992,6 +1048,10 @@ def train(args, scenario):
             metrics["charts/worker_ax_near_goal"] = float(np.mean(np.concatenate(near_goal_ax)))
             metrics["charts/worker_value_near_goal"] = float(np.mean(np.concatenate(near_goal_value)))
             metrics["charts/near_goal_samples"] = float(sum(a.size for a in near_goal_ax))
+        metrics["worker/reward_intrinsic"] = reward_intrinsic_sum / args.num_steps_worker
+        metrics["worker/reward_extrinsic"] = reward_extrinsic_sum / args.num_steps_worker
+        metrics["worker/extrinsic_share"] = (
+            reward_extrinsic_abs / max(reward_intrinsic_abs + reward_extrinsic_abs, 1e-12))
 
         log_line = (f"update={update} global_step={global_step} SPS={sps} "
                     f"w_ev={metrics['worker/explained_variance']:.3f} "

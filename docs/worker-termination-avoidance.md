@@ -481,3 +481,19 @@ Stated plainly, because the shape of the argument makes it easy to over-read.
   71k; not enough for a fine ranking.
 - **`--worker-extrinsic-coef` was not swept.** 0.02 is a scale argument
   (§5.2) that worked on the first value tried, not the optimum of a sweep.
+  `scenarios/slalom/scripts/sweep_extrinsic_coef.py` (2026-09-24) runs that
+  sweep, from 0.02 down to 0. It also probes whether the manager still steers
+  the worker at each coefficient, because the extrinsic mix risks exactly that
+  (§5.2). The first run was 10 slalom seeds per arm at 500k steps, every early
+  stop off. **Performance is flat from 0.005 to 0.02.** Every arm solved 10/10
+  seeds and was still solved at the end. First-solve medians were 67–82k
+  steps, with p ≥ 0.46 against 0.02. Only 0 collapses: 2/10 seeds ever solved,
+  0/10 at the end. **The coefficient trades against the hierarchy.** At 0.02
+  the worker threads the slalom almost unaided: with the manager replaced by a
+  fixed forward goal it averages about 1 wall contact per episode, against
+  about 6 at 0.005. Its goal share of action variance is 78 %, against 91 % at
+  0.005. The script's docstring derives a floor for the coefficient, below
+  which the terminal no longer outweighs stalling. Its first estimate (0.011 on
+  the slalom) proved conservative. Recomputed with the goal progress the
+  collapsed orbits actually harvest, the floor is about 0.005 on the slalom
+  and about 0.018 on the tunnel.
