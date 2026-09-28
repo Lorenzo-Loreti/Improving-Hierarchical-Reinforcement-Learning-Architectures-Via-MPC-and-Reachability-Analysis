@@ -142,7 +142,16 @@ def parse_args(scenario):
     parser.add_argument("--max-goal-bound", type=float, default=10.0,
         help="the manager's [-1, 1] action is scaled by this to a physical "
              "goal displacement in metres, and divided by it again to form "
-             "the worker's input")
+             "the worker's input. On x only when --max-goal-bound-y is set")
+    parser.add_argument("--max-goal-bound-y", type=float, default=None,
+        help="a separate bound for the goal's lateral (y) axis, in metres; "
+             "default: --max-goal-bound on both axes. The two axes ask "
+             "different things of a goal: forward, a far goal makes the worker "
+             "move at full speed; laterally, a reachable one says 'be at this "
+             "y', and a short box shrinks the manager's lateral sampling noise "
+             "(its floor is ~0.1 of the box, see ManagerActor's "
+             "MAX_CONCENTRATION). One box cannot give both; see the "
+             "--worker-obs comment for the measurements that led here")
     # --- worker termination-avoidance ------------------------------------
     #
     # The worker is trained on a purely *intrinsic* reward: the per-step
@@ -397,7 +406,8 @@ def parse_args(scenario):
     #   the manager's rather than the worker's.
     # - The cost is samples and precision. At 0 the blind hierarchy reaches
     #   the oracle (best logged gap 0.4-1.3) and then drifts to 2-9 steps
-    #   slower, with no contacts. That is risk 1 at work. Sampled goals
+    #   slower, with no contacts. That looked like risk 1 at work -- round 3
+    #   below contradicts it. Sampled goals
     #   give the blind worker 0.66 contacts per training episode, against
     #   0.13 for the sighted one at 0.02. The manager compensates with
     #   caution: it takes the gates at y ~ +-0.7, where the oracle takes
@@ -435,7 +445,34 @@ def parse_args(scenario):
     #   bounds: a far forward goal (move at full speed) and a reachable
     #   lateral one (be at this y). That points to a per-axis goal box, say
     #   10 m in x and ~2.5 m in y (lateral noise floor ~0.25 m, one goal
-    #   enough for the transfer), as the next arm.
+    #   enough for the transfer), as the next arm: --max-goal-bound-y.
+    #
+    # Round 3 (2026-09-28): the per-axis box, --max-goal-bound-y 2.5, with a
+    # blind worker at 0; 10 seeds, 1M steps,
+    # scenarios/slalom/studies/blind_worker_boxy2.5. It fixes round 2's stall
+    # but is worse than round 1:
+    #
+    #   box (x / y)   ever solved  first solve  solved at end  grid gap  contacts/ep  training contacts
+    #   10 / 10          9/10         195k          5/10          6.4       0.00          0.72
+    #   10 / 2.5         7/10         358k          2/10         37.2       0.66          1.19
+    #
+    # - The lateral noise did drop as designed. The manager's goal_y
+    #   sampling std at visited states went from a median of 1.47 m to
+    #   0.21 m. Contacts rose anyway, in training and in the final policies
+    #   (283 against 27 on the grid, from gate 1's entry at x ~ 4 to past
+    #   gate 2 at x ~ 9.3).
+    # - So round 1's attribution of the drift to risk 1 ("That is risk 1 at
+    #   work", above) is not supported. A sevenfold drop in lateral noise
+    #   made precision worse, not better. What is left of the list is risk 2,
+    #   a manager that has to do all the fine lateral control at one
+    #   decision per second through a worker that cannot see the walls.
+    #   That is untested here.
+    # - The separation is intact in every round-3 policy. Replacing the
+    #   manager with a forward goal costs ~2600 of return and mirroring its
+    #   goal ~10100, and the goal explains 94% of the worker's action
+    #   variance.
+    #
+    # Round 1 (both bounds 10 m) stays the best blind configuration measured.
     parser.add_argument("--worker-obs", type=str, default="full", choices=sorted(WORKER_OBS),
         help="what the worker observes next to its goal: 'full' (the whole observation, "
              "[p_x, p_y, v_x, v_y]) or 'velocity' ([v_x, v_y] only, blind to where it is, "
@@ -815,6 +852,7 @@ def train(args, scenario):
         obs_low=obs_low,
         obs_high=obs_high,
         max_goal_bound=max_goal_bound,
+        max_goal_bound_y=args.max_goal_bound_y,
         worker_obs=args.worker_obs,
         device=device,
     )

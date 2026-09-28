@@ -110,7 +110,8 @@ solved-check grid, under the deterministic controller that evaluation uses
   own repertoire would confound a narrow manager with a deaf worker.
 - Manager knock-outs. The same grid replayed with the manager's goal
   replaced at every re-plan:
-    forward:  a fixed (max_goal_bound, 0), straight down the corridor. Does
+    forward:  a fixed (max_goal_bound, 0) -- the x bound when the box is
+              per axis -- straight down the corridor. Does
               the worker still need its manager to thread the gates?
     mirrored: the manager's own goal with goal_y negated, which is the one
               decision the slalom's offset gates turn on. Does the manager
@@ -411,7 +412,7 @@ def goal_share(agent, rollouts, goals):
 
 def probe_checkpoint(path, env, grid, oracle_grid, coef, gamma):
     agent = load_agent(path, env)
-    bound = agent.max_goal_bound
+    bound = agent.max_goal_bound  # the x bound, when the box is per axis
     knockouts = {
         "manager": None,
         "forward": lambda g: np.array([bound, 0.0]),
@@ -428,7 +429,8 @@ def probe_checkpoint(path, env, grid, oracle_grid, coef, gamma):
     probe["reward"] = reward_composition(manager_rollouts, coef, gamma)
     rng = np.random.default_rng(GOAL_SHARE_SEED)
     probe["goal_share"] = goal_share(
-        agent, manager_rollouts, rng.uniform(-bound, bound, size=(GOAL_SHARE_GOALS, 2)))
+        agent, manager_rollouts,
+        rng.uniform(-1.0, 1.0, size=(GOAL_SHARE_GOALS, 2)) * np.broadcast_to(agent.goal_bound, (2,)))
     return probe
 
 
@@ -499,6 +501,7 @@ def analyze_phase(args):
         "floor": extrinsic_floor(env.config, gamma),
         "oracle_grid_return": float(np.mean([o["return"] for o in oracle_grid])),
         "max_goal_bound": float(config["max_goal_bound"]),
+        "max_goal_bound_y": config.get("max_goal_bound_y"),
         "worker_obs": worker_obs.pop(),
     }
     path = os.path.join(args.out, "analysis.pkl")
@@ -519,6 +522,12 @@ def load_analysis(out_dir):
 # --------------------------------------------------------------------------
 # summary
 # --------------------------------------------------------------------------
+
+def _goal_box(analysis):
+    by = analysis.get("max_goal_bound_y")
+    bx = analysis["max_goal_bound"]
+    return f"{bx:g} m" if by is None else f"{bx:g} m in x, {by:g} m in y"
+
 
 def _reference_coef(analysis):
     coefs = analysis["coefs"]
@@ -577,7 +586,7 @@ def write_summary(analysis, out_dir):
         "# hPPO on the slalom across --worker-extrinsic-coef",
         "",
         f"Worker observation: `{analysis.get('worker_obs', 'full')}`; goal box "
-        f"{analysis['max_goal_bound']:g} m. "
+        f"{_goal_box(analysis)}. "
         f"{analysis['total_timesteps']} steps per run, early stops off. Conservative floor of the "
         f"coefficient (terminal = value of stalling): **{analysis['floor']:.4f}**; see the "
         f"docstring of scenarios/slalom/scripts/sweep_extrinsic_coef.py. Probes replay each "

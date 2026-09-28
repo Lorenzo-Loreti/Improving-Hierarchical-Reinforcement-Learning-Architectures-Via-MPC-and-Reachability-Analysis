@@ -88,6 +88,38 @@ def test_a_fresh_goal_lands_on_the_worker_input_box():
     assert normalize_goal(np.array([10.0, -10.0]), 10.0) == pytest.approx([1.0, -1.0])
 
 
+def test_default_goal_bound_is_the_single_float():
+    """With no lateral bound the box is the same Python float as before
+    per-axis bounds existed, so the default's goal arithmetic is unchanged."""
+    agent = _agent(max_goal_bound=10.0)
+    assert agent.goal_bound == 10.0 and isinstance(agent.goal_bound, float)
+
+
+def test_per_axis_goal_box_scales_each_axis_and_round_trips():
+    agent = _agent(max_goal_bound=10.0, max_goal_bound_y=2.5)
+    manager_action = np.array([[1.0, 1.0], [-0.5, 0.4]], dtype=np.float32)
+    physical = agent.scale_goal(manager_action)
+    assert physical == pytest.approx(np.array([[10.0, 2.5], [-5.0, 1.0]]))
+    assert agent.normalize_goal(physical) == pytest.approx(manager_action)
+
+
+def test_lateral_goal_bound_travels_with_the_checkpoint():
+    agent = _agent(max_goal_bound=10.0, max_goal_bound_y=2.5)
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "ckpt.pt")
+        agent.save(path)
+        reloaded = HPPOAgent(OBS_DIM, GOAL_DIM, ACT_DIM, device="cpu")
+        reloaded.load(path)
+        # A checkpoint from before per-axis bounds has no such key: one box.
+        checkpoint = torch.load(path, weights_only=False)
+        del checkpoint["max_goal_bound_y"]
+        torch.save(checkpoint, path)
+        old = HPPOAgent(OBS_DIM, GOAL_DIM, ACT_DIM, device="cpu", max_goal_bound_y=1.0)
+        old.load(path)
+    assert reloaded.goal_bound == pytest.approx([10.0, 2.5])
+    assert old.max_goal_bound_y is None and old.goal_bound == 10.0
+
+
 @pytest.mark.parametrize("head", ["manager", "worker"])
 def test_act_is_the_deterministic_action_without_a_critic_pass(head):
     """Flat PPO's `act`, per head: evaluation and the solved-check only need

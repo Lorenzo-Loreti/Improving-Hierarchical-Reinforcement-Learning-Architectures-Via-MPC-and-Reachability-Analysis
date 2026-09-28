@@ -473,7 +473,7 @@ class HPPOAgent:
                  gae_lambda=0.95, clip_coef=0.2,
                  ent_coef_manager=0.01, ent_coef_worker=0.01,
                  max_grad_norm=0.5,
-                 obs_low=None, obs_high=None, max_goal_bound=10.0,
+                 obs_low=None, obs_high=None, max_goal_bound=10.0, max_goal_bound_y=None,
                  critic_lr_mult=3.0, worker_obs="full", device="cpu"):
         self.gamma = gamma
         self.manager_freq = manager_freq
@@ -501,6 +501,10 @@ class HPPOAgent:
         self.obs_low = None if obs_low is None else np.asarray(obs_low, dtype=np.float32).ravel()
         self.obs_high = None if obs_high is None else np.asarray(obs_high, dtype=np.float32).ravel()
         self.max_goal_bound = max_goal_bound
+        # None: one bound on both axes, as before 2026-09-28. Otherwise the
+        # lateral (y) bound, `max_goal_bound` then bounding x only; see
+        # `goal_bound` and --max-goal-bound-y in hppo_train.py.
+        self.max_goal_bound_y = max_goal_bound_y
 
         # Manager. ManagerActor's docstring (algorithms/common.py) is this
         # codebase's canonical writeup of the manager-collapse investigation
@@ -583,9 +587,19 @@ class HPPOAgent:
             )
         return normalize_obs(obs, self.obs_low, self.obs_high)
 
+    @property
+    def goal_bound(self):
+        """The goal box's half-width per axis: `max_goal_bound` itself when
+        both axes share it -- the same Python float as before per-axis bounds
+        existed, so the default's goals are bit-identical -- or the (x, y)
+        pair when a separate lateral bound is set."""
+        if self.max_goal_bound_y is None:
+            return self.max_goal_bound
+        return np.array([self.max_goal_bound, self.max_goal_bound_y], dtype=np.float32)
+
     def normalize_goal(self, goal):
         """Apply the goal map this agent was constructed with."""
-        return normalize_goal(goal, self.max_goal_bound)
+        return normalize_goal(goal, self.goal_bound)
 
     def worker_obs_view(self, obs_norm):
         """The columns of a normalized observation the worker sees. Selecting
@@ -597,7 +611,7 @@ class HPPOAgent:
 
     def scale_goal(self, normalized_goal):
         """Inverse of `normalize_goal`: manager action -> physical displacement."""
-        return normalized_goal * self.max_goal_bound
+        return normalized_goal * self.goal_bound
 
     # --- manager ----------------------------------------------------------
 
@@ -695,6 +709,7 @@ class HPPOAgent:
             "obs_low": None if self.obs_low is None else self.obs_low.tolist(),
             "obs_high": None if self.obs_high is None else self.obs_high.tolist(),
             "max_goal_bound": self.max_goal_bound,
+            "max_goal_bound_y": self.max_goal_bound_y,
             # The cadence is part of the trained controller, not a run detail:
             # a reloaded hierarchy that re-plans at a different c is a
             # different controller, and it also fixes the manager's discount.
@@ -730,6 +745,9 @@ class HPPOAgent:
             self.obs_low = np.asarray(checkpoint["obs_low"], dtype=np.float32)
             self.obs_high = np.asarray(checkpoint["obs_high"], dtype=np.float32)
         self.max_goal_bound = checkpoint["max_goal_bound"]
+        # Absent from checkpoints older than per-axis bounds (2026-09-28),
+        # whose box was the same on both axes.
+        self.max_goal_bound_y = checkpoint.get("max_goal_bound_y")
         self.manager_freq = checkpoint["manager_freq"]
         self.gamma_manager = self.gamma ** self.manager_freq
         # (A checkpoint without "worker_obs" predates the choice, 2026-09-26,
