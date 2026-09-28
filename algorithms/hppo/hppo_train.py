@@ -473,6 +473,39 @@ def parse_args(scenario):
     #   variance.
     #
     # Round 1 (both bounds 10 m) stays the best blind configuration measured.
+    #
+    # Cadence (2026-09-28): round 1's setting (blind worker at 0, 10 m box)
+    # with --manager-freq 5, two decisions a second; 10 seeds, 1M steps,
+    # scenarios/slalom/studies/blind_worker_c5. Not a clean single-variable
+    # test: the manager's discount moves with the cadence (gamma**c). It is
+    # also worse than round 1:
+    #
+    #   --manager-freq  ever solved  first solve  solved at end  grid gap  stuck at gate 2
+    #   10                 9/10         195k          5/10          6.4        1/10
+    #   5                  6/10         118k          2/10         50.4        4/10
+    #
+    # - Twice the decisions did not buy precision. The seeds that solve pass
+    #   only 21% of the solved-checks after their first solve (51% at 10),
+    #   and they end 0.6-57 of return behind the oracle.
+    # - It made the manager's local optimum four times as common. Seeds 5-8
+    #   never reach the line in any evaluation, and end at x ~ 6.5-7.2,
+    #   at gate 2, with no contacts. That is round 1's seed 10 and round 2's
+    #   failure again, not a stall at the line.
+    # - So neither named suspect, lateral noise (round 3) or cadence (this
+    #   run), explains the blind hierarchy's late drift. That stays open.
+    #
+    # Where this leaves the strict separation: --worker-obs velocity
+    # --worker-extrinsic-coef 0, with every other flag at its default
+    # (round 1). It holds as a hierarchy: the manager is indispensable, and no
+    # seed stalls at the line without any extrinsic reward. Against the
+    # sighted default it costs:
+    #
+    # - ~2.7x the samples to a first solve (median 195k against 72k);
+    # - 5/10 seeds against 10/10 still passing the strict solved-check at the
+    #   end, the rest drifting 2-9 steps behind the oracle;
+    # - 1/10 seeds stuck in front of gate 2.
+    #
+    # The default stays the sighted worker at 0.02.
     parser.add_argument("--worker-obs", type=str, default="full", choices=sorted(WORKER_OBS),
         help="what the worker observes next to its goal: 'full' (the whole observation, "
              "[p_x, p_y, v_x, v_y]) or 'velocity' ([v_x, v_y] only, blind to where it is, "

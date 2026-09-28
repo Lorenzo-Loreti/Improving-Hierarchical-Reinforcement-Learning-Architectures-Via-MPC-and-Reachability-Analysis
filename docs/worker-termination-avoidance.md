@@ -505,3 +505,51 @@ Stated plainly, because the shape of the argument makes it easy to over-read.
   On the tunnel it was about 0.018 while that scenario's `goal_reward` was 200.
   Since 2026-09-24 both scenarios share `goal_reward` 1000, and with it the
   same floor.
+
+---
+
+## 11. A worker blind to position (2026-09-26 to 2026-09-28)
+
+§1 derives the pathology from what the worker can see. It stalls in front of
+the line because it can tell that it is in front of the line. The sweep in §10
+also found a second cost of the extrinsic mix: at 0.02 the worker threads the
+slalom almost without its manager. Both point at the worker's observation, so
+`--worker-obs velocity` removes the absolute position from it. The worker then
+sees its velocity and its goal, and nothing that says where it is.
+
+Slalom, 10 seeds per arm, 1M steps, every early stop off:
+
+| worker | `--worker-extrinsic-coef` | stalls at the line | ever solved | first solve (median) | solved at end |
+| --- | --- | --- | --- | --- | --- |
+| sighted | 0.02 (default) | 0/10 | 10/10 | 72k | 10/10 |
+| sighted | 0 | **10/10** | 2/10 | 271k | 0/10 |
+| blind | 0 | **0/10** | 9/10 | 195k | 5/10 |
+
+The sighted rows are the 500k sweep of §10. hPPO trains at a constant
+learning rate, so a 500k run is a prefix of a 1M one.
+
+- **With the position hidden, the pre-fix reward no longer collapses.** No
+  blind seed stalls at the line, with no extrinsic term at all. That makes
+  §1's diagnosis sharper. The defect is a reward that termination cuts off,
+  held by a worker that can see termination coming. Remove either half and
+  the pathology goes.
+- **The hierarchy is then strictly feudal.** Replacing the manager with a
+  fixed forward goal costs about 1800 of return, against about 50 for the
+  sighted default, and the goal explains 96 % of the worker's action variance.
+- **It is not free.** The blind hierarchy needs about 2.7× the samples to a
+  first solve. Only 5/10 seeds still pass the strict solved-check at the end:
+  the others drift 2–9 steps behind the oracle. One seed's manager never
+  learns gate 2 and orbits in front of it.
+
+Three follow-ups, all with the blind worker at 0, did no better:
+
+- a reachable 1.8 m goal box: 0/10 solved;
+- a per-axis box of 10 m × 2.5 m, which cut the manager's lateral sampling
+  noise sevenfold: 2/10 solved at the end;
+- a manager deciding every 5 steps instead of 10: 2/10 solved at the end,
+  and 4/10 stuck at gate 2.
+
+None of the named suspects explains the late drift. The full record, with
+every number, is the comment above `--worker-obs` in
+`algorithms/hppo/hppo_train.py`. The output is under
+`scenarios/slalom/studies/blind_worker*`.
