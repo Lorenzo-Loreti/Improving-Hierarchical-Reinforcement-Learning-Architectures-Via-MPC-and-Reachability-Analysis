@@ -297,9 +297,11 @@ about it. See §5.3 of the companion document.
 > been rebuilt on hPPO's manager with a tube-MPC worker that knows every
 > gate (`algorithms/ppo_mpc/`, `algorithms/tube_mpc.py`). Its first
 > measurements are the disturbed comparison in
-> `scenarios/slalom/scripts/compare_disturbed.py`, and one undisturbed
-> seed, solved at 71 680 steps with no contact. The rows below are left as
-> measured.
+> `scenarios/slalom/scripts/compare_disturbed.py`, and a 10-seed study on
+> the deterministic slalom (2026-09-29, `study_ppo_mpc.py`, same protocol as
+> the PPO and hPPO studies): 10/10 solved, first solve median 72k (range
+> 61k-72k), all still solved at the end, no contact in training or
+> evaluation. The rows below are left as measured.
 
 **4. `PPO+MPC` is the only algorithm that never solves the slalom.** It gets to
 92.6 % of the oracle and stalls there with 1.3–1.8 contacts per episode on every
