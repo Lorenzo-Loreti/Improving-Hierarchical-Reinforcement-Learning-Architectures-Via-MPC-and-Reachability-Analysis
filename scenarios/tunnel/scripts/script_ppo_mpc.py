@@ -470,7 +470,7 @@ if __name__ == "__main__":
         completed_target_dists = []
         collision_forced_replan_count = 0
         # The control arm of the worker termination-avoidance diagnostic that
-        # script_hppo.py added (see the --worker-success-bonus block, now in
+        # script_hppo.py added (see the worker termination-avoidance block, now in
         # algorithms/hppo/hppo_train.py). There
         # the same metric detects a *learned* worker discovering that its
         # purely intrinsic reward makes crossing the goal line worth 0, and

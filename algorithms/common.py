@@ -371,7 +371,7 @@ class ManagerActor(nn.Module):
 
     The "manager collapse" is not a manager problem. It is the *worker's*
     reward, and the manager's critic drift described above is downstream of
-    it. Read the `--worker-success-bonus` block in
+    it. Read the worker termination-avoidance block in
     algorithms/hppo/hppo_train.py (written in scenarios/slalom/scripts/
     script_hppo.py, before both scenarios' hPPO loops were merged there)
     for the full diagnosis; in short:
@@ -410,7 +410,8 @@ class ManagerActor(nn.Module):
     The tunnel scenario does not discriminate, being solved long before the
     pathology can bind within its budget. The default is the FeUdal-style
     `--worker-extrinsic-coef 0.02` rather than the more surgical
-    `--worker-success-bonus`: the bonus repairs the termination incentive
+    `--worker-success-bonus` (removed since, 2026-09-24, as unused): the
+    bonus repairs the termination incentive
     alone and leaves the worker blind to walls and to the clock, so every
     collision still has to be steered out by a manager acting once every
     `manager_freq` steps. Both arms reach the same final policy on slalom,

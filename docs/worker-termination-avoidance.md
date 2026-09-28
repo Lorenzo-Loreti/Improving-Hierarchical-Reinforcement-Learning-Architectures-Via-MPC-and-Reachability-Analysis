@@ -9,7 +9,7 @@ that was used as a control, is in
 
 This document exists because the finding invalidates an earlier, published-in-
 comments diagnosis of the same symptom ("the hPPO manager collapse"). The
-canonical short version lives in code — the `--worker-success-bonus` block in
+canonical short version lives in code — the worker termination-avoidance block in
 `algorithms/hppo/hppo_train.py` (written in `scenarios/slalom/scripts/script_hppo.py`,
 before both scenarios' hPPO loops were merged there) and the dated addendum at the end of
 `ManagerActor`'s docstring in `algorithms/common.py`. This is the long version:
@@ -55,8 +55,11 @@ The fix is to put a terminal back into the worker's return. Two knobs, on both
 | `--worker-extrinsic-coef` | **0.02** | FeUdal-style `r_int + coef * r_env` | the default: the only one of the two that also makes the worker itself avoid walls |
 | `--worker-success-bonus` | 0.0 | one-off bonus on a successful termination | the minimal-intervention ablation arm: "what does restoring the terminal *alone* fix?" |
 
-Setting both is double-counting — the extrinsic mix already carries
-`goal_reward` into the worker's return.
+Setting both was double-counting — the extrinsic mix already carries
+`goal_reward` into the worker's return. **`--worker-success-bonus` was removed
+on 2026-09-24**: it defaulted to 0.0 and no run used it once §5.3 had settled
+the default. Its code is in §5.1, and the comment where the flag used to be in
+`algorithms/hppo/hppo_train.py` keeps its sizing rule and its numbers.
 
 ---
 
@@ -198,7 +201,7 @@ signature, and with a plant-derived box it solves 9/9.)
 
 ## 5. The fix
 
-### 5.1 `--worker-success-bonus` (default 0.0 — the ablation arm)
+### 5.1 `--worker-success-bonus` (default 0.0 — the ablation arm; removed 2026-09-24)
 
 Adds a one-off bonus to the worker's reward on the step the episode terminates
 successfully:

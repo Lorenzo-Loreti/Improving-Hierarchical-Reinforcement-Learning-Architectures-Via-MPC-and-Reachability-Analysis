@@ -366,5 +366,6 @@ The table above was measured at the scripts' own defaults, i.e. *without* `$P`;
 pinning it is the stricter protocol, not the one those rows came from.
 
 `script_hppo.py` picks up `--worker-extrinsic-coef 0.02` from its defaults. To
-reproduce the pre-fix numbers instead, add `--worker-extrinsic-coef 0` (and
-`--worker-success-bonus 0`).
+reproduce the pre-fix numbers instead, add `--worker-extrinsic-coef 0`. (This
+used to say "and `--worker-success-bonus 0`", which is that flag's default. The
+flag was removed on 2026-09-24.)

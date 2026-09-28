@@ -168,14 +168,16 @@ def parse_args(scenario):
     # worker is a QP, not a policy).
     #
     # The pathology is a property of this worker reward, not of the slalom,
-    # so every scenario carries the same two knobs at the same defaults. The
+    # so every scenario carries the same knob at the same default. The
     # tunnel does not discriminate either way, being solved long before the
     # pathology can bind within its budget; its default is set to match the
     # slalom's anyway, so that the two scenarios compare *the same algorithm*.
     #
-    # The two knobs below are two different ways to put the environment's
-    # terminal back into the worker's return; 0.0 restores the pre-fix reward
-    # exactly for either. A 4-variant x 2-seed, 500k-step ablation with
+    # There used to be two knobs, two different ways to put the environment's
+    # terminal back into the worker's return, 0.0 restoring the pre-fix reward
+    # exactly for either: --worker-extrinsic-coef (below) and
+    # --worker-success-bonus (removed 2026-09-24; its record is further down).
+    # A 4-variant x 2-seed, 500k-step ablation with
     # --early-stop-success-rate and --solved-early-stop *disabled* (so a fix
     # that merely delays the collapse cannot be mistaken for one that removes
     # it) settled which is needed:
@@ -242,30 +244,36 @@ def parse_args(scenario):
     # clean 4-6x hierarchy tax. See docs/benchmark.md section 3.
     #
     # So: feudal purity was the right prior and the wrong call. 0.02 is the
-    # default; --worker-success-bonus 20 is kept as the minimal-intervention
-    # ablation arm, and is the one to use when the question is specifically
-    # "what does the terminal alone fix?". Both knobs are live; setting both
-    # is double-counting, since the extrinsic mix already carries
-    # goal_reward into the worker's return.
-    parser.add_argument("--worker-success-bonus", type=float, default=0.0,
-        help="one-off bonus added to the *worker's* reward on the step the "
-             "episode terminates successfully. The targeted fix for the "
-             "termination-avoidance pathology above: it makes crossing the "
-             "goal line worth more to the worker than the goal-closing reward "
-             "it forgoes by crossing. Size it against that forgone value, not "
-             "against the environment's reward: the worker earns about "
-             "v_max*dt per step indefinitely, so what it gives up by "
-             "terminating is v_max*dt/(1-gamma) approx 12 at the defaults, "
-             "and the default 20.0 clears that with ~1.7x margin. Re-derive "
-             "it if --gamma, --manager-freq or the velocity limit move. "
-             "Not the default: see the comparison above. 0.0 (default) with "
-             "--worker-extrinsic-coef also 0.0 restores the pre-fix reward, "
-             "which collapses")
+    # default.
+    #
+    # --worker-success-bonus, removed 2026-09-24. It was kept for a while
+    # after the comparison above as the minimal-intervention ablation arm,
+    # the one to use when the question is specifically "what does the
+    # terminal alone fix?": a one-off bonus added to the worker's reward on
+    # the step the episode terminated successfully,
+    #
+    #   worker_succeeded = terminated & info["final_info"]["is_success"]
+    #   worker_reward[worker_succeeded] += args.worker_success_bonus
+    #
+    # applied right after the extrinsic mix below. It read the success flag
+    # rather than `terminated` alone, so that adding another terminal
+    # condition later could not silently start paying it. It was sized
+    # against the value the worker forgoes by crossing, not against the
+    # environment's reward: the worker earns about v_max*dt per step
+    # indefinitely, so what it gives up by terminating is v_max*dt/(1-gamma)
+    # approx 12 at the defaults, which the 20.0 of the runs above cleared
+    # with ~1.7x margin (to be re-derived if --gamma, --manager-freq or the
+    # velocity limit move). Setting it together with the extrinsic mix was
+    # double-counting, since the mix already carries goal_reward into the
+    # worker's return. It defaulted to 0.0 and no run used it after this
+    # comparison, so it went; the numbers above are its record, and
+    # docs/worker-termination-avoidance.md section 5.1 has the rest.
     parser.add_argument("--worker-extrinsic-coef", type=float, default=0.02,
         help="FeUdal-Networks-style mixing coefficient: add this times the "
              "environment's own reward to the worker's intrinsic reward, so "
              "the worker sees r_int + coef * r_env instead of r_int alone. "
-             "The broader alternative to --worker-success-bonus: it fixes the "
+             "The broader alternative to the removed --worker-success-bonus "
+             "(see above): it fixes the "
              "same termination-avoidance pathology (goal_reward enters the "
              "worker's return) and additionally makes the worker itself aware "
              "of wall contacts and of the clock, instead of leaving every "
@@ -274,10 +282,9 @@ def parse_args(scenario):
              "tunnel's goal_reward of 200), a contact at -1.0 and a step at "
              "-0.02 in the worker's units, "
              "against an intrinsic stream of ~0.12/step -- which is why it "
-             "is the default: it is the only one of the two that makes the "
+             "is the default: unlike the success bonus, it makes the "
              "worker itself avoid walls, and the _reach variants need that. "
-             "0.0 restores the pre-fix reward unless --worker-success-bonus "
-             "is set")
+             "0.0 restores the pre-fix reward, which collapses")
     parser.add_argument("--num-envs", type=int, default=8,
         help=f"the number of parallel {scenario.name} environments to collect "
              "rollouts from. Rollouts come from a batched vector env; each "
@@ -736,8 +743,9 @@ def train(args, scenario):
         completed_collision_counts = []
         completed_collision_impacts = []
         # Direct instrumentation of the termination-avoidance mechanism (see
-        # --worker-success-bonus): what the worker actually does in the strip
-        # of states immediately before the goal line. A healthy worker keeps
+        # the "worker termination-avoidance" block in parse_args): what the
+        # worker actually does in the strip of states immediately before the
+        # goal line. A healthy worker keeps
         # a_x positive there and crosses; the collapsed one brakes with
         # a_x approx -2 and orbits. Logged per update so the onset is visible
         # in the same plot as the eval success rate it precedes by ~30 updates.
@@ -794,21 +802,15 @@ def train(args, scenario):
                              - np.linalg.norm(next_goal, axis=-1))
 
             # Put the environment's own outcome back into the worker's return
-            # -- see --worker-success-bonus / --worker-extrinsic-coef for the
-            # termination-avoidance pathology both of these exist to remove.
-            # Applied here, before the truncation bootstrap below, so the
+            # -- see --worker-extrinsic-coef for the termination-avoidance
+            # pathology this exists to remove. Applied here, before the
+            # truncation bootstrap below, so the
             # bootstrapped value and the reward it is folded into are on the
-            # same (mixed) scale.
+            # same (mixed) scale. (The removed --worker-success-bonus was
+            # applied right after it; see the comment above that flag's
+            # former place in parse_args.)
             if args.worker_extrinsic_coef != 0.0:
                 worker_reward = worker_reward + args.worker_extrinsic_coef * env_reward
-            if args.worker_success_bonus != 0.0:
-                # `terminated` is only ever a goal-line crossing in this
-                # environment (a wall contact is non-terminal), but read the
-                # success flag rather than relying on that, so adding another
-                # terminal condition later cannot silently start paying this
-                # bonus for it.
-                worker_succeeded = terminated & info["final_info"]["is_success"]
-                worker_reward[worker_succeeded] += args.worker_success_bonus
 
             # Handle truncation bootstrapping for the worker. The episode did
             # not end, the clock did: fold the value of the state it was cut at
