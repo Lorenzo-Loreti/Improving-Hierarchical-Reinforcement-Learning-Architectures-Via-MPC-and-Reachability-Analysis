@@ -410,6 +410,16 @@ def analyze_phase(study, args):
                  f"(pass the --total-timesteps the seeds were trained with)")
     seeds = sorted(runs)
     config = read_config(runs[seeds[0]])
+    # Runs trained with a disturbance (--noise-bound-p/-v, since 2026-09-28)
+    # are not supported yet: this analysis solves the oracle and replays each
+    # policy on the one environment `make_env` builds, and the oracle's
+    # open-loop replay is only valid undisturbed (see the oracle_env comment
+    # in the training loops). Refused rather than analyzed on the wrong
+    # environment.
+    if config.get("noise_bound_p", 0.0) or config.get("noise_bound_v", 0.0):
+        sys.exit(f"[{study.label}] {runs[seeds[0]]} was trained with a disturbance "
+                 f"(noise_bound_p={config.get('noise_bound_p')}, noise_bound_v="
+                 f"{config.get('noise_bound_v')}); study.py only analyzes undisturbed runs")
     env = study.make_env(config)
     solver = MinTimeSolver()
     print(f"[{study.label}] analyzing seeds {seeds}")

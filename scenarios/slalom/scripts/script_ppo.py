@@ -19,10 +19,11 @@ from envs.width_profile import slalom_profile
 from ppo_train import Scenario, main
 
 
-def make_env_config(u_max=None):
+def make_env_config(u_max=None, **overrides):
     return SlalomEnvConfig(
         width_profile=slalom_profile(),
         **({} if u_max is None else {"u_max": u_max}),
+        **overrides,
     )
 
 

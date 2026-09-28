@@ -26,7 +26,7 @@ import argparse
 import os
 import random
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable
 
 import numpy as np
@@ -97,6 +97,19 @@ def parse_args(scenario):
              "v_y, but the episode continues. Defaults to the env config's "
              "own default, so omitting this reproduces the shared environment "
              "every other script trains against -- see envs/config.py")
+
+    parser.add_argument("--noise-bound-p", type=float, default=0.0,
+        help="half-width, in metres, of the uniform disturbance added to each "
+             "position every step (the env config's noise_bound_p, since "
+             "2026-09-28). 0.0, the default, is the deterministic environment "
+             "every earlier run trained on, unchanged bit for bit. The same "
+             "flag as PPO+MPC's (algorithms/ppo_mpc/ppo_mpc_train.py), so the "
+             "algorithms can be compared on one disturbed environment; the "
+             "level chosen there is 0.005 with --noise-bound-v 0.05")
+    parser.add_argument("--noise-bound-v", type=float, default=0.0,
+        help="half-width, in m/s, of the uniform disturbance added to each "
+             "velocity every step (the env config's noise_bound_v); see "
+             "--noise-bound-p")
 
     # Algorithm specific arguments
     parser.add_argument("--total-timesteps", type=int, default=scenario.total_timesteps,
@@ -776,6 +789,8 @@ def train(args, scenario):
 
     env_config = scenario.make_env_config(
         contact_penalty=args.contact_penalty,
+        noise_bound_p=args.noise_bound_p,
+        noise_bound_v=args.noise_bound_v,
         **({} if args.env_u_max is None else {"u_max": args.env_u_max}),
     )
 
@@ -844,8 +859,15 @@ def train(args, scenario):
     # here and reused on every later eval pass instead of being recomputed.
     # Any MinTimeSolver infeasibility raises here, at startup, rather than
     # mid-training.
-    solved_grid = spawn_grid(eval_env, args.solved_grid_nx, args.solved_grid_ny)
-    optimal_grid = precompute_optimal_grid(eval_env, solved_grid, solver=MinTimeSolver())
+    # The oracle replays open-loop actions through an env, which a
+    # disturbance would knock off course, so it gets an undisturbed copy of
+    # the environment (since 2026-09-28; the same one as before whenever
+    # --noise-bound-p/-v are 0). Under a disturbance its returns are an upper
+    # reference; evaluation and the solved-check still run on the disturbed
+    # eval_env, reseeded per episode so every pass sees the same disturbances.
+    oracle_env = scenario.env_cls(config=replace(env_config, noise_bound_p=0.0, noise_bound_v=0.0))
+    solved_grid = spawn_grid(oracle_env, args.solved_grid_nx, args.solved_grid_ny)
+    optimal_grid = precompute_optimal_grid(oracle_env, solved_grid, solver=MinTimeSolver())
     optimal_returns = np.array([r.total_return for _, r in optimal_grid])
     print(f"Solved-check: precomputed optimal returns for {len(optimal_grid)} fixed initial "
           f"conditions (mean={optimal_returns.mean():.1f}, min={optimal_returns.min():.1f}, "
@@ -1359,7 +1381,8 @@ def train(args, scenario):
             # controller as the random eval above on every pass, compared
             # point-by-point against the oracle's precomputed optimal return
             # for that exact starting position -- see algorithms/solved_check.py.
-            solved_result = check_solved(lambda: make_policy_fn(agent), eval_env, optimal_grid, args.solved_tolerance)
+            solved_result = check_solved(lambda: make_policy_fn(agent), eval_env, optimal_grid, args.solved_tolerance,
+                                         seed=args.seed)
             print(f"Solved-check at update {update}: solved={solved_result.solved} "
                   f"worst_gap={solved_result.worst_gap:.2f} at "
                   f"p_x0={solved_result.worst_point[0]:.2f} p_y0={solved_result.worst_point[1]:.2f} "

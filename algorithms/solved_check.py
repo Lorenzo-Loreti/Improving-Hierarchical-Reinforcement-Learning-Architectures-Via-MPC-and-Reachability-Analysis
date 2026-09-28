@@ -49,17 +49,33 @@ class SolvedCheckResult:
     worst_point: np.ndarray     # the init_state with the largest gap
 
 
-def check_solved(make_policy_fn, env, optimal_grid, tolerance):
+def check_solved(make_policy_fn, env, optimal_grid, tolerance, seed=None):
     """`optimal_grid` is `precompute_optimal_grid`'s output: a list of
     `(init_state, OptimalResult)` pairs. Resets `env` to each `init_state`
     in turn (via the same `options={"init_state": ...}` support the oracle
     itself uses), builds a fresh `policy_fn` for that one episode via
     `make_policy_fn()`, and rolls it out to termination.
+
+    `seed`, if given, reseeds `env` at grid point i with `seed + i`. It only
+    matters for a disturbed environment (noise_bound_p/noise_bound_v > 0,
+    since 2026-09-28): the disturbance is then drawn from the env's
+    generator, and without a reseed every pass would face whatever that
+    generator was left at, so the same policy could pass one check and fail
+    the next. With it every pass sees the same disturbance sequence at each
+    grid point. On the deterministic environment nothing is drawn from the
+    generator once `init_state` fixes the start, so the seed changes nothing.
+
+    The oracle's returns come from the *undisturbed* environment
+    (precompute_optimal_grid replays open-loop actions, which a disturbance
+    would knock off course). Under a disturbance they are an upper reference,
+    not an attainable target: a robust controller also pays for its safety
+    margin in time.
     """
     agent_returns = []
     optimal_returns = []
-    for init_state, optimal_result in optimal_grid:
-        obs, _ = env.reset(options={"init_state": init_state})
+    for i, (init_state, optimal_result) in enumerate(optimal_grid):
+        obs, _ = env.reset(seed=None if seed is None else seed + i,
+                           options={"init_state": init_state})
         policy_fn = make_policy_fn()
         total_reward = 0.0
         done = False

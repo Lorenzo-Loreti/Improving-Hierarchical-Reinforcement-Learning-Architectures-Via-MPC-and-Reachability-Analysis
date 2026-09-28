@@ -18,8 +18,8 @@ from envs.vec_tunnel_env import TunnelVecEnv
 from ppo_train import Scenario, main
 
 
-def make_env_config(u_max=None):
-    return TunnelEnvConfig(**({} if u_max is None else {"u_max": u_max}))
+def make_env_config(u_max=None, **overrides):
+    return TunnelEnvConfig(**({} if u_max is None else {"u_max": u_max}), **overrides)
 
 
 TUNNEL = Scenario(
