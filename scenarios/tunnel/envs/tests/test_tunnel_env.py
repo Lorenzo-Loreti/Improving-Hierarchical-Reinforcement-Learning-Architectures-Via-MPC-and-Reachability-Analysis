@@ -182,7 +182,7 @@ def test_default_config_pins_current_tuned_values():
     assert config.max_steps == 200
     assert config.step_penalty == -1.0
     assert config.contact_penalty == -50.0
-    assert config.goal_reward == 200.0
+    assert config.goal_reward == 1000.0
     assert config.progress_reward_coef == 10.0
 
 

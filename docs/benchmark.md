@@ -130,6 +130,13 @@ anyone re-running the cross-algorithm comparison.
 
 ## Tunnel (oracle mean optimal return = 213.0)
 
+Measured at the tunnel's former `goal_reward` of 200. Since 2026-09-24 the
+tunnel uses the slalom's 1000 (`scenarios/tunnel/envs/config.py`), so on the
+current scale the oracle's mean optimal return is 1013.0. Returns below are on
+the old scale, and steps to solve are not directly comparable: the change
+alters what every learner is trained on, hPPO's worker most of all, whose
+terminal at `--worker-extrinsic-coef 0.02` went from +4 to +20.
+
 | algorithm | solved | steps to solve | final return | % of oracle | contacts/ep |
 | --- | --- | --- | --- | --- | --- |
 | PPO (flat) | 3/3 | 20k / 20k / 20k | 217 / 217 / 216 | 101.7 % | 0 / 0 / 0 |

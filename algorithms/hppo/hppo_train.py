@@ -7,7 +7,8 @@ defaults and their comments and help texts -- and those had drifted. The
 slalom's carried the full diagnoses and ablations, the tunnel's pointed back
 to them and added a few tunnel-specific notes, and one had simply gone stale
 (the tunnel's --worker-extrinsic-coef help quoted the slalom's +20 terminal,
-where the tunnel's goal_reward of 200 gives +4). The texts below are the
+where the tunnel's goal_reward of 200 gave +4; since 2026-09-24 the tunnel
+uses the slalom's 1000, so +20 now holds for both). The texts below are the
 slalom's, with the tunnel's notes merged in; each script is now a thin wrapper
 that describes its scenario in a `Scenario` and hands it to `main`, as flat
 PPO's do (algorithms/ppo/ppo_train.py).
@@ -277,10 +278,11 @@ def parse_args(scenario):
              "same termination-avoidance pathology (goal_reward enters the "
              "worker's return) and additionally makes the worker itself aware "
              "of wall contacts and of the clock, instead of leaving every "
-             "collision the manager's problem. At the slalom's defaults a "
-             "coefficient of 0.02 puts the terminal at +20 (+4 at the "
-             "tunnel's goal_reward of 200), a contact at -1.0 and a step at "
-             "-0.02 in the worker's units, "
+             "collision the manager's problem. At the env config defaults, "
+             "which both scenarios share since 2026-09-24, a "
+             "coefficient of 0.02 puts the terminal at +20 (it was +4 on the "
+             "tunnel while its goal_reward was 200), a contact at -1.0 and a "
+             "step at -0.02 in the worker's units, "
              "against an intrinsic stream of ~0.12/step -- which is why it "
              "is the default: unlike the success bonus, it makes the "
              "worker itself avoid walls, and the _reach variants need that. "
@@ -291,16 +293,17 @@ def parse_args(scenario):
              "the only extrinsic term that survives an orbit), and crossing it "
              "about coef*goal_reward, so the terminal only wins above "
              "coef = (r_orbit/(1-gamma)) / (goal_reward + 1/(1-gamma)). "
-             "Bounding r_orbit by v_max*dt = 0.12 gives ~0.011 on the slalom "
-             "and ~0.04 on the tunnel, and that bound proved conservative. "
+             "Bounding r_orbit by v_max*dt = 0.12 gives ~0.011, and that bound "
+             "proved conservative. "
              "The sweep (scenarios/slalom/scripts/sweep_extrinsic_coef.py, "
              "2026-09-24; 10 seeds per arm at 500k with every early stop off) "
              "found 0.01 and 0.005 as sound as 0.02: 10/10 solved, first "
              "solve median 72k / 82k against 72k (p = 0.78 / 0.46), 10/10 "
              "still solved at the end, and no collapse. The collapsed runs at "
              "0 harvest r_orbit ~0.055, which puts the measured floor near "
-             "0.005 on the slalom (no margin left there) and ~0.018 on the "
-             "tunnel, where 0.02 therefore sits just above it. The same "
+             "0.005 (no margin left there). It applies to both scenarios now "
+             "that they share goal_reward. At the tunnel's former 200 the "
+             "floor was ~0.018, and its 0.02 sat just above it. The same "
              "sweep found the cost of a larger coefficient on the "
              "hierarchy side: at 0.02 the worker threads the slalom almost "
              "unaided, with ~1 wall contact per episode when the manager is "

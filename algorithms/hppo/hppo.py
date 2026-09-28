@@ -512,7 +512,10 @@ class HPPOAgent:
         # that gap matters. The worker's returns are smaller but not O(1)
         # either since its reward mixes in 0.02 x the environment's (see
         # --worker-extrinsic-coef): mean ~10-14 / std ~5-7 on the slalom,
-        # ~1.5-2.5 / ~2 on the tunnel. Applied to both heads regardless, so
+        # ~1.5-2.5 / ~2 on the tunnel. (The tunnel figures were measured at
+        # its former goal_reward of 200; it has used the slalom's 1000 since
+        # 2026-09-24, so expect its statistics to move toward the slalom's.)
+        # Applied to both heads regardless, so
         # they never differ in the space their critic regresses in, which
         # would make their metrics incomparable. (This comment used to call
         # the worker's normalization "close to a no-op" and quote O(400)

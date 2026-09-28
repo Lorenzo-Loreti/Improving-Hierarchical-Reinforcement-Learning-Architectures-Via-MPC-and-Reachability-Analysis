@@ -191,7 +191,9 @@ class PPOAgent:
         # ~90 / std ~90 on the tunnel -- against a freshly initialized critic
         # that outputs ~0; see RunningMeanStd's docstring (algorithms/common.py)
         # for why that gap matters. (This comment used to quote O(400) at
-        # gamma=0.999, the discount before the switch to 0.99.)
+        # gamma=0.999, the discount before the switch to 0.99. The tunnel
+        # figures were measured at its former goal_reward of 200; it has used
+        # the slalom's 1000 since 2026-09-24.)
         self.ret_rms = RunningMeanStd()
 
         # Two parameter groups, so the critic can run at a higher learning

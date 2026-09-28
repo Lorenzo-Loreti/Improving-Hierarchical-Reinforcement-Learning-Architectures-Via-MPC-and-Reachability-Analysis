@@ -41,7 +41,10 @@ zero over an orbit. When it crosses, it earns coef * goal_reward once. So
 and the terminal only wins above
 
     coef* = (v_max*dt / (1 - gamma)) / (goal_reward + |step_penalty| / (1 - gamma))
-          = 12 / (1000 + 100) ~ 0.011 on the slalom   (0.04 on the tunnel)
+          = 12 / (1000 + 100) ~ 0.011 on the slalom
+
+(0.04 on the tunnel while its goal_reward was 200; since 2026-09-24 it shares
+the slalom's 1000, and with it this floor.)
 
 The default arms bracket that floor. 0.02 is the default, with a margin of 2x
 (+20 against ~10). 0.015 still clears it. 0.01 sits just below it, where
@@ -58,8 +61,9 @@ delayed collapse as a clean one.
 (Result of the first sweep, 2026-09-24, 10 seeds per arm: the prediction was
 too conservative. 0.01 and 0.005 did not collapse on any seed. The collapsed
 runs at 0 harvest ~0.055 m of goal progress per step, not 0.12, and with that
-rate in place of v_max*dt the floor is ~0.005 on the slalom and ~0.018 on the
-tunnel. v_max*dt is not a hard ceiling on the progress either: the
+rate in place of v_max*dt the floor is ~0.005 on the slalom, and on the tunnel
+too now that the two share goal_reward (~0.018 at its former 200). v_max*dt is
+not a hard ceiling on the progress either: the
 environment limits speed per axis, so diagonal motion covers slightly more,
 and runs log up to ~0.126.)
 

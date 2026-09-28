@@ -37,7 +37,18 @@ class TunnelEnvConfig:
     # section), so it needs its own empirical pass rather than inheriting
     # the old terminal-reward scale.
     contact_penalty: float = -50.0
-    goal_reward: float = 200.0
+    # 1000 since 2026-09-24, the same as SlalomEnvConfig, so the two scenarios
+    # share one reward scale and every reward-scaled knob means the same thing
+    # on both. It had been 200 since before the slalom went from 500 to 1000;
+    # the tunnel never followed. The gap mattered for hPPO. At
+    # --worker-extrinsic-coef 0.02 the tunnel's worker got a +4 terminal. That
+    # is below the ~5.5 that stalling in front of the line is worth to it (see
+    # that flag's help in algorithms/hppo/hppo_train.py), where the slalom's
+    # worker got +20. Tunnel returns measured before this change are on the old
+    # scale. The oracle's mean optimal return on the solved-check grid was
+    # 213.0 there, as quoted in docs/benchmark.md and
+    # docs/goal-box-saturation.md; on this scale it is 1013.0, the slalom's.
+    goal_reward: float = 1000.0
 
     # Potential-based progress shaping: adds `progress_reward_coef * (p_x' - p_x)`
     # to the reward every step, on top of whichever branch (time penalty /

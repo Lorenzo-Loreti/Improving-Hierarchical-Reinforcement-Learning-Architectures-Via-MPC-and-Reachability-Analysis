@@ -366,6 +366,12 @@ PPO+MPC (956) on this task.**
 0.6 → 19.9 exactly as designed. The fix is on by default there anyway, so that
 slalom and tunnel compare *the same algorithm*.
 
+(These runs used the tunnel's former `goal_reward` of 200. At that scale
+`--worker-extrinsic-coef 0.02` gave the worker a +4 terminal, and the
+coefficient's measured floor was about 0.018 — see §10. Since 2026-09-24 the
+tunnel uses the slalom's 1000, so the same coefficient gives +20 on both
+scenarios.)
+
 This is the reason the slalom carries the whole argument, and it is worth being
 explicit that it leaves the evidence resting on **one scenario**: see
 [§10](#10-what-this-evidence-does-not-cover).
@@ -495,5 +501,7 @@ Stated plainly, because the shape of the argument makes it easy to over-read.
   0.005. The script's docstring derives a floor for the coefficient, below
   which the terminal no longer outweighs stalling. Its first estimate (0.011 on
   the slalom) proved conservative. Recomputed with the goal progress the
-  collapsed orbits actually harvest, the floor is about 0.005 on the slalom
-  and about 0.018 on the tunnel.
+  collapsed orbits actually harvest, the floor is about 0.005 on the slalom.
+  On the tunnel it was about 0.018 while that scenario's `goal_reward` was 200.
+  Since 2026-09-24 both scenarios share `goal_reward` 1000, and with it the
+  same floor.

@@ -151,6 +151,9 @@ exactly the reachable radius makes "full speed" require an action of exactly
 
 Swept on both scenarios, 3 seeds each:
 
+(The tunnel column was measured at the tunnel's former `goal_reward` of 200. It
+has used the slalom's 1000 since 2026-09-24, which puts the oracle at 1013.0.)
+
 | box | slalom solved | slalom contacts/ep | tunnel solved at | tunnel return (oracle 213.0) |
 | --- | --- | --- | --- | --- |
 | 10.0 (old) | 0/3 | 1.70 | 8k–16k | 213 / 214 / 213 |
