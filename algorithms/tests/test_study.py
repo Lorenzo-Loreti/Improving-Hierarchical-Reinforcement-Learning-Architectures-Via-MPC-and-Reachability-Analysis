@@ -8,7 +8,31 @@ import pytest
 from envs.config import TunnelEnvConfig
 from envs.tunnel_env import TunnelEnv
 from optimal_solver import MinTimeSolver
-from study import _choose_progression, _parse_seeds, oracle_rollout, rollout
+from study import (PHASES, _choose_progression, _parse_seeds, oracle_rollout,
+                   parse_known_args_with_phase, rollout)
+
+
+def _phase_parser():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("phase", nargs="?", default="all", choices=PHASES)
+    parser.add_argument("--seeds", type=str, default="1-20")
+    return parser
+
+
+@pytest.mark.parametrize("argv, phase, passthrough", [
+    # A pass-through flag's value used to be taken for the phase.
+    (["--anneal-lr", "true"], "all", ["--anneal-lr", "true"]),
+    (["--contact-penalty", "-10"], "all", ["--contact-penalty", "-10"]),
+    (["--seeds", "1-3", "--worker-obs", "velocity"], "all", ["--worker-obs", "velocity"]),
+    (["train", "--anneal-lr", "true"], "train", ["--anneal-lr", "true"]),
+    (["plot"], "plot", []),
+    ([], "all", []),
+])
+def test_the_phase_is_only_ever_the_first_argument(argv, phase, passthrough):
+    args, rest = parse_known_args_with_phase(_phase_parser(), argv)
+    assert args.phase == phase
+    assert rest == passthrough
 
 
 def test_seed_lists_parse_ranges_and_lists():

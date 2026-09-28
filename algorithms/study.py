@@ -136,6 +136,26 @@ class Study:
 # command line
 # --------------------------------------------------------------------------
 
+PHASES = ["all", "train", "analyze", "plot"]
+
+
+def parse_known_args_with_phase(parser, argv=None):
+    """`parser.parse_known_args()` for a script whose optional first
+    positional is the phase and whose unknown arguments are passed through to
+    a training script.
+
+    The phase is read off the first argument by hand. Left to argparse, an
+    optional positional takes the first free-standing value it meets, which
+    here is the value of the first pass-through flag. `--anneal-lr true`
+    then fails as "invalid choice: 'true'", and so does `--contact-penalty
+    -10`, since a parser with no negative-number options reads -10 as a
+    positional. Both ran fine only when the phase was written out first.
+    The parser still declares `phase`, so that --help lists it."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    phase = argv.pop(0) if argv and argv[0] in PHASES else "all"
+    return parser.parse_known_args([phase] + argv)
+
+
 def _parse_seeds(text):
     """'1-13' / '1,4,7' / '1-3,9' -> sorted list of ints."""
     seeds = set()
@@ -154,10 +174,10 @@ def parse_args(study):
         description=f"{study.label} seed study on the {study.scenario}: train the seeds, "
                     f"then plot learning curves and trajectories against the oracle. Any "
                     f"argument not listed here is passed through to {os.path.basename(study.train_script)}.")
-    parser.add_argument("phase", nargs="?", default="all", choices=["all", "train", "analyze", "plot"],
-        help="train: run the seeds (skips finished ones); analyze: compute curves, oracle "
-             "and rollouts, then plot; plot: redraw the figures from analysis.pkl; "
-             "all (default): train, then analyze")
+    parser.add_argument("phase", nargs="?", default="all", choices=PHASES,
+        help="must come first. train: run the seeds (skips finished ones); analyze: compute "
+             "curves, oracle and rollouts, then plot; plot: redraw the figures from "
+             "analysis.pkl; all (default): train, then analyze")
     parser.add_argument("--out", type=str, default=study.out_dir,
         help="study directory: runs/, logs/, figures/, analysis.pkl and summary.md go here")
     parser.add_argument("--seeds", type=str, default="1-20",
@@ -176,7 +196,7 @@ def parse_args(study):
         help="crop the learning-curve x-axis here (default: the whole budget)")
     parser.add_argument("--no-animation", action="store_true",
         help="skip the GIF/MP4 animation, the slowest figure")
-    args, passthrough = parser.parse_known_args()
+    args, passthrough = parse_known_args_with_phase(parser)
     args.seed_list = _parse_seeds(args.seeds)
     if passthrough and args.phase not in ("all", "train"):
         parser.error(f"unrecognized arguments for the {args.phase} phase: {' '.join(passthrough)}")

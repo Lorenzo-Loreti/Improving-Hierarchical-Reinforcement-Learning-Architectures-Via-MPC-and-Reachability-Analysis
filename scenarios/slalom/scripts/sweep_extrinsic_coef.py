@@ -151,7 +151,8 @@ sys.path.append(os.path.abspath(os.path.join(HERE, '..', '..', '..', 'algorithms
 sys.path.append(os.path.abspath(os.path.join(HERE, '..', '..', '..', 'algorithms')))
 from study_hppo import STUDY
 from hppo_train import load_agent, make_policy_fn, worker_input
-from study import find_run, rollout, oracle_rollout, _first_solve, _parse_seeds
+from study import (find_run, rollout, oracle_rollout, _first_solve, _parse_seeds,
+                   PHASES, parse_known_args_with_phase)
 from metrics_log import read_config, read_metrics, series
 from optimal_solver import MinTimeSolver, spawn_grid
 
@@ -176,9 +177,6 @@ UPDATE_KEYS = ["worker/reward_intrinsic", "worker/reward_extrinsic", "worker/ext
                "charts/worker_ax_near_goal"]
 
 
-PHASES = ["all", "train", "analyze", "plot"]
-
-
 def arm_name(coef):
     return f"coef_{coef:g}"
 
@@ -192,10 +190,9 @@ def parse_args():
         description="hPPO on the slalom across --worker-extrinsic-coef: train every (coef, seed) "
                     "with early stops off, then plot performance and the hierarchy probes. Any "
                     "argument not listed here is passed through to script_hppo.py.")
-    # The phase is read off the first argument by hand rather than declared as
-    # an optional positional: argparse would otherwise take the value of the
-    # first pass-through flag (the `velocity` of `--worker-obs velocity`) for
-    # the phase. It is declared here only so --help lists it.
+    # Parsed by study.parse_known_args_with_phase: see there for why the phase
+    # must come first (this script is where the bug first showed, as the
+    # `velocity` of `--worker-obs velocity` taken for the phase).
     parser.add_argument("phase", nargs="?", default="all", choices=PHASES,
         help="must come first. train: run every (coef, seed) (skips finished ones); analyze: "
              "read the curves, probe every final.pt, then plot; plot: redraw from "
@@ -213,9 +210,7 @@ def parse_args():
         help="training budget of every run")
     parser.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2),
         help="runs trained in parallel, each pinned to one thread")
-    argv = sys.argv[1:]
-    phase = argv.pop(0) if argv and argv[0] in PHASES else "all"
-    args, passthrough = parser.parse_known_args([phase] + argv)
+    args, passthrough = parse_known_args_with_phase(parser)
     # Absolute, because the trainers run from the scenario's scripts/
     # directory and resolve a relative --checkpoint-dir against it: a
     # relative --out once sent a whole sweep's runs to scripts/<out>/.
