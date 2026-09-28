@@ -7,6 +7,8 @@ the hierarchy is still a hierarchy at the amount it gets.
     python scenarios/slalom/scripts/sweep_extrinsic_coef.py analyze   # after training: recompute and plot
     python scenarios/slalom/scripts/sweep_extrinsic_coef.py plot      # redraw the figures only
     python scenarios/slalom/scripts/sweep_extrinsic_coef.py --coefs 0.02,0.01,0 --seeds 1-5
+    python scenarios/slalom/scripts/sweep_extrinsic_coef.py --coefs 0.02,0 --worker-obs velocity \
+        --total-timesteps 1000000 --out scenarios/slalom/studies/blind_worker   # a worker blind to position
     python scenarios/slalom/scripts/sweep_extrinsic_coef.py --help
 
 Training is resumable (finished runs are skipped), and any argument this
@@ -173,6 +175,9 @@ UPDATE_KEYS = ["worker/reward_intrinsic", "worker/reward_extrinsic", "worker/ext
                "charts/worker_ax_near_goal"]
 
 
+PHASES = ["all", "train", "analyze", "plot"]
+
+
 def arm_name(coef):
     return f"coef_{coef:g}"
 
@@ -186,10 +191,14 @@ def parse_args():
         description="hPPO on the slalom across --worker-extrinsic-coef: train every (coef, seed) "
                     "with early stops off, then plot performance and the hierarchy probes. Any "
                     "argument not listed here is passed through to script_hppo.py.")
-    parser.add_argument("phase", nargs="?", default="all", choices=["all", "train", "analyze", "plot"],
-        help="train: run every (coef, seed) (skips finished ones); analyze: read the curves, "
-             "probe every final.pt, then plot; plot: redraw from analysis.pkl; "
-             "all (default): train, then analyze")
+    # The phase is read off the first argument by hand rather than declared as
+    # an optional positional: argparse would otherwise take the value of the
+    # first pass-through flag (the `velocity` of `--worker-obs velocity`) for
+    # the phase. It is declared here only so --help lists it.
+    parser.add_argument("phase", nargs="?", default="all", choices=PHASES,
+        help="must come first. train: run every (coef, seed) (skips finished ones); analyze: "
+             "read the curves, probe every final.pt, then plot; plot: redraw from "
+             "analysis.pkl; all (default): train, then analyze")
     parser.add_argument("--out", type=str, default=DEFAULT_OUT,
         help="sweep directory: coef_<value>/, figures/, analysis.pkl and summary.md go here")
     parser.add_argument("--coefs", type=str, default=DEFAULT_COEFS,
@@ -203,7 +212,13 @@ def parse_args():
         help="training budget of every run")
     parser.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2),
         help="runs trained in parallel, each pinned to one thread")
-    args, passthrough = parser.parse_known_args()
+    argv = sys.argv[1:]
+    phase = argv.pop(0) if argv and argv[0] in PHASES else "all"
+    args, passthrough = parser.parse_known_args([phase] + argv)
+    # Absolute, because the trainers run from the scenario's scripts/
+    # directory and resolve a relative --checkpoint-dir against it: a
+    # relative --out once sent a whole sweep's runs to scripts/<out>/.
+    args.out = os.path.abspath(args.out)
     args.coef_list = sorted({float(c) for c in args.coefs.split(",") if c.strip()}, reverse=True)
     args.seed_list = _parse_seeds(args.seeds)
     if passthrough and args.phase not in ("all", "train"):
@@ -443,6 +458,13 @@ def analyze_phase(args):
                  f"(pass the --total-timesteps the runs were trained with)")
 
     config = read_config(next(iter(next(iter(arms.values())).values())))
+    # Pass-through flags apply to every arm alike, so one sweep directory must
+    # not mix, say, sighted and blind workers (--worker-obs): every other
+    # difference between arms would then be confounded with it.
+    worker_obs = {read_config(r).get("worker_obs", "full") for runs in arms.values() for r in runs.values()}
+    if len(worker_obs) > 1:
+        sys.exit(f"[sweep] {args.out} mixes runs with --worker-obs {sorted(worker_obs)}: "
+                 f"give each its own --out")
     env = STUDY.make_env(config)
     gamma = float(config["gamma"])
     solver = MinTimeSolver()
@@ -477,6 +499,7 @@ def analyze_phase(args):
         "floor": extrinsic_floor(env.config, gamma),
         "oracle_grid_return": float(np.mean([o["return"] for o in oracle_grid])),
         "max_goal_bound": float(config["max_goal_bound"]),
+        "worker_obs": worker_obs.pop(),
     }
     path = os.path.join(args.out, "analysis.pkl")
     with open(path, "wb") as f:
@@ -553,6 +576,8 @@ def write_summary(analysis, out_dir):
     lines = [
         "# hPPO on the slalom across --worker-extrinsic-coef",
         "",
+        f"Worker observation: `{analysis.get('worker_obs', 'full')}`; goal box "
+        f"{analysis['max_goal_bound']:g} m. "
         f"{analysis['total_timesteps']} steps per run, early stops off. Conservative floor of the "
         f"coefficient (terminal = value of stalling): **{analysis['floor']:.4f}**; see the "
         f"docstring of scenarios/slalom/scripts/sweep_extrinsic_coef.py. Probes replay each "

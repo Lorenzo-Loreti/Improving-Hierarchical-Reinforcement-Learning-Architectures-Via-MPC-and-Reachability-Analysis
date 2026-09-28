@@ -338,6 +338,80 @@ def test_checkpoint_from_the_autotuning_era_still_loads():
 
 
 # --------------------------------------------------------------------------
+# What the worker observes (--worker-obs)
+# --------------------------------------------------------------------------
+
+def test_default_worker_view_is_the_observation_itself():
+    """The default worker's input must be bit-identical to what it was before
+    the choice existed: the view is the array itself, not a copy."""
+    agent = _agent()
+    obs_norm = np.random.default_rng(0).uniform(-1, 1, size=(8, OBS_DIM)).astype(np.float32)
+    assert agent.worker_obs == "full"
+    assert agent.worker_obs_view(obs_norm) is obs_norm
+    assert agent.worker_input_dim == OBS_DIM + GOAL_DIM
+
+
+def test_velocity_worker_sees_only_the_velocity():
+    agent = _agent(worker_obs="velocity")
+    obs_norm = np.random.default_rng(0).uniform(-1, 1, size=(8, OBS_DIM)).astype(np.float32)
+    assert np.array_equal(agent.worker_obs_view(obs_norm), obs_norm[:, 2:4])
+    assert agent.worker_input_dim == 2 + GOAL_DIM
+    assert agent.worker_actor.net[0].in_features == 2 + GOAL_DIM
+    assert agent.worker_critic.net[0].in_features == 2 + GOAL_DIM
+    # The manager still sees everything.
+    assert agent.manager_actor.net[0].in_features == OBS_DIM
+
+
+def test_velocity_worker_acts_the_same_wherever_it_is():
+    """The point of the option: moving the agent without changing its
+    velocity or its goal cannot change what the worker does."""
+    from hppo_train import worker_input
+    agent = _agent(worker_obs="velocity")
+    obs = np.array([[1.0, -1.0, 0.8, 0.3]] * 2, dtype=np.float32)
+    obs[1, :2] = [9.0, 1.5]
+    goal = np.array([[4.0, -2.0]] * 2, dtype=np.float32)
+    actions = agent.worker_act(worker_input(agent, agent.normalize_obs(obs), goal))
+    assert torch.equal(actions[0], actions[1])
+
+
+def test_unknown_worker_obs_is_rejected():
+    with pytest.raises(ValueError, match="worker_obs"):
+        _agent(worker_obs="position")
+
+
+def test_worker_obs_travels_with_the_checkpoint():
+    """A reloaded blind worker must be rebuilt blind: the choice sizes its
+    networks, so it is read from the checkpoint before they are built, and an
+    agent built the other way refuses the checkpoint instead of failing on a
+    shape mismatch."""
+    from hppo import checkpoint_worker_obs
+    agent = _agent(worker_obs="velocity")
+    obs_goal = torch.randn(4, 2 + GOAL_DIM)
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "ckpt.pt")
+        agent.save(path)
+        assert checkpoint_worker_obs(path) == "velocity"
+        reloaded = HPPOAgent(OBS_DIM, GOAL_DIM, ACT_DIM, device="cpu", worker_obs=checkpoint_worker_obs(path))
+        reloaded.load(path)
+        with pytest.raises(ValueError, match="worker_obs"):
+            HPPOAgent(OBS_DIM, GOAL_DIM, ACT_DIM, device="cpu").load(path)
+    assert torch.allclose(reloaded.worker_act(obs_goal), agent.worker_act(obs_goal), atol=1e-6)
+
+
+def test_checkpoint_from_before_worker_obs_loads_as_full():
+    from hppo import checkpoint_worker_obs
+    agent = _agent()
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "old.pt")
+        agent.save(path)
+        checkpoint = torch.load(path, weights_only=False)
+        del checkpoint["worker_obs"]
+        torch.save(checkpoint, path)
+        assert checkpoint_worker_obs(path) == "full"
+        HPPOAgent(OBS_DIM, GOAL_DIM, ACT_DIM, device="cpu").load(path)  # must not raise
+
+
+# --------------------------------------------------------------------------
 # The update
 # --------------------------------------------------------------------------
 

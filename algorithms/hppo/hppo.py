@@ -9,6 +9,24 @@ from common import (
     ScaledBeta, RunningMeanStd, ManagerActor, ManagerCritic,
 )
 
+# The observation columns the worker sees next to its goal, by name; None is
+# all of them. The environments' observation is [p_x, p_y, v_x, v_y].
+# "velocity" leaves out the absolute position: the worker then knows how it is
+# moving and where its goal is, but not where it is. See --worker-obs in
+# hppo_train.py for why.
+WORKER_OBS = {
+    "full": None,
+    "velocity": (2, 3),
+}
+
+
+def checkpoint_worker_obs(path):
+    """The `worker_obs` a checkpoint's worker was trained on, which an agent
+    must be built with before it can load it. Checkpoints from before the
+    choice existed are "full"."""
+    return torch.load(path, map_location="cpu").get("worker_obs", "full")
+
+
 class WorkerActor(nn.Module):
     def __init__(self, obs_dim, goal_dim, act_dim):
         super().__init__()
@@ -456,7 +474,7 @@ class HPPOAgent:
                  ent_coef_manager=0.01, ent_coef_worker=0.01,
                  max_grad_norm=0.5,
                  obs_low=None, obs_high=None, max_goal_bound=10.0,
-                 critic_lr_mult=3.0, device="cpu"):
+                 critic_lr_mult=3.0, worker_obs="full", device="cpu"):
         self.gamma = gamma
         self.manager_freq = manager_freq
         self.gamma_worker = gamma
@@ -492,9 +510,18 @@ class HPPOAgent:
         self.manager_actor = ManagerActor(obs_dim, goal_dim).to(device)
         self.manager_critic = ManagerCritic(obs_dim).to(device)
 
-        # Worker
-        self.worker_actor = WorkerActor(obs_dim, goal_dim, act_dim).to(device)
-        self.worker_critic = WorkerCritic(obs_dim, goal_dim).to(device)
+        # Worker. `worker_obs` picks which observation columns it sees, next
+        # to its goal (see WORKER_OBS and --worker-obs in hppo_train.py): the
+        # whole observation, or only the velocity, which makes the worker
+        # blind to where it is and so unable to learn the task by itself.
+        if worker_obs not in WORKER_OBS:
+            raise ValueError(f"worker_obs must be one of {sorted(WORKER_OBS)}, got {worker_obs!r}")
+        self.worker_obs = worker_obs
+        self.worker_obs_idx = WORKER_OBS[worker_obs]
+        worker_obs_dim = obs_dim if self.worker_obs_idx is None else len(self.worker_obs_idx)
+        self.worker_input_dim = worker_obs_dim + goal_dim
+        self.worker_actor = WorkerActor(worker_obs_dim, goal_dim, act_dim).to(device)
+        self.worker_critic = WorkerCritic(worker_obs_dim, goal_dim).to(device)
 
         # Each critic learns in standardized-return space; these statistics map
         # its output back to the raw reward scale that GAE works in. Both use
@@ -559,6 +586,14 @@ class HPPOAgent:
     def normalize_goal(self, goal):
         """Apply the goal map this agent was constructed with."""
         return normalize_goal(goal, self.max_goal_bound)
+
+    def worker_obs_view(self, obs_norm):
+        """The columns of a normalized observation the worker sees. Selecting
+        after normalizing is exact: normalize_obs maps each column on its own.
+        With the full observation this is `obs_norm` itself, not a copy, so the
+        default worker's input is bit-identical to what it was before the
+        choice existed."""
+        return obs_norm if self.worker_obs_idx is None else obs_norm[..., self.worker_obs_idx]
 
     def scale_goal(self, normalized_goal):
         """Inverse of `normalize_goal`: manager action -> physical displacement."""
@@ -665,11 +700,22 @@ class HPPOAgent:
             # different controller, and it also fixes the manager's discount.
             # Saved so an evaluation script cannot get it wrong.
             "manager_freq": self.manager_freq,
+            # Which observation columns the worker was trained on. It also
+            # fixes the worker networks' input size, so it has to be known
+            # before they are built: load_agent (hppo_train.py) reads it from
+            # the checkpoint first, via `checkpoint_worker_obs`.
+            "worker_obs": self.worker_obs,
         }
         torch.save(checkpoint, path)
 
     def load(self, path):
         checkpoint = torch.load(path, map_location=self.device)
+        saved_worker_obs = checkpoint.get("worker_obs", "full")
+        if saved_worker_obs != self.worker_obs:
+            raise ValueError(
+                f"{path} holds a worker trained on worker_obs={saved_worker_obs!r}, but this agent "
+                f"was built for {self.worker_obs!r}: construct it with "
+                f"worker_obs=checkpoint_worker_obs(path), as load_agent does")
         self.manager_actor.load_state_dict(checkpoint["manager_actor"])
         self.manager_critic.load_state_dict(checkpoint["manager_critic"])
         self.worker_actor.load_state_dict(checkpoint["worker_actor"])
@@ -686,6 +732,9 @@ class HPPOAgent:
         self.max_goal_bound = checkpoint["max_goal_bound"]
         self.manager_freq = checkpoint["manager_freq"]
         self.gamma_manager = self.gamma ** self.manager_freq
+        # (A checkpoint without "worker_obs" predates the choice, 2026-09-26,
+        # and every such worker saw the full observation: hence the default
+        # above. Unlike the guards below, that one is still needed.)
         # Guards for checkpoints older than the two-group optimisers, ret_rms,
         # the observation/goal bounds or the saved cadence used to live here;
         # no such hPPO checkpoint is left (all 45 under scenarios/tunnel/

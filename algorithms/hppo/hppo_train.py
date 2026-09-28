@@ -33,7 +33,7 @@ import numpy as np
 import torch
 import wandb
 
-from hppo import HPPOAgent, VecRolloutBuffer, ManagerVecRolloutBuffer
+from hppo import HPPOAgent, VecRolloutBuffer, ManagerVecRolloutBuffer, WORKER_OBS, checkpoint_worker_obs
 from optimal_solver import spawn_grid, precompute_optimal_grid, MinTimeSolver
 from solved_check import check_solved
 from metrics_log import MetricsLog
@@ -311,6 +311,136 @@ def parse_args(scenario):
              "that script's summary. "
              "0.0 restores the pre-fix reward, which collapses (2/10 seeds "
              "ever solved in the sweep, 0/10 at the end)")
+    # --- worker observation: a strict feudal separation (2026-09-26) -------
+    #
+    # The extrinsic-coef sweep (scenarios/slalom/scripts/sweep_extrinsic_coef.py)
+    # found that at 0.02 the manager is close to ornamental. With the manager
+    # replaced by a fixed forward goal, the worker still threads the slalom
+    # with ~1 wall contact per episode, and on 2/10 seeds loses nothing at
+    # all. Seed 1's manager emits nearly the same goal, (5.7, -4.5) m, in
+    # every state, even in front of gate 1 at y = +1. The worker has learned
+    # the task itself, which it can because it sees the full state. Lowering
+    # the coefficient only moves the balance (~6 contacts without the manager
+    # at 0.005, near the coefficient's floor).
+    #
+    # --worker-obs velocity removes the channel instead. The worker sees
+    # (v_x, v_y, goal) and not (p_x, p_y). The argument for why that is enough:
+    # the plant is a double integrator, invariant under translation, so
+    # reaching a relative goal needs the velocity and the goal and nothing
+    # else. Only two things break the invariance, the walls and the goal line,
+    # and both are the task -- the manager's business. A worker that cannot
+    # see them can learn to reach goals but not to do the slalom.
+    #
+    # Two predictions this makes, both to be measured rather than assumed:
+    #
+    # - The termination-avoidance pathology (the block above) needs the
+    #   worker to recognise that it is near the line, which it did from p_x.
+    #   A worker blind to position cannot stall selectively there, and
+    #   stalling everywhere costs it its intrinsic reward. If so, the
+    #   extrinsic term loses its first reason, and --worker-extrinsic-coef 0
+    #   becomes viable: a hierarchy that is feudal in reward as well as in
+    #   information. The residual risk is that the manager's goals themselves
+    #   give away that the line is near; charts/worker_ax_near_goal is the
+    #   direct test.
+    # - It also loses its second reason, making the worker avoid walls,
+    #   because a blind worker cannot see them. To it a contact penalty is
+    #   unpredictable noise, which could make it timid laterally.
+    #
+    # Where it can fail, most likely first:
+    #
+    # 1. Lateral precision. ManagerActor caps both Beta concentrations at
+    #    MAX_CONCENTRATION = 50, which floors the sampling std of a goal
+    #    coordinate at ~0.1 of the action box: ~1 m at --max-goal-bound 10.
+    #    Trained managers sample goal_y with a std of 1.3-1.85 m, measured
+    #    2026-09-26. A gate's half-width is 0.75 m. A sighted worker filters
+    #    that noise because it knows where the gates are. A blind one
+    #    executes it, so training rollouts fill with contacts and the
+    #    manager's advantages with noise. Deterministic evaluation, which
+    #    uses the mean, can still be clean. A reachable goal box (1.5x reach,
+    #    ~1.8 m; see docs/goal-box-saturation.md) floors it at ~0.18 m. That
+    #    is a second variable, so it gets its own arm.
+    # 2. Cadence. A segment is 1 s and at most 1.2 m, and a gate is 1 m long.
+    #    Going from gate 1 (y = +1) to gate 2 (y = -1) takes 2 m of lateral
+    #    travel in 2 m of forward travel, a diagonal across two segments,
+    #    which has to be set up before each gate. The oracle does it at no
+    #    time cost. A manager that commits once per second may not, so the
+    #    strict solved-check can become unreachable at 100% success.
+    # 3. Co-adaptation. Until the worker can track goals, the manager's
+    #    goals do not produce predictable motion. A blind worker is
+    #    task-agnostic, so it could be pretrained on random goals in an empty
+    #    arena and then frozen; that is not done here.
+    # 4. A partially observable worker critic. Its return depends on walls,
+    #    the line and future goals it cannot see. Goal reaching is easy, so
+    #    this is probably minor.
+    #
+    # First measurement (2026-09-26): slalom, 10 seeds per arm, 1M steps,
+    # every early stop off, goal box 10 m; the output is in
+    # scenarios/slalom/studies/blind_worker. The sighted arms are the 500k
+    # extrinsic sweep; hPPO's constant learning rate makes a 500k run a prefix
+    # of a 1M one.
+    #
+    #   worker   coef   ever solved  first solve (median)  solved at end  gap, manager -> forward goal
+    #   sighted  0.02      10/10          72k                  10/10          0 -> 53
+    #   sighted  0          2/10         271k                   0/10     (collapsed at the line)
+    #   blind    0.02       8/10         461k                   7/10          0 -> 437
+    #   blind    0          9/10         195k                   5/10          6 -> 1801
+    #
+    # - The separation holds. With a blind worker at 0, the manager is
+    #   indispensable: replacing it with a forward goal costs ~1800 of
+    #   return, and a mirrored goal costs ~4600. The goal explains 96% of
+    #   the worker's action variance.
+    # - The first prediction holds. No blind seed stalls at the line; with
+    #   the sighted worker at 0, every seed does. The one blind failure
+    #   (seed 10 at 0) is a different one. Its manager never learned gate 2:
+    #   it orbits between the gates at x ~ 6, alternating backward-down and
+    #   forward-up goals, the old "advance, then idle" local optimum, now
+    #   the manager's rather than the worker's.
+    # - The cost is samples and precision. At 0 the blind hierarchy reaches
+    #   the oracle (best logged gap 0.4-1.3) and then drifts to 2-9 steps
+    #   slower, with no contacts. That is risk 1 at work. Sampled goals
+    #   give the blind worker 0.66 contacts per training episode, against
+    #   0.13 for the sighted one at 0.02. The manager compensates with
+    #   caution: it takes the gates at y ~ +-0.7, where the oracle takes
+    #   them at +0.29 / -0.41, and it slows down (26 steps below
+    #   v_x = 1.1 m/s, against the oracle's 7).
+    # - 0.02 does not help a blind worker. It learns 2.4x slower (p = 0.07),
+    #   and the progress term gives the worker a forward bias of its own. The
+    #   goal then explains only 64% of its action variance, which is a weak
+    #   leak of the task back into the worker. In exchange it ends within ~1
+    #   step of the oracle.
+    #
+    # The next step this points to is a reachable goal box (--max-goal-bound
+    # ~1.8) with a blind worker at 0. It lowers risk 1's noise floor from ~1 m
+    # to ~0.18 m.
+    #
+    # Measured (2026-09-28; 10 seeds, 1M steps,
+    # scenarios/slalom/studies/blind_worker_box1.8), it fails outright.
+    # - 0/10 seeds ever solve, and none reaches the goal in any evaluation.
+    #   Early sampled rollouts did cross (12-44% training success), but every
+    #   manager converged to the same orbit: it takes gate 1, then oscillates
+    #   at x ~ 6-6.5 in front of gate 2 with near-zero lateral goals. The
+    #   return is ~-150 with no contacts, the same local optimum as round
+    #   1's seed 10, now on every seed.
+    # - The worker is not the problem. It has become a proper waypoint
+    #   follower: at v_x = 1.2 it brakes (a_x -1.7) for a goal 0.3 m ahead
+    #   and accelerates (+2.1) for one 1.8 m ahead.
+    # - That is also what the reachable box changes. Every goal is now a
+    #   point to stop at, so the hierarchy cruises at ~0.8 m/s, not 1.2.
+    #   The lateral transfer to gate 2 (~2.2 m) has to be held at the edge
+    #   of the box over consecutive segments. A 10 m box got it from any
+    #   clearly lateral goal, because a far goal makes the worker move at
+    #   full speed.
+    # - A shorter box therefore lowers the lateral noise at the price of the
+    #   forward drive and of lateral authority. The two axes want different
+    #   bounds: a far forward goal (move at full speed) and a reachable
+    #   lateral one (be at this y). That points to a per-axis goal box, say
+    #   10 m in x and ~2.5 m in y (lateral noise floor ~0.25 m, one goal
+    #   enough for the transfer), as the next arm.
+    parser.add_argument("--worker-obs", type=str, default="full", choices=sorted(WORKER_OBS),
+        help="what the worker observes next to its goal: 'full' (the whole observation, "
+             "[p_x, p_y, v_x, v_y]) or 'velocity' ([v_x, v_y] only, blind to where it is, "
+             "so it can learn to reach goals but not the task). See the comment above "
+             "this flag. Saved in the checkpoint; load_agent reads it back")
     parser.add_argument("--num-envs", type=int, default=8,
         help=f"the number of parallel {scenario.name} environments to collect "
              "rollouts from. Rollouts come from a batched vector env; each "
@@ -456,14 +586,16 @@ def parse_args(scenario):
 
 
 def worker_input(agent, obs_norm, goal_phys):
-    """The worker's network input: normalized observation ++ normalized goal.
+    """The worker's network input: the normalized observation columns it
+    sees (all of them, or only the velocity -- see --worker-obs) ++ the
+    normalized goal.
 
     Concatenates on the last axis, so it takes either a single
     (obs_dim,)/(goal_dim,) pair -- what evaluation has -- or the
     (num_envs, obs_dim)/(num_envs, goal_dim) batch the rollout carries.
     """
     return torch.tensor(
-        np.concatenate([obs_norm, agent.normalize_goal(goal_phys)], axis=-1),
+        np.concatenate([agent.worker_obs_view(obs_norm), agent.normalize_goal(goal_phys)], axis=-1),
         dtype=torch.float32, device=agent.device
     )
 
@@ -547,13 +679,16 @@ def load_agent(path, env, device="cpu"):
     `env` is an instance of the environment it was trained on: its spaces give
     the network sizes and the worker's action limits, the same way `train`
     reads them. The observation and goal maps and the manager's cadence
-    travel in the checkpoint itself (see HPPOAgent.save)."""
+    travel in the checkpoint itself (see HPPOAgent.save), and so does what the
+    worker observes, which is read first because it sizes the worker's
+    networks."""
     agent = HPPOAgent(
         obs_dim=env.observation_space.shape[0],
         goal_dim=2,  # delta x, delta y, as in `train`
         act_dim=env.action_space.shape[0],
         worker_act_limit_low=float(env.action_space.low[0]),
         worker_act_limit_high=float(env.action_space.high[0]),
+        worker_obs=checkpoint_worker_obs(path),
         device=device,
     )
     agent.load(path)
@@ -680,6 +815,7 @@ def train(args, scenario):
         obs_low=obs_low,
         obs_high=obs_high,
         max_goal_bound=max_goal_bound,
+        worker_obs=args.worker_obs,
         device=device,
     )
 
@@ -693,7 +829,7 @@ def train(args, scenario):
     # The worker acts every step in every environment, so its rollout is a
     # full (num_steps_per_env, num_envs) grid.
     worker_buffer = VecRolloutBuffer(
-        args.num_steps_per_env, args.num_envs, obs_dim + goal_dim, act_dim, device)
+        args.num_steps_per_env, args.num_envs, agent.worker_input_dim, act_dim, device)
     # The manager writes one transition per c worker steps *per environment*,
     # so each column needs only ceil(num_steps_per_env / c) slots -- plus a
     # margin, because a segment also ends early whenever an episode does. Sized
