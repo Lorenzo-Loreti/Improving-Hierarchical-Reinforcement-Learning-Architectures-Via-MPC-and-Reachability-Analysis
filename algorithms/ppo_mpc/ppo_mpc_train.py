@@ -248,9 +248,12 @@ def parse_args(scenario):
         help="if toggled, stop training once the solved criterion below is met. "
              "The check, its logging and the one-time solved.pt happen either "
              "way. On a disturbed environment the criterion is measured against "
-             "the undisturbed oracle, which a robust controller cannot match "
-             "(it plans slower and wider), so such runs should set this false "
-             "and read the gap instead")
+             "the undisturbed oracle, and the tube MPC pays for its margin in "
+             "time: on the disturbed slalom (2026-09-28, 10 seeds) its worst "
+             "grid gap settled at 5.8-6.0 against a tolerance of 5, so it "
+             "never passed, while flat PPO and hPPO did. Such runs should set "
+             "this false and read the gap instead (scenarios/slalom/scripts/"
+             "compare_disturbed.py)")
     parser.add_argument("--solved-tolerance", type=float, default=5.0,
         help="the solved criterion: return within this many reward units of the "
              "oracle's optimal return (algorithms/optimal_solver.py) at every "

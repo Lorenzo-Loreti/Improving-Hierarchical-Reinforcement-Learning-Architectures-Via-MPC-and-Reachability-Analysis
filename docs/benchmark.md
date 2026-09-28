@@ -291,6 +291,16 @@ never the hierarchy; it was a worker that had to discover wall avoidance
 indirectly, through a manager acting once every 10 steps, instead of being told
 about it. See §5.3 of the companion document.
 
+> **2026-09-28:** every `PPO+MPC` row and finding in this file is the old
+> algorithm: its own copy of the training loop, a 4-D goal and `MPCWorker`,
+> which saw the corridor only at its current position. PPO+MPC has since
+> been rebuilt on hPPO's manager with a tube-MPC worker that knows every
+> gate (`algorithms/ppo_mpc/`, `algorithms/tube_mpc.py`). Its first
+> measurements are the disturbed comparison in
+> `scenarios/slalom/scripts/compare_disturbed.py`, and one undisturbed
+> seed, solved at 71 680 steps with no contact. The rows below are left as
+> measured.
+
 **4. `PPO+MPC` is the only algorithm that never solves the slalom.** It gets to
 92.6 % of the oracle and stalls there with 1.3–1.8 contacts per episode on every
 seed. The same algorithm solves the tunnel fastest in the table (8k–16k).

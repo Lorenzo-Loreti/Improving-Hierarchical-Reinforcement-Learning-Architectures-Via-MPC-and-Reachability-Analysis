@@ -82,8 +82,16 @@ Deliberate departures from the note, and why:
   real state strictly inside it matters beyond the walls: a clip on the
   velocity (the speed limit, see SlalomEnv.step) or on the input would make
   the plant nonlinear and the error dynamics (3.5) would no longer hold.
-  That is why the planned speed is tightened too, to v_max - h_Z(e_v): the
-  price of robustness is paid in top speed as well as in clearance.
+  That is why the planned speed is tightened too, to v_max - h_Z(e_v).
+  The price is smaller than that cap suggests, because z_0 is a decision
+  variable (remark 3.8): the plan can put its nominal state behind the real
+  one, anywhere inside the tube, so the real state rides at the front of
+  it. Measured on the disturbed slalom (|w_p| <= 0.005, |w_v| <= 0.05,
+  2026-09-28): the plan's v_x never exceeds its cap of 0.989 m/s, while
+  the real v_x averages 1.08 m/s and peaks at 1.195, still inside v_max as
+  the tightening guarantees. Episodes then take ~4.5 steps (~6%) longer
+  than flat PPO's and hPPO's, where the cap alone would cost ~21% at
+  cruise speed (1.2 / 0.989).
 """
 
 import time

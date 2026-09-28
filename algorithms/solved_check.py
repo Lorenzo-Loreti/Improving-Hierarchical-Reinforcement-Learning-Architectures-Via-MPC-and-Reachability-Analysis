@@ -67,9 +67,11 @@ def check_solved(make_policy_fn, env, optimal_grid, tolerance, seed=None):
 
     The oracle's returns come from the *undisturbed* environment
     (precompute_optimal_grid replays open-loop actions, which a disturbance
-    would knock off course). Under a disturbance they are an upper reference,
-    not an attainable target: a robust controller also pays for its safety
-    margin in time.
+    would knock off course). Under a disturbance they are an upper reference
+    that not every controller can reach. On the disturbed slalom of
+    2026-09-28 (|w_p| <= 0.005, |w_v| <= 0.05) flat PPO and hPPO still came
+    within ~1 of it and passed the check, while PPO+MPC's tube MPC, which pays
+    for its safety margin in time, settled ~6 short.
     """
     agent_returns = []
     optimal_returns = []
