@@ -99,7 +99,7 @@ def plot_env(config: TunnelEnvConfig, ax=None, overlay=False):
 
     param_text = (
         f"dt={config.dt}   v_max={config.v_max}   u_max={config.u_max}   "
-        f"sigma_p={config.sigma_p}   sigma_v={config.sigma_v}\n"
+        f"noise_bound_p={config.noise_bound_p}   noise_bound_v={config.noise_bound_v}\n"
         f"max_steps={config.max_steps}   step_penalty={config.step_penalty}   "
         f"goal_reward={config.goal_reward}   contact_penalty={config.contact_penalty}   "
         f"progress_reward_coef={config.progress_reward_coef}"

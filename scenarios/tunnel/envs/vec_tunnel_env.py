@@ -35,8 +35,8 @@ class TunnelVecEnv:
         self.W = c.tunnel_width
         self.v_max = c.v_max
         self.u_max = c.u_max
-        self.sigma_p = c.sigma_p
-        self.sigma_v = c.sigma_v
+        self.noise_bound_p = c.noise_bound_p
+        self.noise_bound_v = c.noise_bound_v
         self.max_steps = c.max_steps
 
         # Derived fresh from `self.W` (see TunnelEnvConfig.width_profile).
@@ -66,7 +66,10 @@ class TunnelVecEnv:
             [0.0, self.dt],
         ], dtype=np.float32)
 
-        self.std_dev = np.array([self.sigma_p, self.sigma_p, self.sigma_v, self.sigma_v], dtype=np.float32)
+        # Half-widths of the uniform disturbance box W, per state component
+        # (see the config's noise_bound_p; a Gaussian's std_dev until 2026-09-28).
+        self.noise_bound = np.array([self.noise_bound_p, self.noise_bound_p,
+                                     self.noise_bound_v, self.noise_bound_v], dtype=np.float32)
 
         self._np_random = np.random.default_rng()
         self.states = np.zeros((num_envs, 4), dtype=np.float32)
@@ -111,8 +114,11 @@ class TunnelVecEnv:
                           (np.float32(self.v_max) - v) / np.float32(self.dt))
         self.steps += 1
 
-        if np.any(self.std_dev > 0):
-            noise = self._np_random.normal(loc=0.0, scale=self.std_dev, size=(self.num_envs, 4)).astype(np.float32)
+        # Uniform in the box W, drawn only when W != {0}, as in the scalar
+        # env's step().
+        if np.any(self.noise_bound > 0):
+            noise = self._np_random.uniform(
+                low=-self.noise_bound, high=self.noise_bound, size=(self.num_envs, 4)).astype(np.float32)
         else:
             noise = np.zeros((self.num_envs, 4), dtype=np.float32)
 

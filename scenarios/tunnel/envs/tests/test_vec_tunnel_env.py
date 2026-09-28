@@ -18,7 +18,7 @@ def _gate_profile():
 
 
 def test_vec_env_matches_single_env_dynamics_zero_noise():
-    config = TunnelEnvConfig(sigma_p=0.0, sigma_v=0.0, width_profile=None)
+    config = TunnelEnvConfig(noise_bound_p=0.0, noise_bound_v=0.0, width_profile=None)
     num_envs = 5
 
     vec_env = TunnelVecEnv(num_envs=num_envs, config=config)
@@ -62,7 +62,7 @@ def test_vec_env_matches_single_env_dynamics_with_progress_shaping():
     test_vec_env_matches_single_env_dynamics_zero_noise, with
     progress_reward_coef != 0 -- the shaping term must agree between the
     batched and single-env implementations row by row."""
-    config = TunnelEnvConfig(sigma_p=0.0, sigma_v=0.0, width_profile=None, progress_reward_coef=2.0)
+    config = TunnelEnvConfig(noise_bound_p=0.0, noise_bound_v=0.0, width_profile=None, progress_reward_coef=2.0)
     num_envs = 5
 
     vec_env = TunnelVecEnv(num_envs=num_envs, config=config)
@@ -97,7 +97,7 @@ def test_vec_env_matches_single_env_collision_impact():
     bounce off the wall several times over the rollout (a contact no longer
     ends the episode, so both implementations must also keep applying the
     same clamp-and-absorb physics in lockstep without an explicit reset)."""
-    config = TunnelEnvConfig(sigma_p=0.0, sigma_v=0.0, width_profile=None)
+    config = TunnelEnvConfig(noise_bound_p=0.0, noise_bound_v=0.0, width_profile=None)
     num_envs = 5
 
     vec_env = TunnelVecEnv(num_envs=num_envs, config=config)
@@ -137,7 +137,7 @@ def test_vec_env_progress_shaping_uses_terminal_px_not_post_reset_px():
     are identified."""
     coef = 10.0
     config = TunnelEnvConfig(
-        sigma_p=0.0, sigma_v=0.0, tunnel_width=1000.0,
+        noise_bound_p=0.0, noise_bound_v=0.0, tunnel_width=1000.0,
         tunnel_length=2.0, max_steps=1000, progress_reward_coef=coef,
     )
     vec_env = TunnelVecEnv(num_envs=2, config=config)
@@ -176,7 +176,7 @@ def test_vec_env_reset_shape_and_bounds():
 
 
 def test_vec_env_autoresets_on_done():
-    config = TunnelEnvConfig(tunnel_length=1.0, max_steps=1000, sigma_p=0.0, sigma_v=0.0)
+    config = TunnelEnvConfig(tunnel_length=1.0, max_steps=1000, noise_bound_p=0.0, noise_bound_v=0.0)
     vec_env = TunnelVecEnv(num_envs=4, config=config)
     vec_env.reset(seed=0)
     actions = np.ones((4, 2), dtype=np.float32)
@@ -194,7 +194,7 @@ def test_vec_env_collision_is_position_dependent_per_row():
     segments must each be checked against their own segment's bound, not one
     shared constant -- the batched analogue of
     test_tunnel_env.py::test_collision_is_position_dependent_under_a_width_profile."""
-    config = TunnelEnvConfig(sigma_p=0.0, sigma_v=0.0, width_profile=_gate_profile())
+    config = TunnelEnvConfig(noise_bound_p=0.0, noise_bound_v=0.0, width_profile=_gate_profile())
     vec_env = TunnelVecEnv(num_envs=2, config=config)
     vec_env.reset(seed=0)
 
@@ -234,7 +234,7 @@ def test_final_observation_reconstructs_a_physically_continuous_trajectory():
     contact does not loosen this bound either -- it only clamps p_y back to
     the boundary, never past it.
     """
-    config = TunnelEnvConfig(sigma_p=0.0, sigma_v=0.0)
+    config = TunnelEnvConfig(noise_bound_p=0.0, noise_bound_v=0.0)
     num_envs = 8
     vec_env = TunnelVecEnv(num_envs=num_envs, config=config)
     obs, _ = vec_env.reset(seed=0)
@@ -275,7 +275,7 @@ def test_vec_env_collision_count_and_impacts_track_each_contact():
     collision_count and collision_impacts[i] must track every contact for row
     i independently, not just the most recent one, and collision_impacts
     holds each contact's own penalty rather than a running sum."""
-    config = TunnelEnvConfig(sigma_p=0.0, sigma_v=0.0, tunnel_width=4.0, max_steps=5)
+    config = TunnelEnvConfig(noise_bound_p=0.0, noise_bound_v=0.0, tunnel_width=4.0, max_steps=5)
     vec_env = TunnelVecEnv(num_envs=2, config=config)
     vec_env.reset(seed=0)
 
@@ -307,7 +307,7 @@ def test_vec_env_collision_bookkeeping_resets_per_row_on_autoreset():
     _sample_initial clears them for the row's next episode -- so the same
     step()'s final_info still shows the finished episode's contacts, while
     the internal counters are already reset for what comes next."""
-    config = TunnelEnvConfig(sigma_p=0.0, sigma_v=0.0, tunnel_length=10.0, tunnel_width=4.0, max_steps=1000)
+    config = TunnelEnvConfig(noise_bound_p=0.0, noise_bound_v=0.0, tunnel_length=10.0, tunnel_width=4.0, max_steps=1000)
     vec_env = TunnelVecEnv(num_envs=2, config=config)
     vec_env.reset(seed=0)
 
@@ -336,7 +336,7 @@ def test_vec_env_collision_bookkeeping_resets_per_row_on_autoreset():
 
 def test_vec_env_applies_the_speed_limit_like_the_single_env():
     """Rows at or near top speed, thrusting into the limit (see SlalomEnv.step)."""
-    config = TunnelEnvConfig(sigma_p=0.0, sigma_v=0.0)
+    config = TunnelEnvConfig(noise_bound_p=0.0, noise_bound_v=0.0)
     starts = np.array([[5.0, 0.0, 1.2, -1.2], [5.0, 0.0, 1.0, 0.3], [2.0, 0.5, -1.1, 1.2]], dtype=np.float32)
     actions = np.array([[2.5, -2.5], [2.5, 2.5], [-2.5, 2.5]], dtype=np.float32)
     vec_env = TunnelVecEnv(num_envs=3, config=config)
@@ -348,3 +348,32 @@ def test_vec_env_applies_the_speed_limit_like_the_single_env():
         env.reset(options={"init_state": starts[i]})
         obs, *_ = env.step(actions[i])
         np.testing.assert_array_equal(vec_obs[i], obs)
+
+
+def test_vec_env_noise_is_uniform_in_the_bounded_box():
+    """As the scalar env's test of the same name: every component of the
+    disturbance stays inside its bound and fills most of it."""
+    bound_p, bound_v = 0.01, 0.05
+    config = TunnelEnvConfig(noise_bound_p=bound_p, noise_bound_v=bound_v, tunnel_length=1000.0, max_steps=10000)
+    bound = np.array([bound_p, bound_p, bound_v, bound_v])
+    vec_env = TunnelVecEnv(num_envs=4, config=config)
+    vec_env.reset(seed=0)
+    ws = []
+    for _ in range(500):
+        # Restarted every step; see the scalar test.
+        vec_env.states[:] = np.array([1.0, 0.0, 0.3, 0.0], dtype=np.float32)
+        predicted = vec_env.states.astype(np.float64) @ vec_env.A.T.astype(np.float64)
+        vec_env.step(np.zeros((4, 2), dtype=np.float32))
+        ws.append(vec_env.states.astype(np.float64) - predicted)
+    ws = np.concatenate(ws)
+    assert np.all(np.abs(ws) <= bound + 1e-6)
+    assert np.all(ws.max(axis=0) > 0.9 * bound)
+    assert np.all(ws.min(axis=0) < -0.9 * bound)
+
+
+def test_vec_env_zero_noise_draws_no_randomness():
+    vec_env = TunnelVecEnv(num_envs=3, config=TunnelEnvConfig())
+    vec_env.reset(seed=3)
+    rng_state = vec_env._np_random.bit_generator.state
+    vec_env.step(np.ones((3, 2), dtype=np.float32))
+    assert vec_env._np_random.bit_generator.state == rng_state

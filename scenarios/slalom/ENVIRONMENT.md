@@ -27,9 +27,10 @@ each of these narrow "gates" is shifted a full meter off the centerline — one
 gate toward one side, the other toward the opposite side. The corridor
 returns to full width, and back to being centered, in between the two gates
 and again after the second one, before the goal line. Just like in Tunnel,
-the environment supports adding small random disturbances to position and
-velocity, but every experiment in this codebase currently runs the
-deterministic, noise-free version.
+the environment supports adding small, bounded random disturbances to
+position and velocity (uniform within a fixed box, since 2026-09-28), but
+the deterministic, noise-free version is the default and what every
+experiment before that date ran on.
 
 ## Objective and Episode Structure
 

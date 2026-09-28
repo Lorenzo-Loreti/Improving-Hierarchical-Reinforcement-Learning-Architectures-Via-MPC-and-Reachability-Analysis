@@ -26,10 +26,11 @@ way has no effect, on its velocity or on how far it travels in the step.
 Time advances in fixed increments of 0.1 seconds (so ten control decisions
 per simulated second). The corridor runs along one axis (call it the
 "forward" direction) and has two parallel walls a fixed distance apart along
-the other ("lateral") axis. The environment also supports adding small
-random disturbances to position and velocity at every step, to model
-imperfect actuation or measurement — but every experiment in this codebase
-currently runs the deterministic, noise-free version, so in practice the
+the other ("lateral") axis. The environment also supports adding small,
+bounded random disturbances to position and velocity at every step
+(uniform within a fixed box, since 2026-09-28), to model imperfect
+actuation or measurement — but the deterministic, noise-free version is the
+default and what every experiment before that date ran on, so there the
 dynamics are exact.
 
 ## Objective and Episode Structure

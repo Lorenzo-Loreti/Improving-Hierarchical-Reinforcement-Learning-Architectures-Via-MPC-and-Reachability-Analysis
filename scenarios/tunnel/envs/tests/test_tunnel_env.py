@@ -57,7 +57,7 @@ def test_reset_without_options_is_unaffected_by_init_state_support():
 
 
 def test_step_dynamics_zero_noise_zero_action():
-    env = make(sigma_p=0.0, sigma_v=0.0)
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0)
     obs, _ = env.reset(seed=0)
     action = np.zeros(2, dtype=np.float32)
     next_obs, reward, terminated, truncated, info = env.step(action)
@@ -68,7 +68,7 @@ def test_step_dynamics_zero_noise_zero_action():
 
 
 def test_step_dynamics_matches_A_B_with_action():
-    env = make(sigma_p=0.0, sigma_v=0.0)
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0)
     obs, _ = env.reset(seed=0)
     action = np.array([0.5, -0.3], dtype=np.float32)
     next_obs, *_ = env.step(action)
@@ -78,7 +78,7 @@ def test_step_dynamics_matches_A_B_with_action():
 
 
 def test_action_is_clipped_before_applied():
-    env = make(sigma_p=0.0, sigma_v=0.0, u_max=1.0)
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0, u_max=1.0)
     obs, _ = env.reset(seed=0)
     oversized_action = np.array([5.0, -5.0], dtype=np.float32)
     next_obs, *_ = env.step(oversized_action)
@@ -91,7 +91,7 @@ def test_collision_at_wall_boundary():
     """Wall contact is a fully inelastic bounce, not a terminal event: p_y is
     clamped to the wall, v_y is absorbed to zero, and the episode continues
     with a per-step penalty instead of ending."""
-    env = make(sigma_p=0.0, sigma_v=0.0, tunnel_width=4.0)
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0, tunnel_width=4.0)
     env.reset(seed=0)
     env.state = np.array([1.0, env.W / 2.0 - 1e-4, 0.0, env.v_max], dtype=np.float32)
     action = np.array([0.0, env.u_max], dtype=np.float32)
@@ -113,7 +113,7 @@ def test_collision_at_wall_boundary():
 
 
 def test_goal_reached_at_boundary():
-    env = make(sigma_p=0.0, sigma_v=0.0, tunnel_length=10.0)
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0, tunnel_length=10.0)
     env.reset(seed=0)
     p_x_prev = 10.0 - 1e-4
     env.state = np.array([p_x_prev, 0.0, env.v_max, 0.0], dtype=np.float32)
@@ -129,7 +129,7 @@ def test_goal_reached_at_boundary():
 
 
 def test_truncation_at_max_steps():
-    env = make(sigma_p=0.0, sigma_v=0.0, max_steps=3, tunnel_length=1000.0, tunnel_width=1000.0)
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0, max_steps=3, tunnel_length=1000.0, tunnel_width=1000.0)
     env.reset(seed=0)
     action = np.zeros(2, dtype=np.float32)
     for _ in range(2):
@@ -141,7 +141,7 @@ def test_truncation_at_max_steps():
 
 
 def test_observation_stays_within_space_after_out_of_bounds_step():
-    env = make(sigma_p=0.0, sigma_v=0.0)
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0)
     env.reset(seed=0)
     env.state = np.array([env.L, 0.0, env.v_max, env.v_max], dtype=np.float32)
     action = np.array([env.u_max, env.u_max], dtype=np.float32)
@@ -157,8 +157,8 @@ def test_observation_stays_within_space_after_out_of_bounds_step():
         {"tunnel_width": 0.0},
         {"v_max": -1.0},
         {"u_max": 0.0},
-        {"sigma_p": -0.1},
-        {"sigma_v": -0.1},
+        {"noise_bound_p": -0.1},
+        {"noise_bound_v": -0.1},
         {"max_steps": 0},
     ],
 )
@@ -177,8 +177,8 @@ def test_default_config_pins_current_tuned_values():
     assert config.tunnel_width == 4.0
     assert config.v_max == 1.2
     assert config.u_max == 2.5
-    assert config.sigma_p == 0.0
-    assert config.sigma_v == 0.0
+    assert config.noise_bound_p == 0.0
+    assert config.noise_bound_v == 0.0
     assert config.max_steps == 200
     assert config.step_penalty == -1.0
     assert config.contact_penalty == -50.0
@@ -187,9 +187,9 @@ def test_default_config_pins_current_tuned_values():
 
 
 def test_overrides_replace_config_fields():
-    env = TunnelEnv(tunnel_length=20.0, sigma_p=0.5)
+    env = TunnelEnv(tunnel_length=20.0, noise_bound_p=0.5)
     assert env.L == 20.0
-    assert env.sigma_p == 0.5
+    assert env.noise_bound_p == 0.5
     assert env.config.tunnel_width == 4.0  # untouched default
 
 
@@ -230,7 +230,7 @@ def test_collision_is_position_dependent_under_a_width_profile():
 
     # y=1.9 is safe under the global envelope (+-2.0), but at x=3.0 -- inside
     # the gate, x in (2.0, 5.0], opening y in [0.25, 1.75] -- it is a wall touch.
-    env = make(sigma_p=0.0, sigma_v=0.0, width_profile=profile)
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0, width_profile=profile)
     env.reset(seed=0)
     env.state = np.array([3.0, 1.9, 0.0, 0.0], dtype=np.float32)
     obs, reward, terminated, _, info = env.step(np.zeros(2, dtype=np.float32))
@@ -243,7 +243,7 @@ def test_collision_is_position_dependent_under_a_width_profile():
     assert reward == pytest.approx(expected)
 
     # The identical p_y in a full-width segment (x=0.0) is safe.
-    env2 = make(sigma_p=0.0, sigma_v=0.0, width_profile=profile)
+    env2 = make(noise_bound_p=0.0, noise_bound_v=0.0, width_profile=profile)
     env2.reset(seed=0)
     env2.state = np.array([0.0, 1.9, 0.0, 0.0], dtype=np.float32)
     _, _, terminated2, _, info2 = env2.step(np.zeros(2, dtype=np.float32))
@@ -264,7 +264,7 @@ def test_progress_reward_coef_zero_is_noop():
     actually changes step to step -- the shaping term is additive and must
     vanish cleanly when disabled. Passed explicitly since the default is no
     longer 0.0 (see config.py's Historical note)."""
-    env = make(sigma_p=0.0, sigma_v=0.0, progress_reward_coef=0.0)
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0, progress_reward_coef=0.0)
     env.reset(seed=0)
     action = np.array([env.u_max, 0.0], dtype=np.float32)
     _, reward, terminated, truncated, _ = env.step(action)
@@ -275,7 +275,7 @@ def test_progress_reward_coef_zero_is_noop():
 def test_progress_shaping_rewards_forward_and_penalizes_backward_motion():
     coef = 2.0
 
-    env = make(sigma_p=0.0, sigma_v=0.0, progress_reward_coef=coef)
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0, progress_reward_coef=coef)
     env.reset(seed=0)
     env.state = np.array([5.0, 0.0, 1.0, 0.0], dtype=np.float32)
     p_x_prev = float(env.state[0])
@@ -286,7 +286,7 @@ def test_progress_shaping_rewards_forward_and_penalizes_backward_motion():
     assert reward == pytest.approx(expected)
     assert reward > env.config.step_penalty
 
-    env2 = make(sigma_p=0.0, sigma_v=0.0, progress_reward_coef=coef)
+    env2 = make(noise_bound_p=0.0, noise_bound_v=0.0, progress_reward_coef=coef)
     env2.reset(seed=0)
     env2.state = np.array([5.0, 0.0, -1.0, 0.0], dtype=np.float32)
     p_x_prev2 = float(env2.state[0])
@@ -300,7 +300,7 @@ def test_progress_shaping_rewards_forward_and_penalizes_backward_motion():
 
 def test_progress_shaping_additive_on_collision():
     coef = 3.0
-    env = make(sigma_p=0.0, sigma_v=0.0, tunnel_width=4.0, progress_reward_coef=coef)
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0, tunnel_width=4.0, progress_reward_coef=coef)
     env.reset(seed=0)
     p_x_prev = 1.0
     env.state = np.array([p_x_prev, env.W / 2.0 - 1e-4, 0.0, env.v_max], dtype=np.float32)
@@ -318,7 +318,7 @@ def test_progress_shaping_additive_on_collision():
 
 def test_progress_shaping_additive_on_goal():
     coef = 3.0
-    env = make(sigma_p=0.0, sigma_v=0.0, tunnel_length=10.0, progress_reward_coef=coef)
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0, tunnel_length=10.0, progress_reward_coef=coef)
     env.reset(seed=0)
     p_x_prev = 10.0 - 1e-4
     env.state = np.array([p_x_prev, 0.0, env.v_max, 0.0], dtype=np.float32)
@@ -336,7 +336,7 @@ def test_progress_shaping_telescopes_over_episode():
     step to step -- the defining property of potential-based shaping."""
     coef = 1.5
     env = make(
-        sigma_p=0.0, sigma_v=0.0, max_steps=3,
+        noise_bound_p=0.0, noise_bound_v=0.0, max_steps=3,
         tunnel_length=1000.0, tunnel_width=1000.0,
         progress_reward_coef=coef,
     )
@@ -364,7 +364,7 @@ def test_collision_penalty_matches_contact_formula():
     used to require it."""
     coef = 3.0
     env = make(
-        sigma_p=0.0, sigma_v=0.0, tunnel_width=4.0,
+        noise_bound_p=0.0, noise_bound_v=0.0, tunnel_width=4.0,
         progress_reward_coef=coef,
     )
     env.reset(seed=0)
@@ -399,7 +399,7 @@ def test_collision_penalty_independent_of_timestep():
     the first step or after several safe steps. True by construction now
     that a contact is additive rather than a refunded terminal event, but
     worth locking in as an explicit regression test."""
-    common = dict(sigma_p=0.0, sigma_v=0.0, tunnel_width=4.0, progress_reward_coef=0.0)
+    common = dict(noise_bound_p=0.0, noise_bound_v=0.0, tunnel_width=4.0, progress_reward_coef=0.0)
 
     env_early = make(**common)
     env_early.reset(seed=0)
@@ -427,7 +427,7 @@ def test_collision_penalty_independent_of_impact_speed():
     """The contact penalty must be flat regardless of |v_y| at the moment of
     impact -- unlike the old impact_penalty_coef design, a hard hit and a
     soft graze cost exactly the same."""
-    common = dict(sigma_p=0.0, sigma_v=0.0, tunnel_width=4.0, progress_reward_coef=0.0)
+    common = dict(noise_bound_p=0.0, noise_bound_v=0.0, tunnel_width=4.0, progress_reward_coef=0.0)
 
     env_slow = make(**common)
     env_slow.reset(seed=0)
@@ -448,7 +448,7 @@ def test_collision_count_and_impacts_accumulate_over_episode():
     """collision_count and collision_impacts must track *every* contact in
     the episode, not just the most recent one -- and collision_impacts holds
     each contact's own penalty, not a running cumulative sum."""
-    env = make(sigma_p=0.0, sigma_v=0.0, tunnel_width=4.0, max_steps=5)
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0, tunnel_width=4.0, max_steps=5)
     env.reset(seed=0)
     action = np.array([0.0, env.u_max], dtype=np.float32)
 
@@ -469,7 +469,7 @@ def test_collision_count_and_impacts_accumulate_over_episode():
 
 
 def test_collision_bookkeeping_resets_on_reset():
-    env = make(sigma_p=0.0, sigma_v=0.0, tunnel_width=4.0)
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0, tunnel_width=4.0)
     env.reset(seed=0)
     env.state = np.array([1.0, env.W / 2.0 - 1e-4, 0.0, 1.0], dtype=np.float32)
     _, _, _, _, info = env.step(np.array([0.0, env.u_max], dtype=np.float32))
@@ -494,7 +494,7 @@ def test_a_step_at_top_speed_covers_v_max_dt_however_hard_the_thrust():
     it was a clip of the state after the full LTI update, so thrusting at top
     speed covered v_max*dt + u_max*dt**2/2 per step, 10% more, and trained
     agents used it to beat the min-time oracle (see SlalomEnv.step and TunnelEnv.step)."""
-    env = make(sigma_p=0.0, sigma_v=0.0)
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0)
     env.reset(seed=0)
     for u in (0.0, env.u_max):
         env.state = np.array([5.0, 0.0, env.v_max, -env.v_max], dtype=np.float32)
@@ -507,10 +507,47 @@ def test_a_step_at_top_speed_covers_v_max_dt_however_hard_the_thrust():
 def test_reaching_the_speed_limit_gives_the_in_bounds_actions_state():
     """A step that hits the limit lands exactly where the in-bounds action
     (v_max - v) / dt lands: the plant the oracle and MPCWorker model."""
-    env = make(sigma_p=0.0, sigma_v=0.0)
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0)
     env.reset(seed=0)
     start = np.array([5.0, 0.0, 1.0, -1.1], dtype=np.float32)
     env.state = start.copy()
     obs, *_ = env.step(np.array([env.u_max, -env.u_max], dtype=np.float32))
     in_bounds = np.array([(env.v_max - 1.0) / env.dt, (-env.v_max + 1.1) / env.dt], dtype=np.float32)
     np.testing.assert_allclose(obs, env.A @ start + env.B @ in_bounds, atol=1e-5)
+
+
+def test_noise_is_uniform_in_the_bounded_box():
+    """The disturbance is drawn uniformly from the box W (see the config's
+    noise_bound_p): every component of every step's w stays inside its
+    bound, and over many steps each fills most of it -- a bounded, not a
+    Gaussian, disturbance."""
+    bound_p, bound_v = 0.01, 0.05
+    env = make(noise_bound_p=bound_p, noise_bound_v=bound_v, tunnel_length=1000.0, max_steps=10000)
+    bound = np.array([bound_p, bound_p, bound_v, bound_v])
+    start = np.array([1.0, 0.0, 0.3, 0.0], dtype=np.float32)
+    env.reset(seed=0, options={"init_state": start})
+    ws = []
+    for _ in range(2000):
+        # Restarted from the same mid-corridor state every step, so no
+        # random walk ever reaches a wall or the speed limit, whose clips
+        # would be mistaken for the disturbance.
+        env.state = start.copy()
+        before = env.state.astype(np.float64)
+        predicted = env.A.astype(np.float64) @ before
+        env.step(np.zeros(2, dtype=np.float32))
+        ws.append(env.state.astype(np.float64) - predicted)
+    ws = np.array(ws)
+    assert np.all(np.abs(ws) <= bound + 1e-6)
+    assert np.all(ws.max(axis=0) > 0.9 * bound)
+    assert np.all(ws.min(axis=0) < -0.9 * bound)
+
+
+def test_zero_noise_draws_no_randomness():
+    """With W = {0} (the default) step() consumes nothing from the env's
+    generator, which is what keeps every run from before the bounded
+    disturbance existed bit-identical."""
+    env = make()
+    env.reset(seed=3)
+    rng_state = env.np_random.bit_generator.state
+    env.step(np.array([1.0, -1.0], dtype=np.float32))
+    assert env.np_random.bit_generator.state == rng_state

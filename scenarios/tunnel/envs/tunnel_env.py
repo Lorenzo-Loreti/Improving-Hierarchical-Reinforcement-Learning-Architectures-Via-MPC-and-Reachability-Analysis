@@ -35,8 +35,8 @@ class TunnelEnv(gym.Env):
         self.W = config.tunnel_width
         self.v_max = config.v_max
         self.u_max = config.u_max
-        self.sigma_p = config.sigma_p
-        self.sigma_v = config.sigma_v
+        self.noise_bound_p = config.noise_bound_p
+        self.noise_bound_v = config.noise_bound_v
         self.max_steps = config.max_steps
 
         # Derived fresh from `self.W` rather than read off the config once
@@ -81,10 +81,11 @@ class TunnelEnv(gym.Env):
             [0.0, self.dt]
         ], dtype=np.float32)
 
-        # Diagonal process noise covariance (`std_dev` below is what actually
-        # drives sampling; `Sigma` is kept for logging/inspection).
-        self.Sigma = np.diag([self.sigma_p**2, self.sigma_p**2, self.sigma_v**2, self.sigma_v**2])
-        self.std_dev = np.array([self.sigma_p, self.sigma_p, self.sigma_v, self.sigma_v], dtype=np.float32)
+        # Half-widths of the disturbance box W, per state component (see
+        # the config's noise_bound_p). This replaced a Gaussian's `std_dev`
+        # (and a `Sigma` covariance kept for inspection) on 2026-09-28.
+        self.noise_bound = np.array([self.noise_bound_p, self.noise_bound_p,
+                                     self.noise_bound_v, self.noise_bound_v], dtype=np.float32)
 
         self.state = None
         self.steps = 0
@@ -159,9 +160,11 @@ class TunnelEnv(gym.Env):
         u = np.clip(u, (-np.float32(self.v_max) - v) / np.float32(self.dt),
                     (np.float32(self.v_max) - v) / np.float32(self.dt))
 
-        # Additive Gaussian noise
-        if np.any(self.std_dev > 0):
-            w = self.np_random.normal(loc=0.0, scale=self.std_dev)
+        # Additive disturbance, uniform in the box W (see the config's
+        # noise_bound_p). Nothing is drawn when W = {0}, so the
+        # deterministic environment consumes no randomness here.
+        if np.any(self.noise_bound > 0):
+            w = self.np_random.uniform(low=-self.noise_bound, high=self.noise_bound)
         else:
             w = np.zeros(4, dtype=np.float32)
 

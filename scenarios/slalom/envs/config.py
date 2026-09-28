@@ -12,8 +12,24 @@ class SlalomEnvConfig:
     tunnel_width: float = 4.0
     v_max: float = 1.2
     u_max: float = 2.5
-    sigma_p: float = 0.0
-    sigma_v: float = 0.0
+    # Additive process disturbance w, drawn every step independently per
+    # component and uniformly from the box W = {|w_p| <= noise_bound_p on
+    # each position, |w_v| <= noise_bound_v on each velocity}: the compact set
+    # the tube MPC worker (algorithms/tube_mpc.py) is designed against. 0.0,
+    # the default, is the deterministic environment every experiment before
+    # 2026-09-28 ran on; nothing is drawn then, so those runs are
+    # bit-identical.
+    #
+    # Until 2026-09-28 the disturbance was Gaussian (sigma_p, sigma_v, both
+    # 0.0 in every run). It was replaced because a Gaussian has unbounded
+    # support: a tube MPC's guarantees hold only while w stays in a compact W
+    # with 0 in its interior, so under a Gaussian they are only probabilistic
+    # (W taken as a confidence box, e.g. 3 sigma, which some step eventually
+    # leaves), while under a bounded W they hold at every step. See the
+    # tube-MPC note (Robust Tube-Based MPC for Linear Systems with
+    # Non-Convex State Constraints), Assumption 2 and Remark 1.1.
+    noise_bound_p: float = 0.0
+    noise_bound_v: float = 0.0
     max_steps: int = 200
 
     step_penalty: float = -1.0
@@ -66,9 +82,9 @@ class SlalomEnvConfig:
             raise ValueError(f"v_max must be > 0, got {self.v_max}")
         if self.u_max <= 0:
             raise ValueError(f"u_max must be > 0, got {self.u_max}")
-        if self.sigma_p < 0:
-            raise ValueError(f"sigma_p must be >= 0, got {self.sigma_p}")
-        if self.sigma_v < 0:
-            raise ValueError(f"sigma_v must be >= 0, got {self.sigma_v}")
+        if self.noise_bound_p < 0:
+            raise ValueError(f"noise_bound_p must be >= 0, got {self.noise_bound_p}")
+        if self.noise_bound_v < 0:
+            raise ValueError(f"noise_bound_v must be >= 0, got {self.noise_bound_v}")
         if self.max_steps <= 0:
             raise ValueError(f"max_steps must be > 0, got {self.max_steps}")
