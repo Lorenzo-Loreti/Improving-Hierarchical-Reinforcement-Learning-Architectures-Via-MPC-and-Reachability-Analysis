@@ -42,16 +42,19 @@ figures are medians over seeds, with [min, max] where the spread matters.
                        hPPO        0         0        11.6 [4.9, 16.2] (56%), return 434
                        PPO         0         0        9.4 [1.6, 38.4]  (82%), return 553
 
-- The learned margins hold against random disturbances, uniform or on
-  W's vertices, and fail against an aimed one. At the first level the
-  failure is mild. At twice the level both learned policies still reach
+- The learned margins mostly hold against random disturbances, uniform or
+  on W's vertices: the median seed takes no contact. At twice the level a
+  few seeds occasionally touch a wall even then (at most 0.08 contacts per
+  episode for hPPO and 0.16 for PPO, on W's vertices). Against an aimed
+  disturbance the margins fail. At the first level the failure is mild. At twice the level both learned policies still reach
   the goal, but through the walls: ~10 contacts per episode, with returns
   of ~400-550 against ~1012.
 - PPO+MPC has no contact under any disturbance at either level, as
   theorem 4.1 says. The guarantee is tight, not padded: under the
   adversary its real state came within 1-3 mm of a wall (the margin rho is
-  1 mm), where hPPO and PPO keep 0.15-0.37 m and 0.06-0.13 m against random
-  disturbances. The tube spends its whole width, and nothing more.
+  1 mm). At the first level and under random disturbances, the median
+  seed's closest approach is 0.16-0.20 m for hPPO and 0.06-0.08 m for PPO.
+  The tube spends its whole width, and nothing more.
 - Safety is guaranteed, progress is not. Under the adversary at twice the
   level, one PPO+MPC seed (7) did not reach the goal from 13 of the 25
   starts. It came to rest at (6.83, -2.0), in the corner below gate 2,
