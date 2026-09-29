@@ -77,6 +77,38 @@ Result (2026-09-28, seeds 1-10 each, 500k steps; summary.md has the rest)
 - Wall clock: ~121 min per PPO+MPC run with 14 runs in parallel (~10 ms
   per solve under that load, ~4.6 ms alone), against ~14 min for hPPO and
   ~10 min for PPO.
+
+Twice the disturbance (2026-09-29, --noise-bound-p 0.01 --noise-bound-v 0.1)
+---------------------------------------------------------------------------
+This asks whether the learned policies' own margin stops being enough.
+The tube is then +-0.165 m and +-0.42 m/s, the plan is held to 0.78 m/s
+and 0.90 m/s^2, and a stop takes 9 of the 10 horizon steps. Three times
+the first level (0.015 / 0.15) is out of reach with this ancillary gain:
+KZ takes all but 0.107 of the input's 2.5, a stop needs 54 steps, and
+even goals placed by hand in the gate openings take 189 steps.
+
+                              PPO+MPC          hPPO                    PPO
+  eval return, last 100k      1002.3           1012.0  (p = 2e-4)      1012.4  (p = 2e-4)
+  mean grid gap to oracle     10.6             0.7                     0.3
+  eval episode length         87.9             78.4                    77.9
+  eval contacts/episode       0                0                       0
+  training contacts/episode   0 (whole run)    0.61 (whole run)        0.31 (whole run)
+  first clean evaluation      56k              67k     (p = 0.08)      46k     (p = 0.03)
+  strict solved-check         never            10/10, median 82k       10/10, median 56k
+
+- The learned margins still suffice, against uniform noise. PPO and hPPO
+  evaluate without a contact and within ~1 of the undisturbed oracle.
+  They solve at 56k and 82k, a little later than at the first level (51k,
+  72k), and their training contacts are unchanged (0.31 and 0.61 per
+  episode against 0.31 and 0.55).
+- The tube's price roughly doubles, from ~4.5 to ~10 steps per episode
+  (~13%), and its benefit is the same as before: no contact in training.
+  The worker fell back to the candidate on 6 steps out of 5 million, with
+  no emergency.
+- The evaluation draws w uniformly from W, and the tube is designed for
+  the worst w in W. Neither study tests the learned policies against that
+  worst case, e.g. w on W's vertices or pushed toward the nearest wall,
+  which is the case the guarantee is for.
 """
 import argparse
 import glob
