@@ -106,9 +106,11 @@ even goals placed by hand in the gate openings take 189 steps.
   The worker fell back to the candidate on 6 steps out of 5 million, with
   no emergency.
 - The evaluation draws w uniformly from W, and the tube is designed for
-  the worst w in W. Neither study tests the learned policies against that
-  worst case, e.g. w on W's vertices or pushed toward the nearest wall,
-  which is the case the guarantee is for.
+  the worst w in W. stress_disturbed.py replays these final policies
+  against harder disturbances in the same W. On W's vertices nothing
+  changes. Against an adversary that pushes toward the nearest wall, the
+  learned policies take ~10 contacts per episode at this level, and
+  PPO+MPC still takes none.
 """
 import argparse
 import glob
