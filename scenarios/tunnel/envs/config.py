@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+from .spawn_sampler import INIT_SAMPLERS
 from .width_profile import WidthProfile
 
 
@@ -30,6 +31,18 @@ class TunnelEnvConfig:
     # Non-Convex State Constraints), Assumption 2 and Remark 1.1.
     noise_bound_p: float = 0.0
     noise_bound_v: float = 0.0
+    # How TunnelVecEnv draws the start of each *training* episode from the
+    # spawn box (p_x0 in [0, 2], p_y0 in [-W/4, W/4], at rest): "uniform",
+    # independent draws, or "sobol", a scrambled Sobol' sequence
+    # (randomized quasi-Monte Carlo) that spreads successive starts evenly
+    # over the box. Every start is uniform on the box under both, so the
+    # objective is the same; see envs/spawn_sampler.py. Evaluation (the plain
+    # env's reseeded reset) draws independently under both, from the same
+    # starts. "uniform", the default, is how every run before 2026-10-03
+    # trained, unchanged bit for bit. It stays the default because "sobol"
+    # changed nothing measurable on the slalom, for any algorithm
+    # (docs/init-sampler.md).
+    init_sampler: str = "uniform"
     max_steps: int = 200
 
     step_penalty: float = -1.0
@@ -95,5 +108,7 @@ class TunnelEnvConfig:
             raise ValueError(f"noise_bound_p must be >= 0, got {self.noise_bound_p}")
         if self.noise_bound_v < 0:
             raise ValueError(f"noise_bound_v must be >= 0, got {self.noise_bound_v}")
+        if self.init_sampler not in INIT_SAMPLERS:
+            raise ValueError(f"init_sampler must be one of {INIT_SAMPLERS}, got {self.init_sampler!r}")
         if self.max_steps <= 0:
             raise ValueError(f"max_steps must be > 0, got {self.max_steps}")

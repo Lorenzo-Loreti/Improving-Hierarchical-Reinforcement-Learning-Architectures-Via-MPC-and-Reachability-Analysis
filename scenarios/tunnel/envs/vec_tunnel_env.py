@@ -2,6 +2,7 @@ import numpy as np
 from gymnasium import spaces
 
 from .config import TunnelEnvConfig
+from .spawn_sampler import SobolSpawnStream, spawn_box
 from .width_profile import constant_profile
 
 
@@ -71,7 +72,12 @@ class TunnelVecEnv:
         self.noise_bound = np.array([self.noise_bound_p, self.noise_bound_p,
                                      self.noise_bound_v, self.noise_bound_v], dtype=np.float32)
 
-        self._np_random = np.random.default_rng()
+        # Where and how episodes start: see envs/spawn_sampler.py and the
+        # config's init_sampler.
+        self.init_sampler = c.init_sampler
+        self.spawn_low, self.spawn_high = spawn_box(self.W)
+
+        self.seed()
         self.states = np.zeros((num_envs, 4), dtype=np.float32)
         self.steps = np.zeros(num_envs, dtype=np.int64)
 
@@ -83,13 +89,27 @@ class TunnelVecEnv:
 
     def seed(self, seed=None):
         self._np_random = np.random.default_rng(seed)
+        # One Sobol' stream for all the sub-environments, restarted with the
+        # seed. It never draws from _np_random, which then holds the
+        # disturbance alone; under "uniform" the starts and the disturbance
+        # share it, interleaved in the order episodes end.
+        self._spawn_stream = SobolSpawnStream(seed) if self.init_sampler == "sobol" else None
 
     def _sample_initial(self, mask: np.ndarray):
         n = int(mask.sum())
         if n == 0:
             return
-        p_x = self._np_random.uniform(0.0, 2.0, size=n).astype(np.float32)
-        p_y = self._np_random.uniform(-self.W / 4.0, self.W / 4.0, size=n).astype(np.float32)
+        low, high = self.spawn_low, self.spawn_high
+        if self.init_sampler == "sobol":
+            # The stream's next n points, mapped onto the box. `self.states[mask]`
+            # below fills rows in ascending env index, so environments that
+            # finish on the same step take the points in that order.
+            u = self._spawn_stream.take(n)
+            p_x = (low[0] + u[:, 0] * (high[0] - low[0])).astype(np.float32)
+            p_y = (low[1] + u[:, 1] * (high[1] - low[1])).astype(np.float32)
+        else:
+            p_x = self._np_random.uniform(low[0], high[0], size=n).astype(np.float32)
+            p_y = self._np_random.uniform(low[1], high[1], size=n).astype(np.float32)
         zeros = np.zeros(n, dtype=np.float32)
         self.states[mask] = np.stack([p_x, p_y, zeros, zeros], axis=1)
         self.steps[mask] = 0

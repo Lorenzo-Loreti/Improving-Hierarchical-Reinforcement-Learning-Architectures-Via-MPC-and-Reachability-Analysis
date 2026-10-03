@@ -344,10 +344,11 @@ def solve_min_time(env, max_scp_iters=20, restarts=3):
 def spawn_grid(env, n_x=5, n_y=5):
     """An evenly-spaced grid of initial conditions covering the spawn box
     `env.reset()` otherwise draws *randomly* from: `p_x0` in [0, 2], `p_y0`
-    in [-W/4, W/4], velocity always 0. These bounds are duplicated from
-    `reset()`'s own hardcoded spawn box rather than read off it (it isn't
-    exposed via config) -- the same duplication `slalom_profile()`'s
-    `spawn_end = 2.0` comment already documents and accepts.
+    in [-W/4, W/4], velocity always 0. The bounds are read off the env
+    (`env.spawn_low`/`env.spawn_high`, from the scenario's
+    envs/spawn_sampler.py). Until 2026-10-03 they were duplicated here from
+    `reset()`'s own hardcoded box, which was not exposed; `slalom_profile()`'s
+    `spawn_end = 2.0` still duplicates the upper p_x0 bound.
 
     A *fixed* grid (rather than more random draws) is the point: solving the
     oracle for each point once (see `precompute_optimal_grid`) and reusing
@@ -358,8 +359,8 @@ def spawn_grid(env, n_x=5, n_y=5):
     Returns an `(n_x*n_y, 4)` float32 array of `[p_x0, p_y0, 0, 0]`, `p_x0`
     varying slowest (row-major over the `(n_x, n_y)` grid).
     """
-    p_x_vals = np.linspace(0.0, 2.0, n_x)
-    p_y_vals = np.linspace(-env.W / 4.0, env.W / 4.0, n_y)
+    p_x_vals = np.linspace(env.spawn_low[0], env.spawn_high[0], n_x)
+    p_y_vals = np.linspace(env.spawn_low[1], env.spawn_high[1], n_y)
     grid = np.array(
         [[p_x, p_y, 0.0, 0.0] for p_x in p_x_vals for p_y in p_y_vals],
         dtype=np.float32,

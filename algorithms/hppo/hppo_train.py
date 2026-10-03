@@ -37,6 +37,7 @@ from hppo import HPPOAgent, VecRolloutBuffer, ManagerVecRolloutBuffer, WORKER_OB
 from optimal_solver import spawn_grid, precompute_optimal_grid, MinTimeSolver
 from solved_check import check_solved
 from metrics_log import MetricsLog
+from spawn_coverage import SpawnCoverage
 
 
 # `type=bool` would be a no-op for the boolean flags below: argparse applies
@@ -110,6 +111,17 @@ def parse_args(scenario):
         help="half-width, in m/s, of the uniform disturbance added to each "
              "velocity every step (the env config's noise_bound_v); see "
              "--noise-bound-p")
+    parser.add_argument("--init-sampler", type=str, choices=["uniform", "sobol"],
+        default=scenario.make_env_config().init_sampler,
+        help="how the vector env draws the start of each training episode "
+             "from the spawn box (the env config's init_sampler, since "
+             "2026-10-03): 'uniform', independent draws, or 'sobol', a "
+             "scrambled Sobol' sequence (randomized quasi-Monte Carlo) that "
+             "spreads successive starts evenly over the box. Every start is "
+             "uniform on the box under both, so the objective is the same; "
+             "evaluation draws its starts independently under both. The "
+             "default is the env config's. The same flag as flat PPO's; see "
+             "scenarios/slalom/envs/spawn_sampler.py and docs/init-sampler.md")
 
     # Algorithm specific arguments
     parser.add_argument("--total-timesteps", type=int, default=scenario.total_timesteps,
@@ -791,6 +803,7 @@ def train(args, scenario):
         contact_penalty=args.contact_penalty,
         noise_bound_p=args.noise_bound_p,
         noise_bound_v=args.noise_bound_v,
+        init_sampler=args.init_sampler,
         **({} if args.env_u_max is None else {"u_max": args.env_u_max}),
     )
 
@@ -941,6 +954,10 @@ def train(args, scenario):
     # different partially-consumed goals, and accumulate different segment
     # rewards.
     obs, _ = vec_env.reset(seed=args.seed)
+    # How evenly the latest training starts cover the spawn box, logged every
+    # update as spawn/* (see algorithms/spawn_coverage.py).
+    spawn_coverage = SpawnCoverage(vec_env.spawn_low, vec_env.spawn_high)
+    spawn_coverage.add(obs)
     obs_norm = agent.normalize_obs(obs)
     current_pos = obs[:, :2].copy()
 
@@ -1053,6 +1070,7 @@ def train(args, scenario):
             # Environment step (the vector env auto-resets envs that finish)
             next_obs, env_reward, terminated, truncated, info = vec_env.step(action_np)
             done = terminated | truncated
+            spawn_coverage.add(next_obs[done])
             next_obs_norm = agent.normalize_obs(next_obs)
 
             # The auto-reset is why this is not a mechanical substitution. For
@@ -1276,6 +1294,7 @@ def train(args, scenario):
         metrics["charts/worker_critic_lr"] = agent.worker_optimizer.param_groups[-1]["lr"]
         metrics["charts/SPS"] = sps
         metrics["charts/num_episodes"] = len(completed_returns)
+        metrics.update(spawn_coverage.metrics())
         if near_goal_ax:
             metrics["charts/worker_ax_near_goal"] = float(np.mean(np.concatenate(near_goal_ax)))
             metrics["charts/worker_value_near_goal"] = float(np.mean(np.concatenate(near_goal_value)))

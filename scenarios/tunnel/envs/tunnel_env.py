@@ -5,6 +5,7 @@ from gymnasium import spaces
 import numpy as np
 
 from .config import TunnelEnvConfig
+from .spawn_sampler import spawn_box
 from .width_profile import constant_profile
 
 
@@ -38,6 +39,11 @@ class TunnelEnv(gym.Env):
         self.noise_bound_p = config.noise_bound_p
         self.noise_bound_v = config.noise_bound_v
         self.max_steps = config.max_steps
+
+        # The spawn box every reset draws from (envs/spawn_sampler.py). Always
+        # independently here: config.init_sampler applies only to TunnelVecEnv's
+        # training rollouts, since evaluation reseeds this env every episode.
+        self.spawn_low, self.spawn_high = spawn_box(self.W)
 
         # Derived fresh from `self.W` rather than read off the config once
         # (see TunnelEnvConfig.width_profile for why).
@@ -106,10 +112,10 @@ class TunnelEnv(gym.Env):
             # one every reset.
             self.state = np.asarray(options["init_state"], dtype=np.float32).copy()
         else:
-            # Randomize initial position uniformly in a small box on the left
-            # p_x in [0, 2], p_y in [-W/4, W/4]
-            p_x = self.np_random.uniform(low=0.0, high=2.0)
-            p_y = self.np_random.uniform(low=-self.W/4.0, high=self.W/4.0)
+            # Randomize initial position uniformly in a small box on the left,
+            # p_x in [0, 2], p_y in [-W/4, W/4] (spawn_box)
+            p_x = self.np_random.uniform(low=self.spawn_low[0], high=self.spawn_high[0])
+            p_y = self.np_random.uniform(low=self.spawn_low[1], high=self.spawn_high[1])
 
             # Initial velocity is exactly zero
             self.state = np.array([p_x, p_y, 0.0, 0.0], dtype=np.float32)

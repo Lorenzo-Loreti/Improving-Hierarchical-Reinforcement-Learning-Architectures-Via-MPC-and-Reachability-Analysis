@@ -16,6 +16,7 @@ import argparse
 import matplotlib.pyplot as plt
 
 from .config import TunnelEnvConfig
+from .spawn_sampler import spawn_box
 from .width_profile import constant_profile
 
 
@@ -75,12 +76,14 @@ def plot_env(config: TunnelEnvConfig, ax=None, overlay=False):
         ax.hlines([y_lo, y_hi], x_start, x_end, color=wall_ink, linewidth=wall_width)
         ax.axvline(seg.x_start, color="0.5", linewidth=0.5, linestyle=":")
 
-    # Spawn box: p_x in [0, 2], p_y in [-W/4, W/4] -- matches TunnelEnv.reset().
+    # Spawn box: p_x in [0, 2], p_y in [-W/4, W/4], the box TunnelEnv.reset()
+    # draws from (envs/spawn_sampler.py).
+    spawn_low, spawn_high = spawn_box(config.tunnel_width)
     ax.add_patch(plt.Rectangle(
-        (0.0, -config.tunnel_width / 4.0), 2.0, config.tunnel_width / 2.0,
+        tuple(spawn_low), *(spawn_high - spawn_low),
         fill=False, edgecolor=spawn_color, linestyle=spawn_ls, linewidth=spawn_lw,
     ))
-    ax.text(1.0, -config.tunnel_width / 4.0 - pad * 0.4, "spawn box",
+    ax.text((spawn_low[0] + spawn_high[0]) / 2.0, spawn_low[1] - pad * 0.4, "spawn box",
             ha="center", va="top", fontsize=8, color=spawn_color)
 
     # Goal line.

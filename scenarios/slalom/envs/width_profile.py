@@ -137,7 +137,7 @@ def slalom_profile(tunnel_length=10.0, tunnel_width=4.0, gate_half_width=0.75):
             f"slalom wall at {full_half}"
         )
 
-    spawn_end = 2.0  # matches SlalomEnv.reset()'s hardcoded spawn box p_x in [0, 2]
+    spawn_end = 2.0  # the spawn box's p_x0 upper bound, spawn_box() in envs/spawn_sampler.py
     entry_end = 4.0
     gate1_end = 5.0
     mid_end = 7.0

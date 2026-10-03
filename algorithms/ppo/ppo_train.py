@@ -34,6 +34,7 @@ from ppo import PPOAgent, RolloutBuffer
 from optimal_solver import spawn_grid, precompute_optimal_grid, MinTimeSolver
 from solved_check import check_solved
 from metrics_log import MetricsLog
+from spawn_coverage import SpawnCoverage
 
 
 def _str2bool(x):
@@ -73,6 +74,17 @@ def parse_args(scenario):
         help="half-width, in m/s, of the uniform disturbance added to each "
              "velocity every step (the env config's noise_bound_v); see "
              "--noise-bound-p")
+    parser.add_argument("--init-sampler", type=str, choices=["uniform", "sobol"],
+        default=scenario.make_env_config(None).init_sampler,
+        help="how the vector env draws the start of each training episode "
+             "from the spawn box (the env config's init_sampler, since "
+             "2026-10-03): 'uniform', independent draws, or 'sobol', a "
+             "scrambled Sobol' sequence (randomized quasi-Monte Carlo) that "
+             "spreads successive starts evenly over the box. Every start is "
+             "uniform on the box under both, so the objective is the same; "
+             "evaluation draws its starts independently under both. The "
+             "default is the env config's. See "
+             "scenarios/slalom/envs/spawn_sampler.py and docs/init-sampler.md")
     parser.add_argument("--torch-deterministic", type=_str2bool, default=True,
         help="if toggled, `torch.backends.cudnn.deterministic=False`")
     parser.add_argument("--cuda", type=_str2bool, default=True,
@@ -228,7 +240,8 @@ def train(args, scenario):
     # scenario's help text says what its own arm contributes. Defaults to
     # None = the canonical environment, unchanged.
     env_config = scenario.make_env_config(args.env_u_max, noise_bound_p=args.noise_bound_p,
-                                          noise_bound_v=args.noise_bound_v)
+                                          noise_bound_v=args.noise_bound_v,
+                                          init_sampler=args.init_sampler)
     if args.env_u_max is not None:
         # rho is defined over the hierarchical arms' macro-step, T =
         # manager_freq * dt = 10 * dt (1.0 s); flat PPO has none of its own
@@ -331,6 +344,10 @@ def train(args, scenario):
 
     # Initialize environment
     obs, _ = vec_env.reset(seed=args.seed)
+    # How evenly the latest training starts cover the spawn box, logged every
+    # update as spawn/* (see algorithms/spawn_coverage.py).
+    spawn_coverage = SpawnCoverage(vec_env.spawn_low, vec_env.spawn_high)
+    spawn_coverage.add(obs)
     global_step = 0
     start_time = time.time()
 
@@ -399,6 +416,8 @@ def train(args, scenario):
                 reward[trunc_only] += agent.gamma * final_value
 
             done = terminated | truncated
+            # A finished env's next_obs is already its next episode's start.
+            spawn_coverage.add(next_obs[done])
 
             buffer.add(
                 obs_tensor,
@@ -437,6 +456,7 @@ def train(args, scenario):
         metrics["charts/critic_learning_rate"] = agent.optimizer.param_groups[-1]["lr"]
         metrics["charts/SPS"] = sps
         metrics["charts/num_episodes"] = len(completed_returns)
+        metrics.update(spawn_coverage.metrics())
 
         log_line = (f"update={update} global_step={global_step} SPS={sps} "
                     f"ev={metrics['loss/explained_variance']:.3f} "

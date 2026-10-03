@@ -40,6 +40,15 @@ at a randomized position inside a small box (so the agent never sees exactly
 the same starting point twice), with zero initial velocity. From there, the
 agent must reach the far end of the corridor.
 
+Every starting point is drawn uniformly from that box. During training the
+starting points of successive episodes are, by default, drawn independently
+of each other. An option (since 2026-10-03) spreads them evenly over the box
+instead, with a scrambled Sobol' sequence, so that a few consecutive episodes
+never all start in the same corner; each starting point is still uniform on
+the box, so the task itself is unchanged. On the slalom this made no
+measurable difference to learning, so it stays off by default; see
+[`docs/init-sampler.md`](../../docs/init-sampler.md).
+
 An episode ends in one of two ways:
 
 - **Success**: the agent's forward position reaches the far end of the

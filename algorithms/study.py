@@ -241,72 +241,93 @@ def find_run(runs_dir, study, seed, total_timesteps):
 
 
 def train_phase(study, args, passthrough):
-    runs_dir = os.path.join(args.out, "runs")
-    logs_dir = os.path.join(args.out, "logs")
-    os.makedirs(runs_dir, exist_ok=True)
-    os.makedirs(logs_dir, exist_ok=True)
-
-    todo = [s for s in args.seed_list if find_run(runs_dir, study, s, args.total_timesteps) is None]
+    todo = [s for s in args.seed_list if find_run(os.path.join(args.out, "runs"), study, s,
+                                                  args.total_timesteps) is None]
     done = [s for s in args.seed_list if s not in todo]
     if done:
         print(f"[{study.label}] already trained at {args.total_timesteps} steps, skipped: seeds {done}")
-    if not todo:
-        return
+    train_runs([TrainTask(study, args.out, seed, args.total_timesteps, tuple(passthrough))
+                for seed in todo], args.jobs)
 
+
+@dataclass(frozen=True)
+class TrainTask:
+    """One training run of a seed study: `study`'s script on `seed`, writing
+    to `out`/runs and `out`/logs, with `passthrough` appended to its command
+    line (e.g. the flag that tells two arms of a comparison apart)."""
+    study: Study
+    out: str
+    seed: int
+    total_timesteps: int
+    passthrough: tuple = ()
+
+
+def train_runs(tasks, jobs):
+    """Run `tasks` (TrainTask), `jobs` at a time, each pinned to one thread.
+
+    One queue for any number of studies, so a comparison of several arms
+    (e.g. scenarios/slalom/scripts/study_init_sampler.py) leaves no core idle
+    while one arm's last seeds finish. Tasks start in the order given."""
+    if not tasks:
+        return
     # One thread per trainer: without the cap every process starts PyTorch's
     # full-core thread pool and a parallel batch oversubscribes the CPU.
     env = dict(os.environ, OMP_NUM_THREADS="1", MKL_NUM_THREADS="1")
-    jobs = max(1, min(args.jobs, len(todo)))
-    print(f"[{study.label}] training seeds {todo} at {args.total_timesteps} steps, {jobs} at a time; "
-          f"logs in {logs_dir}")
+    jobs = max(1, min(jobs, len(tasks)))
+    labels = sorted({t.study.label for t in tasks})
+    print(f"[{'; '.join(labels)}] training {len(tasks)} runs, {jobs} at a time")
 
-    pending = list(todo)
-    running = {}  # seed -> (Popen, log file, start time)
+    pending = list(tasks)
+    running = {}  # task -> (Popen, log file, start time)
     failed = []
     t0 = time.time()
     try:
         while pending or running:
             while pending and len(running) < jobs:
-                seed = pending.pop(0)
-                cmd = [sys.executable, "-u", study.train_script,
-                       "--seed", str(seed),
-                       "--exp-name", study.exp_name,
-                       "--total-timesteps", str(args.total_timesteps),
+                task = pending.pop(0)
+                runs_dir = os.path.join(task.out, "runs")
+                logs_dir = os.path.join(task.out, "logs")
+                os.makedirs(runs_dir, exist_ok=True)
+                os.makedirs(logs_dir, exist_ok=True)
+                cmd = [sys.executable, "-u", task.study.train_script,
+                       "--seed", str(task.seed),
+                       "--exp-name", task.study.exp_name,
+                       "--total-timesteps", str(task.total_timesteps),
                        # Every seed runs the whole budget, so all curves share
                        # an x-axis; the first solve is still logged, and saved
                        # as solved.pt.
                        "--solved-early-stop", "false",
                        "--save-eval-checkpoints", "true",
                        "--checkpoint-dir", os.path.abspath(runs_dir),
-                       *passthrough]
-                log_file = open(os.path.join(logs_dir, f"seed_{seed}.log"), "w")
+                       *task.passthrough]
+                log_file = open(os.path.join(logs_dir, f"seed_{task.seed}.log"), "w")
                 proc = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT, env=env,
-                                        cwd=os.path.dirname(study.train_script))
-                running[seed] = (proc, log_file, time.time())
-            for seed, (proc, log_file, started) in list(running.items()):
+                                        cwd=os.path.dirname(task.study.train_script))
+                running[task] = (proc, log_file, time.time())
+            for task, (proc, log_file, started) in list(running.items()):
                 if proc.poll() is None:
                     continue
                 log_file.close()
-                del running[seed]
+                del running[task]
                 minutes = (time.time() - started) / 60
-                finished = len(todo) - len(pending) - len(running)
+                finished = len(tasks) - len(pending) - len(running)
+                tag = f"[{task.study.label}] seed {task.seed}"
                 if proc.returncode != 0:
-                    failed.append(seed)
-                    print(f"[{study.label}] seed {seed} FAILED (exit {proc.returncode}) after "
-                          f"{minutes:.1f} min, see logs/seed_{seed}.log")
+                    failed.append(task)
+                    print(f"{tag} FAILED (exit {proc.returncode}) after {minutes:.1f} min, see "
+                          f"{os.path.join(task.out, 'logs', f'seed_{task.seed}.log')}")
                     continue
-                run_dir = find_run(runs_dir, study, seed, args.total_timesteps)
+                run_dir = find_run(os.path.join(task.out, "runs"), task.study, task.seed, task.total_timesteps)
                 first = _first_solve(read_metrics(run_dir)) if run_dir else None
-                print(f"[{study.label}] seed {seed} done in {minutes:.1f} min "
-                      f"({finished}/{len(todo)}), first solve: "
+                print(f"{tag} done in {minutes:.1f} min ({finished}/{len(tasks)}), first solve: "
                       f"{'%.0fk steps' % (first / 1e3) if first else 'not within budget'}")
             time.sleep(1.0)
     finally:
         for proc, log_file, _ in running.values():
             proc.terminate()
             log_file.close()
-    print(f"[{study.label}] training finished in {(time.time() - t0) / 60:.1f} min"
-          + (f"; failed seeds: {failed}" if failed else ""))
+    print(f"[{'; '.join(labels)}] training finished in {(time.time() - t0) / 60:.1f} min"
+          + (f"; failed: {[(t.study.label, t.seed) for t in failed]}" if failed else ""))
 
 
 # --------------------------------------------------------------------------

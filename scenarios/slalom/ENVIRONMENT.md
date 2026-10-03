@@ -35,9 +35,10 @@ experiment before that date ran on.
 ## Objective and Episode Structure
 
 Episodes start and end exactly as in Tunnel: the agent spawns near the
-entrance at a randomized position (with zero velocity) and must reach the
-far end of the corridor within a fixed budget of 200 control steps (20
-simulated seconds). Reaching the goal ends the episode successfully;
+entrance at a randomized position (with zero velocity; Tunnel's description
+also covers how training draws these positions, independently or evenly
+spread) and must reach the far end of the corridor within a fixed budget of
+200 control steps (20 simulated seconds). Reaching the goal ends the episode successfully;
 otherwise it is cut off at the timeout. Wall contact — including contact
 with a gate's narrower walls — is never terminal: it is a soft, inelastic
 bounce (the agent's lateral push into the wall is absorbed, its forward
