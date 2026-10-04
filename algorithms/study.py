@@ -634,7 +634,8 @@ def compare_main(default_dirs, default_out, plot_env):
         help="study directories to compare, each already analyzed")
     parser.add_argument("--out", type=str, default=default_out)
     parser.add_argument("--plot-max-steps", type=int, default=None,
-        help="crop the learning-curve x-axis here (default: the shortest study's budget)")
+        help="crop the learning-curve x-axis here (default: the shortest study's budget; when "
+             "the budgets differ, both the whole runs and the shared budget are drawn)")
     parser.add_argument("--no-animation", action="store_true")
     args = parser.parse_args()
     analyses = [load_analysis(d) for d in args.studies]

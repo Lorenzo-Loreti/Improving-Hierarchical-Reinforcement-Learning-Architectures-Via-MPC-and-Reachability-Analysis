@@ -170,20 +170,20 @@ def fig_learning_curves(analyses, fig_dir, name, plot_max_steps=None):
         if key == "return":
             oracle = np.mean([o["return"] for a in analyses for o in a["oracle_eval"].values()])
             ax.axhline(oracle, color=INK, lw=1.2, ls="--", zorder=4)
-            ax.text(ax.get_xlim()[1], oracle, f"oracle {oracle:.0f} ", ha="right", va="bottom",
-                    fontsize=7.5, color=INK)
+            ax.text(1.0, oracle, f"oracle {oracle:.0f} ", ha="right", va="bottom", fontsize=7.5, color=INK,
+                    transform=ax.get_yaxis_transform())
         elif key == "length":
             oracle = np.mean([o["length"] for a in analyses for o in a["oracle_eval"].values()])
             ax.axhline(oracle, color=INK, lw=1.2, ls="--", zorder=4)
-            ax.text(ax.get_xlim()[1], oracle, f"oracle {oracle:.1f} ", ha="right", va="bottom",
-                    fontsize=7.5, color=INK)
+            ax.text(1.0, oracle, f"oracle {oracle:.1f} ", ha="right", va="bottom", fontsize=7.5, color=INK,
+                    transform=ax.get_yaxis_transform())
         elif key == "worst_gap":
             ax.set_yscale("symlog", linthresh=GAP_LINTHRESH, linscale=1.5)
             ax.axhline(0, color=MUTED, lw=0.8, zorder=0)
             tol = analyses[0]["config"]["solved_tolerance"]
             ax.axhline(tol, color=INK, lw=1.2, ls="--", zorder=4)
-            ax.text(ax.get_xlim()[1], tol, f"solved tolerance {tol:g} ", ha="right", va="bottom",
-                    fontsize=7.5, color=INK)
+            ax.text(1.0, tol, f"solved tolerance {tol:g} ", ha="right", va="bottom", fontsize=7.5, color=INK,
+                    transform=ax.get_yaxis_transform())
             ax.set_ylabel("worst gap over 25 starts\n(< 0: better than the oracle)")
     for ax in axes[1]:
         ax.set_xlabel("environment steps")
@@ -616,11 +616,20 @@ def plot_comparison(analyses, out_dir, plot_env, plot_max_steps=None, animate=Tr
     fig_dir = os.path.join(out_dir, "figures")
     labels = " vs ".join(a["label"] for a in analyses)
     print(f"[{labels}] drawing comparison figures")
-    if plot_max_steps is None:
-        plot_max_steps = min(a["total_timesteps"] for a in analyses)
+    budgets = [a["total_timesteps"] for a in analyses]
     with plt.rc_context(STYLE):
-        fig_learning_curves(analyses, fig_dir, "compare_learning_curves", plot_max_steps)
-        fig_first_solve_ecdf(analyses, fig_dir, "compare_first_solve_ecdf", plot_max_steps)
+        if plot_max_steps is None and len(set(budgets)) > 1:
+            # Studies of different budgets (since 2026-10-04 the slalom gives
+            # flat PPO and hPPO 1 024 000 steps and PPO+MPC 204 800): every
+            # curve over its own whole run, and all of them over the budget
+            # they share.
+            fig_learning_curves(analyses, fig_dir, "compare_learning_curves", max(budgets))
+            fig_first_solve_ecdf(analyses, fig_dir, "compare_first_solve_ecdf", max(budgets))
+            fig_learning_curves(analyses, fig_dir, "compare_learning_curves_common", min(budgets))
+        else:
+            plot_max_steps = plot_max_steps or min(budgets)
+            fig_learning_curves(analyses, fig_dir, "compare_learning_curves", plot_max_steps)
+            fig_first_solve_ecdf(analyses, fig_dir, "compare_first_solve_ecdf", plot_max_steps)
         fig_trajectories_vs_oracle(analyses, fig_dir, "compare_trajectories", plot_env)
         fig_kinematics(analyses, fig_dir, "compare_kinematics")
         if animate:
