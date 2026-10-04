@@ -1,6 +1,6 @@
 """The disturbed studies' final policies against harder disturbances in the
-same box W: does the margin flat PPO and hPPO learn hold against a worst
-case, the case PPO+MPC's tube is designed for?
+same W: does the margin flat PPO and hPPO learn hold against a worst case,
+the case PPO+MPC's tube is designed for?
 
     python scenarios/slalom/scripts/stress_disturbed.py
     python scenarios/slalom/scripts/stress_disturbed.py --studies disturbed_0.01_0.1 --modes adversary
@@ -10,14 +10,21 @@ compare_disturbed.py study, from the 25 starts of the solved-check grid,
 under three disturbances, all inside the W the policy was trained with:
 
     uniform    w drawn uniformly from W, as in training;
-    vertex     w on a random vertex of W (the note's section 5.6 (iii));
-    adversary  w on the vertex that pushes the state toward the forbidden
-               point nearest to where it is heading: sign(q - p') on each
-               axis, applied to the position and the velocity alike, where
-               p' is the next position without disturbance (the adversary
-               knows the action) and q the nearest point of the walls or a
-               gate's blocked bands. Greedy, not the worst case -- that would
-               take solving a game -- but aimed.
+    edge       w at a random extreme point of W, on the edge of both disks
+               at independent angles (the note's section 5.6 (iii));
+    adversary  w at the extreme point that pushes the state toward the
+               forbidden point nearest to where it is heading: both disks at
+               full radius along q - p', where p' is the next position
+               without disturbance (the adversary knows the action) and q
+               the nearest point of the walls or a gate's blocked bands.
+               Greedy, not the worst case -- that would take solving a game
+               -- but aimed.
+
+W is two disks, ||w_p|| <= noise_bound_p and ||w_v|| <= noise_bound_v, since
+2026-10-04 (scenarios/slalom/envs/actuation.py). Until then it was a box, the
+modes were "vertex" (a random vertex of the box) and an adversary that
+pushed sign(q - p') on each axis, and the speed and thrust limits were per
+axis; the result below is from then.
 
 The tube's guarantee (theorem 4.1) holds for every sequence in W, so
 PPO+MPC must stay contact-free under all three; nothing guarantees the
@@ -31,8 +38,9 @@ seeds of each seed's mean over the grid: contacts per episode, the share
 of episodes with a contact, success, return, the gap to the undisturbed
 oracle, and the smallest clearance to a wall reached in an episode.
 
-Result (2026-09-29): seeds 1-10 of every arm of both disturbed studies. The
-figures are medians over seeds, with [min, max] where the spread matters.
+Result (2026-09-29, box W and per-axis limits, the "vertex" mode then):
+seeds 1-10 of every arm of both disturbed studies. The figures are medians
+over seeds, with [min, max] where the spread matters.
 
   contacts per episode           uniform   vertex   adversary
   |w| <= 0.005 / 0.05  PPO+MPC     0         0        0
@@ -78,6 +86,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 for sub in ("scenarios/slalom", "algorithms/ppo", "algorithms/hppo", "algorithms/ppo_mpc", "algorithms"):
     sys.path.append(os.path.join(ROOT, *sub.split("/")))
+from envs.actuation import deliver
 from envs.config import SlalomEnvConfig
 from envs.slalom_env import SlalomEnv
 from envs.width_profile import slalom_profile
@@ -87,7 +96,7 @@ from optimal_solver import MinTimeSolver, spawn_grid, precompute_optimal_grid
 STUDIES_DIR = os.path.join(ROOT, "scenarios", "slalom", "studies")
 DEFAULT_STUDIES = ("disturbed_0.005_0.05", "disturbed_0.01_0.1")
 ALGOS = ("ppo_mpc", "hppo", "ppo")
-MODES = ("uniform", "vertex", "adversary")
+MODES = ("uniform", "edge", "adversary")
 
 
 # --------------------------------------------------------------------------
@@ -110,27 +119,33 @@ def nearest_forbidden_point(profile, p):
 
 
 class Disturbance:
-    """Stands in for the environment's generator: SlalomEnv.step draws its
-    disturbance as `self.np_random.uniform(low=-b, high=b)`, and this
-    answers that call with the chosen mode's w."""
+    """Stands in for the environment's generator. SlalomEnv.step draws its
+    disturbance through envs/actuation.sample_disturbance, as four uniforms
+    (U_0, U_1, U_2, U_3) mapped to w_p = b_p sqrt(U_0) (cos 2 pi U_1,
+    sin 2 pi U_1) and w_v likewise from (U_2, U_3); this answers that call
+    with the uniforms that land on the chosen mode's w -- radius 1 for the
+    edge of a disk, U = angle / 2 pi for its direction -- so the
+    environment's own code applies it, before the contact check, as in
+    training."""
 
     def __init__(self, env, mode, rng):
         self.env, self.mode, self.rng = env, mode, rng
 
-    def uniform(self, low, high):
-        b = np.asarray(high, dtype=float)
+    def uniform(self, low=0.0, high=1.0, size=None):
         if self.mode == "uniform":
-            return self.rng.uniform(low, high)
-        if self.mode == "vertex":
-            return b * self.rng.choice([-1.0, 1.0], size=b.shape)
-        env = self.env
-        s = env.state.astype(float)
-        u = np.clip(env.last_action, -env.u_max, env.u_max)
-        u = np.clip(u, (-env.v_max - s[2:]) / env.dt, (env.v_max - s[2:]) / env.dt)   # the speed limit, as step() applies it
-        p_next = s[:2] + env.dt * s[2:] + 0.5 * env.dt ** 2 * u
-        q, _ = nearest_forbidden_point(env.width_profile, p_next)
-        direction = np.sign(np.where(np.abs(q - p_next) > 1e-9, q - p_next, 0.0))
-        return np.array([direction[0] * b[0], direction[1] * b[1], direction[0] * b[2], direction[1] * b[3]])
+            return self.rng.uniform(low, high, size)
+        if self.mode == "edge":
+            angles = self.rng.uniform(size=2)
+        else:
+            env = self.env
+            s = env.state.astype(np.float32)
+            u = deliver(env.last_action, s[2:], env.u_max, env.v_max, env.dt).astype(float)
+            p_next = s[:2] + env.dt * s[2:] + 0.5 * env.dt ** 2 * u
+            q, _ = nearest_forbidden_point(env.width_profile, p_next)
+            d = q - p_next
+            angle = (np.arctan2(d[1], d[0]) / (2.0 * np.pi)) % 1.0 if np.hypot(*d) > 1e-9 else 0.0
+            angles = np.array([angle, angle])
+        return np.array([[1.0, angles[0], 1.0, angles[1]]]).reshape(size)
 
 
 class StressedSlalomEnv(SlalomEnv):

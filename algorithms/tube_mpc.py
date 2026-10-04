@@ -17,15 +17,84 @@ Why it replaced MPCWorker (algorithms/mpc_worker.py) as PPO+MPC's worker on
   every state it may not enter, over the whole horizon: each gate's blocked
   bands are obstacles (1.5), derived from the scenario's width profile, and
   the non-convex free space they leave is encoded exactly with binaries
-  (3.15). Each solve is therefore a mixed-integer QP.
-- The environment can now be disturbed, by a bounded uniform w in the box W
-  (see noise_bound_p in the scenarios' envs/config.py). This worker is robust
+  (3.15). Each solve is therefore a mixed-integer program, with the speed
+  and thrust disks (below) enforced by cutting planes.
+- The environment can now be disturbed, by a bounded uniform w in W (see
+  noise_bound_p in the scenarios' envs/config.py). This worker is robust
   to it: the real state stays in a tube x in z (+) Z around a nominal plan z,
   and z is planned against constraints tightened by Z, so no disturbance in
   W can push the real state into a wall (theorem 4.1). With W = {0}, the
   default environment, Z = {0} and this is a nominal MPC with z_0 = x.
 
 MPCWorker stays in the repo because ppo_mpc_reach still uses it.
+
+Disks, exactly (since 2026-10-04). The environment limits ||u|| <= u_max
+and ||v|| <= v_max, and its disturbance is W = {||w_p|| <= b_p,
+||w_v|| <= b_v}, two disks (envs/actuation.py; until then all three were
+boxes, and so was every set here). The note's sets are polytopes; with disks
+they stay exact, with no polygonal approximation anywhere, because of a
+symmetry: rotating the plane by any angle, R = diag(R_theta, R_theta) on
+[p; v], commutes with the closed loop (A_K = A1 (x) I_2, one 2x2 block A1 per
+axis, since Q and R weigh both axes alike) and with the gain (K R =
+R_theta K), and maps W onto itself. So it maps Z = (1 - alpha)^-1 (+)_l
+A_K^l W onto itself, and so every projection of Z the tightening needs is
+rotation-invariant: Z's velocity part and K Z are disks, of radii
+r_v = h_Z(e_vx) and r_u = h_Z(K^T e_x). The tightened sets are then the
+disks ||z_v|| <= v_max - r_v and ||v|| <= u_max - r_u, exactly (a disk minus
+a disk is a disk); the walls are half-planes, tightened by Z's position
+radius as before; and z_0's constraint x - z_0 in Z keeps its lifted form
+(2.8), with every omega_l in the two disks of W. `TubeMPCWorker.__init__`
+checks the commutation, so a change that broke it (different weights per
+axis, say) fails loudly instead of quietly making the disks approximate. The
+radii equal the half-widths the box W gave along the axes, since every
+support function the algorithm evaluates is along a direction of the form
+(a_p n, a_v n), where the two sets agree.
+
+How it is solved (since 2026-10-04). The problem is mixed-integer, and its
+continuous part is convex but not polyhedral: the speed and thrust disks,
+and x - z_0 in Z. Two solvers split it:
+
+- Gurobi solves a relaxation, as a mixed-integer QP: every disk replaced by
+  the regular polygon of `BASE_SIDES` sides circumscribed around it (one
+  side tangent at the +x axis, so a straight cruise along the corridor is
+  exact), and Z by the half-spaces a^T (x - z_0) <= h_Z(a) along
+  `_z_directions` (its support function is exact and cheap). Because the
+  relaxation contains the exact problem, its lower bound (ObjBound) is a
+  lower bound on the exact optimum, whatever binaries attain it.
+- Clarabel, an interior-point conic solver, solves the exact problem with
+  Gurobi's binaries fixed: a convex program with the disks and Z's lifted
+  representation (2.8), x - z_0 = sum_l L_l omega_l with every omega_l in
+  W's disks, as second-order cones (`_ExactProblem`, ~3-5 ms).
+
+If the exact cost is within the MIP gap of the lower bound, the exact plan
+is optimal for the exact problem to that gap -- the guarantee the worker
+always had. Otherwise the relaxation is tightened where it was loose and
+both are solved again: tangents at the exact plan's points on the edge of
+their disks, Z's supporting half-space at its x - z_0, and, where the
+relaxation's own plan left a disk or Z, the tangent there, Z's from the
+separation oracle `_GaugeOracle`. When `_fix_unreachable` has fixed every
+binary -- most steps, and every step on the tunnel -- the problem is already
+convex and Clarabel solves it alone. Each solve starts with extra cuts that
+make the relaxation tight where the plan is likely to be (tangents at the
+shifted candidate's points (4.1), and the Z cuts of the slot's previous
+solves); all are removed after the solve, and the Z cuts are remembered
+until `reset(slot)`, so a solve depends on its inputs and on earlier solves
+of the same episode only, as it already did through the candidate.
+
+Two simpler designs were tried first, on 2026-10-04, and dropped:
+
+- Gurobi alone, with the disks as quadratic constraints (an MIQCP). Its
+  relaxations go through the barrier, which ran into "numerical trouble" on
+  about one solve in ten on the slalom -- on instances Clarabel solves in
+  milliseconds, even with all the binaries fixed -- and then stalled until
+  the time limit. NumericFocus, BarHomogeneous, ScaleFlag, Aggregate and the
+  outer-approximation MIQCPMethod each fixed some instances and not others.
+- Gurobi alone, with cutting planes only (Kelley): tangents added where the
+  plan leaves a disk, until it leaves none by more than 1e-6. Robust, but
+  the violation fell only ~4x per round, so a step took ~8 MIQP solves
+  (~60 ms) without a disturbance; and on Z's lifted representation, whose
+  2s omegas the cost does not depend on, the solver moved them to a new
+  vertex every round and often ran out of rounds.
 
 Offline, once per worker (the note's table 5.1):
   1. K, P: the LQR gain and cost of the stage weights (3.1).
@@ -37,9 +106,10 @@ Offline, once per worker (the note's table 5.1):
      rho (3.8).
   4. The terminal set -- not the note's; see "Terminal set" below.
   5. The big-M constants (3.16).
-Online, every step and every environment: the MIQP (3.17) with that
-terminal set, solved by Gurobi with the shifted candidate (4.1) as MIP start
-and as fallback (algorithm 3).
+Online, every step and every environment: the mixed-integer problem (3.17)
+with that terminal set, solved by Gurobi -- with the disks by cutting planes
+(above) -- with the shifted candidate (4.1) as MIP start and as fallback
+(algorithm 3).
 
 Deliberate departures from the note, and why:
 
@@ -78,28 +148,42 @@ Deliberate departures from the note, and why:
   only at the sampling instants, so only those are constrained, as in the
   note's default formulation.
 - The note's X0 is a compact polytope; here it is the environment's own
-  state box (x_min, x_max), which is what env.step clips to. Keeping the
-  real state strictly inside it matters beyond the walls: a clip on the
-  velocity (the speed limit, see SlalomEnv.step) or on the input would make
-  the plant nonlinear and the error dynamics (3.5) would no longer hold.
-  That is why the planned speed is tightened too, to v_max - h_Z(e_v).
+  position box (x_min, x_max), which is what env.step clips the position
+  to, and its speed disk. Keeping the real state strictly inside both
+  matters beyond the walls: the speed limit (envs/actuation.py) or a
+  saturated input would make the plant nonlinear and the error dynamics
+  (3.5) would no longer hold. That is why the planned speed is tightened
+  too, to ||z_v|| <= v_max - r_v. The tube then even keeps the environment's
+  speed limit from ever acting: v + u dt, the velocity before the step's
+  disturbance, is z_v' + (A_K e)_v, whose norm is at most (v_max - r_v) +
+  (r_v - b_v) < v_max, since A_K Z (+) W lies in Z.
   The price is smaller than that cap suggests, because z_0 is a decision
   variable (remark 3.8): the plan can put its nominal state behind the real
   one, anywhere inside the tube, so the real state rides at the front of
-  it. Measured on the disturbed slalom (|w_p| <= 0.005, |w_v| <= 0.05,
-  2026-09-28): the plan's v_x never exceeds its cap of 0.989 m/s, while
-  the real v_x averages 1.08 m/s and peaks at 1.195, still inside v_max as
-  the tightening guarantees. Episodes then take ~4.5 steps (~6%) longer
-  than flat PPO's and hPPO's, where the cap alone would cost ~21% at
-  cruise speed (1.2 / 0.989).
+  it. Measured on the disturbed slalom with the per-axis limits and the box
+  W of the time (|w_p| <= 0.005, |w_v| <= 0.05, 2026-09-28): the plan's v_x
+  never exceeded its cap of 0.989 m/s, while the real v_x averaged 1.08 m/s
+  and peaked at 1.195, still inside v_max as the tightening guaranteed.
+  Episodes then took ~4.5 steps (~6%) longer than flat PPO's and hPPO's,
+  where the cap alone would cost ~21% at cruise speed (1.2 / 0.989). The
+  disks have the same radii, 0.989 m/s included.
+- The obstacles are enlarged by Z with their own normals (proposition 2.5),
+  an outer approximation of O (+) (-Z), as before. With Z's position part
+  a disk the exact sum would have rounded corners, so the enlarged gate
+  walls keep square corners up to (sqrt(2) - 1) * r_p (3.4 cm at the
+  disturbed level) beyond them: conservative, on the safe side, and the
+  only place where a set is larger than the exact one. (The exact rounded
+  corner would need a non-convex constraint, ||p - corner|| >= r.)
 """
 
 import time
+import warnings
 
 import numpy as np
 import scipy.linalg as sla
 from scipy.optimize import linprog
 
+import cvxpy as cp
 import gurobipy as gp
 from gurobipy import GRB
 
@@ -112,6 +196,143 @@ FREE = (None, None)  # an unbounded LP variable
 #              i.e. the first state of an episode lies outside X_N. The
 #              action is then a plain brake, outside every guarantee.
 SOLVER, CANDIDATE, EMERGENCY = 0, 1, 2
+
+
+# The relaxation and its refinement (module docstring): the sides of the
+# disks' starting polygon -- 16 sides exceed the disk by at most
+# 1/cos(pi/16) - 1 = 2% -- how close to its edge a point counts as on it, or
+# past it, when cuts are placed, how many rounds one step may take before
+# giving up on the solver's plan (algorithm 3's candidate then covers it), and
+# how many of the slot's latest Z cuts each solve starts with.
+BASE_SIDES = 16
+CUT_TOL = 1e-6
+MAX_CUT_ROUNDS = 25
+Z_SEED_KEEP = 32
+_POLYGON = np.array([[np.cos(t), np.sin(t)] for t in 2.0 * np.pi * np.arange(BASE_SIDES) / BASE_SIDES])
+
+
+def _z_directions():
+    """The directions Z's starting outer approximation is cut along: every
+    a = (cos(psi) n, sin(psi) n) for 8 headings n and 8 mixing angles psi --
+    the directions in which a position error and a velocity error point the
+    same way, the shape of every support function Z's construction
+    evaluates (module docstring). 64 half-spaces, rotation-symmetric like Z."""
+    dirs = []
+    for phi in 2.0 * np.pi * np.arange(8) / 8:
+        n = np.array([np.cos(phi), np.sin(phi)])
+        for psi in 2.0 * np.pi * np.arange(8) / 8:
+            dirs.append(np.concatenate([np.cos(psi) * n, np.sin(psi) * n]))
+    return np.array(dirs)
+
+
+class _ExactProblem:
+    """The worker's problem (3.17) with the binaries fixed: convex, with the
+    speed and thrust disks and x - z_0 in Z exact, as second-order cones,
+    built once with cvxpy (the measured x, the target and the binaries as
+    parameters) and solved by Clarabel (module docstring)."""
+
+    def __init__(self, w):
+        N = w.N
+        self.w = w
+        self.x = cp.Parameter(4)
+        self.x_r = cp.Parameter(4)
+        self.z = cp.Variable((N + 1, 4))
+        self.v = cp.Variable((N, 2))
+        z, v = self.z, self.v
+        lo, hi = w.Xbar0.bounds
+        cons = [z[1:] == z[:-1] @ w.A.T + v @ w.B.T,
+                z[N, 2:] == 0,                                       # the terminal set
+                z[:, :2] >= np.tile(lo[:2], (N + 1, 1)),
+                z[:, :2] <= np.tile(hi[:2], (N + 1, 1)),
+                cp.norm(z[1:N, 2:], 2, axis=1) <= w.v_bar,           # stage 0 free, as in the MIQP
+                cp.norm(v, 2, axis=1) <= w.u_bar]
+        L = w.Z.lifted_matrices()
+        if L:
+            om = cp.Variable((len(L), 4))
+            b_p, b_v = w.W.radii
+            cons += [z[0] + sum(L[l] @ om[l] for l in range(len(L))) == self.x,
+                     cp.norm(om[:, :2], 2, axis=1) <= b_p,
+                     cp.norm(om[:, 2:], 2, axis=1) <= b_v]
+        else:
+            cons.append(z[0] == self.x)
+        # (3.15b) with the binaries as parameters; one face per obstacle and
+        # stage is on, as the MIQP chose.
+        self.d = []
+        for Ob, M in zip(w.Obar, w.M):
+            d = cp.Parameter((N + 1, Ob.H.shape[0]))
+            cons.append(z @ Ob.H.T >= np.tile(Ob.h - M, (N + 1, 1)) + cp.multiply(d, np.tile(M, (N + 1, 1))))
+            self.d.append(d)
+        Qh, Rh, Ph = (np.linalg.cholesky(S).T for S in (w.Q, w.R, w.P))
+        obj = (cp.sum_squares((z[:N] - cp.reshape(self.x_r, (1, 4), order="C")) @ Qh.T)
+               + cp.sum_squares(v @ Rh.T) + cp.sum_squares(Ph @ (z[N] - self.x_r)))
+        self.prob = cp.Problem(cp.Minimize(obj), cons)
+
+    def __call__(self, x, x_r, deltas):
+        """(z, v, J) of the exact optimum for these binaries, or None if they
+        leave the exact problem infeasible, or Clarabel fails or reaches only
+        an inaccurate solution: one whose constraints are not met to its
+        tolerance has no place in a robust plan, and None sends the step to
+        the relaxation's cuts or to algorithm 3's candidate instead. Seen on
+        early PPO+MPC training, rarely (0 of ~3000 solves under random goals,
+        2026-10-04)."""
+        self.x.value = np.asarray(x, dtype=float)
+        self.x_r.value = np.asarray(x_r, dtype=float)
+        for d, dv in zip(self.d, deltas):
+            d.value = dv
+        try:
+            # Scoped: cvxpy warns on every inaccurate solve, which is handled
+            # here, and must not flood a training log (see MPCWorker's
+            # _solve_cvxpy for why not the process-global filter).
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                self.prob.solve(solver=cp.CLARABEL)
+        except cp.SolverError:
+            return None
+        if self.prob.status != "optimal" or self.z.value is None:
+            return None
+        z, v = self.z.value.copy(), self.v.value.copy()
+        return z, v, self.w.cost(z, v, x_r)
+
+
+class _GaugeOracle:
+    """gamma_Z(e) = min{t >= 0 : e in t Z} = max{y^T e : h_Z(y) <= 1}, and the
+    maximiser y: a separating half-space y^T e' <= 1 of Z whenever
+    gamma_Z(e) > 1 (module docstring). h_Z(y) = sum_l h_W(L_l^T y), from the
+    lifted representation (2.8), with h_W in closed form, so this is a
+    second-order cone program in y alone, built once and re-solved by
+    Clarabel with e as a parameter."""
+
+    def __init__(self, Z, W):
+        self.Z = Z
+        b_p, b_v = W.radii
+        self.e = cp.Parameter(4)
+        self.y = cp.Variable(4)
+        h = sum(b_p * cp.norm(Ll.T[:2] @ self.y) + b_v * cp.norm(Ll.T[2:] @ self.y)
+                for Ll in Z.lifted_matrices())
+        self.prob = cp.Problem(cp.Maximize(self.e @ self.y), [h <= 1])
+
+    def __call__(self, e):
+        """(gamma, y) with y scaled so that h_Z(y) = 1 exactly, which makes
+        y^T e' <= 1 valid for Z whatever the solver's tolerance, and gamma =
+        y^T e <= gamma_Z(e). They are equal when Clarabel solves to its
+        tolerance; when it reaches only an inaccurate solution, gamma is
+        returned as +inf instead, so the caller cuts (the cut stays valid)
+        rather than trusts a point it could not verify."""
+        self.e.value = np.asarray(e, dtype=float)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.prob.solve(solver=cp.CLARABEL)
+        if self.prob.status not in ("optimal", "optimal_inaccurate") or self.y.value is None:
+            raise RuntimeError(f"gauge oracle failed: {self.prob.status}")
+        y = self.y.value / self.Z.support(self.y.value)
+        gamma = float(y @ e) if self.prob.status == "optimal" else np.inf
+        return gamma, y
+
+
+def _project_disk(u, radius):
+    """u scaled radially onto ||u|| <= radius where it lies outside."""
+    n = np.linalg.norm(u)
+    return u if n <= radius else u * (radius / n)
 
 
 # =============================================================================
@@ -163,6 +384,61 @@ class Polytope:
             raise RuntimeError(f"support-function LP failed: {res.message}")
         return float(-res.fun)
 
+    @property
+    def is_zero(self):
+        return bool(np.all(self.h == 0))
+
+    @property
+    def has_interior_origin(self):
+        return bool(np.all(self.h > 0))
+
+    def scaling(self, M):
+        """The smallest alpha with M P in alpha P, by P's facets (2.5)."""
+        return max(self.support(M.T @ g) / hg for g, hg in zip(self.H, self.h))
+
+
+class DiskProduct:
+    """W = {w in R^4 : ||w[:2]|| <= b_p, ||w[2:]|| <= b_v}: the product of a
+    disk on the positions and a disk on the velocities, the environments'
+    disturbance set since 2026-10-04 (envs/actuation.py). Not a polytope, so
+    it carries the two operations algorithm 1 and the online problem need,
+    in closed form."""
+
+    def __init__(self, b_p, b_v):
+        self.radii = np.array([b_p, b_v], dtype=float)
+        if np.any(self.radii < 0):
+            raise ValueError(f"radii must be >= 0, got {self.radii}")
+
+    @property
+    def is_zero(self):
+        return bool(np.all(self.radii == 0))
+
+    @property
+    def has_interior_origin(self):
+        return bool(np.all(self.radii > 0))
+
+    @property
+    def bounds(self):
+        """(lb, ub) of W's bounding box."""
+        b = np.repeat(self.radii, 2)
+        return -b, b
+
+    def support(self, a):
+        """h_W(a) = b_p ||a_p|| + b_v ||a_v||."""
+        a = np.asarray(a, dtype=float).ravel()
+        return float(self.radii[0] * np.linalg.norm(a[:2]) + self.radii[1] * np.linalg.norm(a[2:]))
+
+    def scaling(self, M):
+        """The smallest alpha with M W in alpha W: max over the output blocks
+        i of sum_j ||M_ij|| b_j / b_i, M_ij the 2x2 blocks and ||.|| the
+        spectral norm. Exact when every block is a multiple of a rotation, as
+        every power of A_K is here (each block is a multiple of I_2): the
+        sup of ||sum_j M_ij w_j|| over the disks is then reached by turning
+        every term the same way. An upper bound otherwise, which still makes
+        M W in alpha W true, so algorithm 1 still returns an RPI set."""
+        blocks = [[np.linalg.norm(M[2 * i:2 * i + 2, 2 * j:2 * j + 2], 2) for j in range(2)] for i in range(2)]
+        return max(sum(blocks[i][j] * self.radii[j] for j in range(2)) / self.radii[i] for i in range(2))
+
 
 def pontryagin_diff(P, support_S):
     """P (-) S = {x : H x <= h - h_S(H^T)}, exact (proposition 2.4). It keeps
@@ -201,26 +477,29 @@ class RPIOuterApprox:
     kept (remark 2.9): computing Z's facets means a Minkowski sum of s
     polytopes, and nothing here needs them.
 
+    W is anything with `support`, `scaling`, `is_zero` and
+    `has_interior_origin`: a Polytope, or the DiskProduct the worker uses.
+
     W = {0} (the deterministic environment) gives Z = {0}: s = 0, no powers,
     a support function that is identically 0 and no lifted variables, so the
     online problem's first constraint becomes z_0 = x. Any other W needs 0 in
-    its interior (assumption 2), which for a box means every half-width > 0.
+    its interior (assumption 2): for the worker's disks, both radii > 0.
     """
 
     def __init__(self, AK, W, eps=1e-2, s_max=300):
         if np.max(np.abs(np.linalg.eigvals(AK))) >= 1:
             raise ValueError("A_K must be Schur")
         self.AK, self.W, self.eps = AK, W, eps
-        if np.all(W.h == 0):
+        if W.is_zero:
             self.s, self.alpha, self.powers = 0, 0.0, []
             return
-        if np.any(W.h <= 0):
+        if not W.has_interior_origin:
             raise ValueError(
-                "0 must lie in the interior of W (assumption 2): with a box W, every "
-                "half-width must be > 0, or all of them 0 for the deterministic "
-                "environment. A disturbance on the velocities alone makes W flat, and "
-                "algorithm 1's test A_K^s W in alpha W can then never pass; bound the "
-                "positions by a small positive number instead")
+                "0 must lie in the interior of W (assumption 2): both disk radii (every "
+                "half-width, for a box) must be > 0, or all of them 0 for the "
+                "deterministic environment. A disturbance on the velocities alone makes W "
+                "flat, and algorithm 1's test A_K^s W in alpha W can then never pass; "
+                "bound the positions by a small positive number instead")
         n = AK.shape[0]
         powers = [np.eye(n)]
         Mp, Mm = np.zeros(n), np.zeros(n)
@@ -229,7 +508,7 @@ class RPIOuterApprox:
             Mp += [W.support(Ai[j]) for j in range(n)]          # (2.6)
             Mm += [W.support(-Ai[j]) for j in range(n)]
             As = AK @ Ai                                        # A_K^s
-            alpha = max(W.support(As.T @ g) / hg for g, hg in zip(W.H, W.h))  # (2.5)
+            alpha = W.scaling(As)                               # (2.5)
             if alpha < 1 and alpha <= eps / (eps + max(Mp.max(), Mm.max())):
                 break
             powers.append(As)
@@ -319,7 +598,7 @@ class TubeMPCWorker:
                   note's code (remark 3.7 allows two). The defaults are the
                   old MPCWorker's.
       noise_bound_p, noise_bound_v
-                  the half-widths of the box W the tube is designed for: the
+                  the radii of the disks of W the tube is designed for: the
                   worker's *model* of the disturbance, which `from_env` takes
                   from the environment it will run in.
       rho         the safety margin (3.8), in metres, applied to the
@@ -368,17 +647,30 @@ class TubeMPCWorker:
         self.K, self.P = dlqr(self.A, self.B, self.Q, self.R)
         self.AK = self.A + self.B @ self.K
 
-        # 2) The error's RPI set.
+        # The rotation symmetry every disk below rests on (module docstring).
+        self._check_rotation_symmetry()
+
+        # 2) The error's RPI set. X0 and U are kept as boxes -- the position
+        # box and the bounding boxes of the speed and thrust disks -- for
+        # everything that wants bounds (the variables' bounds, big-M, the
+        # reachable box); the disks themselves enter by cutting planes.
+        self.u_max, self.v_max = float(u_max), float(v_max)
+        # The velocity rows from v_max itself: the environment's x_min/x_max
+        # are float32, whose 1.2 is 1.2000000477.
+        x_min, x_max = np.array(x_min, dtype=float), np.array(x_max, dtype=float)
+        x_min[2:], x_max[2:] = -self.v_max, self.v_max
         self.X0 = Polytope.box(x_min, x_max)
         self.U = Polytope.box([-u_max, -u_max], [u_max, u_max])
-        w = np.array([noise_bound_p, noise_bound_p, noise_bound_v, noise_bound_v], dtype=float)
-        self.W = Polytope.box(-w, w)
+        self.W = DiskProduct(noise_bound_p, noise_bound_v)
         self.Z = RPIOuterApprox(self.AK, self.W, eps=rpi_eps)
 
         # 3) Tightened constraints (3.6), (3.9), and the margin on the walls
         # (see the module docstring): only the p_y rows, the walls; p_x's
-        # bounds are the environment's clip box, not a contact, and the
-        # velocity bounds are the speed limit.
+        # bounds are the environment's clip box, not a contact. Every row is
+        # tightened by Z's support along it, which on the velocity rows is
+        # Z's velocity radius r_v and on V's rows K Z's radius r_u, so
+        # these boxes are exactly the bounding boxes of the tightened disks,
+        # whose radii are `v_bar` and `u_bar`.
         Xbar0 = pontryagin_diff(self.X0, self.Z.support)
         lo, hi = (b.copy() for b in Xbar0.bounds)
         lo[1] += rho
@@ -392,6 +684,15 @@ class TubeMPCWorker:
                 "disturbance takes the whole input range")
         if lo[2] >= 0 or hi[2] <= 0 or lo[3] >= 0 or hi[3] <= 0:
             raise ValueError("X0 (-) Z has no velocity left around 0: the disturbance is too large")
+        self.v_bar = float(hi[2])          # ||z_v|| <= v_max - r_v
+        self.u_bar = float(v_hi[0])        # ||v||   <= u_max - r_u
+        # Z's cutting planes (module docstring): the starting directions,
+        # each with its support, and the separation oracle. None of it for
+        # Z = {0}, where z_0 = x.
+        if self.Z.powers:
+            self._z_dirs = _z_directions()
+            self._z_h = np.array([self.Z.support(a) for a in self._z_dirs])
+            self._gauge = _GaugeOracle(self.Z, self.W)
 
         # ...and the enlarged obstacles (3.8).
         self.obstacles = corridor_obstacles(width_profile)
@@ -408,7 +709,26 @@ class TubeMPCWorker:
                   for Ob in self.Obar]
 
         self._build_models()
+        self._exact = _ExactProblem(self)
         self._prev = [None] * self.num_slots   # each slot's last plan, (z, v)
+
+    def _check_rotation_symmetry(self):
+        """A_K R = R A_K and K R = R_theta K for rotations R = diag(R_theta,
+        R_theta) of the plane (module docstring): what makes Z
+        rotation-invariant, and so every tightened set below an exact disk.
+        True for the per-axis double integrator with Q and R weighing both
+        axes alike, which is all this class builds; checked rather than
+        assumed, at a few angles."""
+        for theta in (0.3, 1.1, 2.5):
+            c, s_ = np.cos(theta), np.sin(theta)
+            Rt = np.array([[c, -s_], [s_, c]])
+            R = np.kron(np.eye(2), Rt)          # diag(R_theta, R_theta) on [p; v]
+            if not (np.allclose(self.AK @ R, R @ self.AK, atol=1e-10)
+                    and np.allclose(self.K @ R, Rt @ self.K, atol=1e-10)):
+                raise ValueError(
+                    "the closed loop is not rotation-symmetric, so the tightened speed and "
+                    "thrust sets would not be disks: the plant and weights must treat both "
+                    "axes alike")
 
     @classmethod
     def from_env(cls, env, num_slots=1, **settings):
@@ -423,10 +743,18 @@ class TubeMPCWorker:
 
     # ------------------------------------------------------------------ setup
     def _build_models(self):
-        """The MIQP (3.17), once per slot. Only what changes between solves is
-        touched afterwards: the right-hand side of the initial constraint
-        (the measured x), the linear objective (the target), the binaries'
-        bounds (`_fix_unreachable`) and the MIP start."""
+        """The mixed-integer problem (3.17), once per slot. Only what changes
+        between solves is touched afterwards: the right-hand side of the
+        initial constraint (the measured x), the linear objective (the
+        target), the binaries' bounds (`_fix_unreachable`), the MIP start,
+        and the cuts `_optimize` adds and removes within a solve.
+
+        The tightened speed and thrust disks start as their circumscribed
+        polygons and are listed in the slot's "disks" as (rows, radius),
+        `rows` an (n, 2) MVar of the points one disk holds; Z starts as
+        `_z_directions`' half-spaces (module docstring). "z_seed" keeps the
+        directions of the Z cuts of the slot's earlier solves this episode,
+        "disk_seed" the tangents `act` asks for from the candidate."""
         self._gp_env = gp.Env(empty=True)
         self._gp_env.setParam("OutputFlag", 0)
         self._gp_env.start()
@@ -437,9 +765,20 @@ class TubeMPCWorker:
         # tightened velocity box, which contains 0 (checked above).
         z_lb[N, 2:] = 0.0
         z_ub[N, 2:] = 0.0
+        # No speed constraint on stage 0, neither the box nor the disk below.
+        # It is redundant: the measured state is what it is, and every later
+        # real velocity is covered by stages 1..N (x_k+1 = z_1 + e_1 with
+        # e_1 in Z), so theorem 4.1 does not use it. And it is harmful: on
+        # the deterministic environment z_0 = x, and a vehicle cruising at
+        # the speed limit has ||x_v|| within float32 rounding of v_max,
+        # sometimes just above it. The disk on a fixed point at its edge has
+        # no interior, and Gurobi's barrier then stalled on the root
+        # relaxation (2026-10-04: 18 of the 19 solves of one slalom episode
+        # that ran into a 2 s limit had ||x_v|| within 1e-7 of 1.2).
+        z_lb[0, 2:] = -GRB.INFINITY
+        z_ub[0, 2:] = GRB.INFINITY
         v_lb = np.tile(self.V.bounds[0], (N, 1))
         v_ub = np.tile(self.V.bounds[1], (N, 1))
-        L = self.Z.lifted_matrices()
 
         self._models = []
         for _ in range(self.num_slots):
@@ -451,16 +790,23 @@ class TubeMPCWorker:
 
             z = m.addMVar((N + 1, 4), lb=z_lb, ub=z_ub, name="z")
             v = m.addMVar((N, 2), lb=v_lb, ub=v_ub, name="v")
-            # (3.13b) through (2.8): x - z_0 = sum_l L_l omega_l, omega_l in W.
-            if L:
-                w_lb, w_ub = self.W.bounds
-                om = m.addMVar((len(L), 4), lb=np.tile(w_lb, (len(L), 1)),
-                               ub=np.tile(w_ub, (len(L), 1)), name="omega")
-                lhs = z[0] + sum(L[l] @ om[l] for l in range(len(L)))
+            # The tightened disks (3.6), (3.9), each as its circumscribed
+            # polygon, a relaxation the cuts refine. The speed disk binds
+            # stages 1 to N - 1: stage N's velocity is fixed at 0 by the
+            # terminal set, and stage 0's is left free (see z_lb above).
+            disks = [(z[1:N, 2:], self.v_bar), (v, self.u_bar)]
+            for i, (rows, radius) in enumerate(disks):
+                if rows.shape[0] > 0:
+                    m.addConstr(rows @ _POLYGON.T <= radius, name=f"polygon{i}")
+            # (3.13b): x - z_0 in Z. With Z = {0}, z_0 = x; otherwise Z's
+            # starting half-spaces a^T (x - z_0) <= h_Z(a), whose right-hand
+            # sides `act` sets from the measured x, refined by cuts.
+            if self.Z.powers:
+                init = None
+                z_base = m.addConstr(-(z[0] @ self._z_dirs.T) <= self._z_h, name="z_base")
             else:
-                om = None
-                lhs = z[0] + 0.0
-            init = m.addConstr(lhs == np.zeros(4), name="init")
+                init = m.addConstr(z[0] == np.zeros(4), name="init")
+                z_base = None
             # (3.13c) nominal dynamics.
             m.addConstr(z[1:] == z[:-1] @ self.A.T + v @ self.B.T, name="dyn")
             # (3.15b-d) for k = 0..N: the terminal stage needs them too,
@@ -478,7 +824,8 @@ class TubeMPCWorker:
             obj = obj + z[N] @ self.P @ z[N]
             m.setObjective(obj, GRB.MINIMIZE)
             m.update()
-            self._models.append(dict(m=m, z=z, v=v, om=om, init=init, deltas=deltas))
+            self._models.append(dict(m=m, z=z, v=v, init=init, z_base=z_base, deltas=deltas,
+                                     disks=disks, z_seed=[], x=None, disk_seed=[]))
 
     # ---------------------------------------------------------------- helpers
     def cost(self, z, v, x_r):
@@ -500,21 +847,28 @@ class TubeMPCWorker:
         every plan (3.17) admits from the measured x.
 
         z_0 lies in x (+) (-Z), so each of its components within h_Z of x's.
-        After that each position moves by at most dt * v_bar per step, v_bar
-        the tightened speed limit: p_{k+1} = p_k + dt (v_k + v_{k+1}) / 2
-        under the double integrator, and both velocities are bounded by
-        v_bar. Everything is also inside X0 (-) Z. Returns (lo, hi), each
+        After that each position moves by p_{k+1} = p_k + dt (v_k + v_{k+1}) / 2
+        under the double integrator, with every velocity from stage 1 on
+        bounded by v_bar, the tightened speed limit, and stage 0's -- which
+        the speed disk leaves free -- by |x_v| + h_Z on each axis. So stage
+        k >= 1 lies within dt (|v_0| + v_bar) / 2 + (k - 1) dt v_bar of z_0.
+        Everything is also inside X0 (-) Z. Returns (lo, hi), each
         (N+1, 4)."""
         z_lo, z_hi = self.Xbar0.bounds
         e = np.eye(4)
         z0_lo = np.maximum(x - np.array([self.Z.support(e[j]) for j in range(4)]), z_lo)
         z0_hi = np.minimum(x + np.array([self.Z.support(-e[j]) for j in range(4)]), z_hi)
+        z0_lo[2:] = x[2:] - np.array([self.Z.support(e[j]) for j in (2, 3)])
+        z0_hi[2:] = x[2:] + np.array([self.Z.support(-e[j]) for j in (2, 3)])
         v_bar = np.maximum(np.abs(z_lo[2:]), np.abs(z_hi[2:]))
+        v_0 = np.maximum(np.abs(z0_lo[2:]), np.abs(z0_hi[2:]))
         k = np.arange(self.N + 1)[:, None]
+        reach = np.where(k >= 1, self.dt * (v_0 + v_bar) / 2.0 + (k - 1) * self.dt * v_bar, 0.0)
         lo = np.tile(z_lo, (self.N + 1, 1))
         hi = np.tile(z_hi, (self.N + 1, 1))
-        lo[:, :2] = np.maximum(z0_lo[:2] - k * self.dt * v_bar, z_lo[:2])
-        hi[:, :2] = np.minimum(z0_hi[:2] + k * self.dt * v_bar, z_hi[:2])
+        lo[:, :2] = np.maximum(z0_lo[:2] - reach, z_lo[:2])
+        hi[:, :2] = np.minimum(z0_hi[:2] + reach, z_hi[:2])
+        lo[0, 2:], hi[0, 2:] = z0_lo[2:], z0_hi[2:]
         return lo, hi
 
     def _fix_unreachable(self, x):
@@ -580,54 +934,143 @@ class TubeMPCWorker:
 
     def _tube_ratio(self, slot, x):
         """How far the real state strayed from the nominal plan's prediction,
-        as a fraction of the tube: max over the axes of |e_r| / h_Z(+-e_r),
-        with e = x - z_1 of the slot's last plan. Theorem 4.1 keeps e in Z, so
-        this stays <= 1 while the disturbance respects W; it is only a
-        necessary condition for e in Z (Z's bounding box, not Z itself), and
-        NaN without a plan or with Z = {0}."""
+        as a fraction of the tube: the larger of ||e_p|| / r_p and
+        ||e_v|| / r_v, with e = x - z_1 of the slot's last plan and r_p, r_v
+        the radii of Z's position and velocity disks. Theorem 4.1 keeps e in
+        Z, so this stays <= 1 while the disturbance respects W; it is only a
+        necessary condition for e in Z (Z's projections, not Z itself), and
+        NaN without a plan or with Z = {0}. Until 2026-10-04 it was the same
+        per axis, against Z's bounding box."""
         prev = self._prev[slot]
         if prev is None or not self.Z.powers:
             return float("nan")
         e = x - prev[0][1]
-        eye = np.eye(4)
-        widths = np.array([self.Z.support(np.sign(e[j]) * eye[j]) if e[j] != 0 else 1.0
-                           for j in range(4)])
-        return float(np.max(np.abs(e) / widths))
+        r_p, r_v = self.Z.support(np.eye(4)[0]), self.Z.support(np.eye(4)[2])
+        return float(max(np.linalg.norm(e[:2]) / r_p, np.linalg.norm(e[2:]) / r_v))
+
+    def _one_face_each(self, mdl):
+        """The relaxation's binaries for the exact problem, with one face on
+        per obstacle and stage: where the relaxation switched on several
+        (all satisfied by its plan), the one its plan clears by the most.
+        Every face left on is a constraint of the exact problem, so keeping
+        one leaves it the largest convex piece the relaxation vouched for."""
+        z = mdl["z"].X
+        out = []
+        for Ob, d in zip(self.Obar, mdl["deltas"]):
+            on = np.round(d.X)
+            margin = np.where(on > 0, z @ Ob.H.T - Ob.h, -np.inf)
+            one = np.zeros_like(on)
+            one[np.arange(on.shape[0]), margin.argmax(axis=1)] = 1.0
+            out.append(one)
+        return out
 
     def _optimize(self, mdl):
-        """Solve one slot's MIQP as set up by `act`: the best plan Gurobi
-        found, (z, v), or None if it found none (infeasible, or stopped by
-        the work limit first). A method of its own so a test can stand in a
-        failed solve and exercise algorithm 3's fallback."""
-        mdl["m"].optimize()
-        if mdl["m"].SolCount == 0:
+        """Solve one slot's problem as set up by `act` (module docstring):
+        the optimal plan (z, v), or None if there is none (infeasible, or the
+        relaxation stopped by the work limit before finding a plan) or the
+        refinement did not converge within `MAX_CUT_ROUNDS` rounds, which
+        algorithm 3's candidate then covers. Sets mdl["cut_rounds"] to the
+        number of mixed-integer solves it took, 0 when the binaries were all
+        fixed and Clarabel solved alone. A method of its own so a test can
+        stand in a failed solve and exercise that fallback."""
+        x, x_r, fixes = mdl["x"], mdl["x_r"], mdl["fixes"]
+        if all(np.array_equal(lb, ub) for lb, ub in fixes):
+            exact = self._exact(x, x_r, [lb for lb, _ in fixes])
+            return None if exact is None else exact[:2]
+
+        m = mdl["m"]
+        cuts = []
+
+        def disk_cut(d, i, n):
+            rows, radius = mdl["disks"][d]
+            cuts.append(m.addConstr(rows[i] @ n <= radius))
+
+        def z_cut(y):
+            cuts.append(m.addConstr(-(mdl["z"][0] @ y) <= 1.0 - y @ x))
+            mdl["z_seed"].append(y)
+
+        for d, i, n in mdl["disk_seed"]:
+            disk_cut(d, i, n)
+        if self.Z.powers:
+            # The most recent Z cuts of this episode; older ones, which the
+            # state has moved away from, would only grow the model.
+            mdl["z_seed"] = mdl["z_seed"][-Z_SEED_KEEP:]
+            for y in list(mdl["z_seed"]):
+                cuts.append(m.addConstr(-(mdl["z"][0] @ y) <= 1.0 - y @ x))
+        try:
+            for rnd in range(MAX_CUT_ROUNDS):
+                m.optimize()
+                if m.SolCount == 0:
+                    return None
+                deltas = self._one_face_each(mdl)
+                bound = m.ObjBound
+                exact = self._exact(x, x_r, deltas)
+                if exact is not None and exact[2] <= bound + self.settings["mip_gap"] * abs(exact[2]) + 1e-9:
+                    mdl["cut_rounds"] = rnd + 1
+                    return exact[:2]
+                # Tighten the relaxation where it was loose: at the exact
+                # plan's points on the edge of their sets, and where the
+                # relaxation's own plan left them.
+                added = len(cuts)
+                plans = [(mdl["z"].X, mdl["v"].X, CUT_TOL)]
+                if exact is not None:
+                    plans.append((exact[0], exact[1], -1e-4))
+                for z, v, slack in plans:
+                    for d, Y in enumerate((z[1:self.N, 2:], v)):
+                        radius = mdl["disks"][d][1]
+                        norms = np.linalg.norm(Y, axis=1)
+                        for i in np.flatnonzero(norms > radius * (1.0 + slack) + (CUT_TOL if slack > 0 else 0.0)):
+                            disk_cut(d, i, Y[i] / norms[i])
+                    if self.Z.powers:
+                        gamma, y = self._gauge(x - z[0])
+                        if gamma > 1.0 + slack:
+                            z_cut(y)
+                if len(cuts) == added:
+                    # Nothing left to cut: the relaxation's plan already
+                    # satisfies the exact sets, so it is feasible, and optimal
+                    # to the gap.
+                    mdl["cut_rounds"] = rnd + 1
+                    return mdl["z"].X.copy(), mdl["v"].X.copy()
             return None
-        return mdl["z"].X.copy(), mdl["v"].X.copy()
+        finally:
+            if cuts:
+                m.remove(cuts)
+                m.update()
 
     # ----------------------------------------------------------------- online
     def reset(self, slot=None):
-        """Forget the last plan of `slot`, or of every slot: at an episode's
-        end, so the next step solves from scratch rather than from a
-        candidate for another episode's state."""
+        """Forget the last plan of `slot`, or of every slot, and the
+        directions of its Z cuts: at an episode's end, so the next step
+        solves from scratch rather than from a candidate for another
+        episode's state."""
         if slot is None:
             self._prev = [None] * self.num_slots
+            for mdl in self._models:
+                mdl["z_seed"] = []
         else:
             self._prev[slot] = None
+            self._models[slot]["z_seed"] = []
 
     def act(self, x, target, slot=0):
         """One step of algorithm 3 for `slot`: the input to apply at the
         measured state `x` ([p_x, p_y, v_x, v_y]), toward rest at `target`
         ([p_x, p_y]), and an info dict (outcome, solve time in ms, number of
-        free binaries, tube ratio, the plan)."""
+        free binaries, tube ratio, how many solves the disks' cutting planes
+        took -- 0 when none produced the plan -- and the plan)."""
         x = np.asarray(x, dtype=float)
         x_r = np.array([target[0], target[1], 0.0, 0.0], dtype=float)
         mdl = self._models[slot]
         t0 = time.perf_counter()
         tube_ratio = self._tube_ratio(slot, x)
 
-        mdl["init"].RHS = x
+        mdl["x"], mdl["x_r"] = x, x_r
+        if mdl["init"] is not None:
+            mdl["init"].RHS = x
+        else:
+            mdl["z_base"].RHS = self._z_h - self._z_dirs @ x
         self._set_target(mdl, x_r)
         fixes = self._fix_unreachable(x)
+        mdl["fixes"] = fixes
         free = 0
         for d, (lb, ub) in zip(mdl["deltas"], fixes):
             d.LB = lb
@@ -636,6 +1079,15 @@ class TubeMPCWorker:
 
         cand = self._candidate(slot, x_r)
         cand_deltas = None if cand is None else self._candidate_deltas(cand["z"], fixes)
+        # Tangents at the candidate's points near the edge of their disks,
+        # which the new plan is likely to lean on too (module docstring).
+        mdl["disk_seed"] = []
+        if cand is not None:
+            for d, Y in enumerate((cand["z"][1:self.N, 2:], cand["v"])):
+                radius = mdl["disks"][d][1]
+                norms = np.linalg.norm(Y, axis=1)
+                for i in np.flatnonzero(norms > 0.5 * radius):
+                    mdl["disk_seed"].append((d, i, Y[i] / norms[i]))
         # MIP start: the candidate (algorithm 3, line 7), omega left for
         # Gurobi to complete. Cleared when there is none, so a start from the
         # previous solve never leaks into this one.
@@ -647,10 +1099,9 @@ class TubeMPCWorker:
             mdl["v"].Start = np.full((self.N, 2), GRB.UNDEFINED)
         for d, dv in zip(mdl["deltas"], cand_deltas or [None] * len(mdl["deltas"])):
             d.Start = np.full(d.shape, GRB.UNDEFINED) if dv is None else dv
-        if mdl["om"] is not None:
-            mdl["om"].Start = np.full(mdl["om"].shape, GRB.UNDEFINED)
 
         plan = None
+        mdl["cut_rounds"] = 0
         solution = self._optimize(mdl)
         if solution is not None:
             z, v = solution
@@ -662,21 +1113,22 @@ class TubeMPCWorker:
             plan, outcome = (cand["z"], cand["v"]), CANDIDATE
 
         if plan is None:
-            # Outside X_N: no guarantee applies. Brake as hard as U allows.
-            u = np.clip(-x[2:] / self.dt, self.U.bounds[0], self.U.bounds[1])
+            # Outside X_N: no guarantee applies. Brake as hard as U allows,
+            # straight against the velocity.
+            u = _project_disk(-x[2:] / self.dt, self.u_max)
             self._prev[slot] = None
             outcome, J = EMERGENCY, float("nan")
         else:
             z, v = plan
             u = v[0] + self.K @ (x - z[0])                          # (3.14)
-            # Inside U by construction (V (+) KZ in U); the clip only absorbs
-            # the solver's tolerances.
-            u = np.clip(u, self.U.bounds[0], self.U.bounds[1])
+            # Inside U by construction (V (+) KZ in U); the projection only
+            # absorbs the solver's tolerances.
+            u = _project_disk(u, self.u_max)
             self._prev[slot] = (z, v)
             J = self.cost(z, v, x_r)
         return u, dict(outcome=outcome, solve_ms=1e3 * (time.perf_counter() - t0),
                        free_binaries=free, tube_ratio=tube_ratio, J=J,
-                       plan=None if plan is None else plan[0])
+                       cut_rounds=mdl["cut_rounds"], plan=None if plan is None else plan[0])
 
     def act_batch(self, X, targets):
         """`act` for slots 0..len(X)-1 in turn. Returns the (n, 2) inputs and
@@ -715,10 +1167,10 @@ class TubeMPCWorker:
         ext = [self.Z.support(e[j]) for j in range(4)]
         n_bin = sum(Ob.H.shape[0] for Ob in self.Obar) * (self.N + 1)
         lo, hi = self.Xbar0.bounds
-        return (f"tube MPC: W half-widths {self.W.bounds[1]}, RPI s={self.Z.s} alpha={self.Z.alpha:.3g}; "
-                f"Z half-widths (p_x, p_y, v_x, v_y) = {np.round(ext, 4)}\n"
+        return (f"tube MPC: W disks of radii (p, v) {self.W.radii}, RPI s={self.Z.s} alpha={self.Z.alpha:.3g}; "
+                f"Z radii (p, v) = {np.round([ext[0], ext[2]], 4)}\n"
                 f"  X0 (-) Z: p_x [{lo[0]:.3f}, {hi[0]:.3f}], p_y [{lo[1]:.3f}, {hi[1]:.3f}], "
-                f"|v| <= {hi[2]:.3f}; V = U (-) KZ: |u| <= {self.V.bounds[1][0]:.3f}; "
+                f"||v|| <= {self.v_bar:.3f}; V = U (-) KZ: ||u|| <= {self.u_bar:.3f}; "
                 f"K = {np.round(self.K[0, [0, 2]], 3)} per axis\n"
                 f"  {len(self.Obar)} obstacles, {n_bin} binaries before fixing, "
                 f"max big-M {max((M.max() for M in self.M), default=0.0):.2f}; "

@@ -1,6 +1,7 @@
 import numpy as np
 from gymnasium import spaces
 
+from .actuation import deliver, project_disk, sample_disturbance
 from .config import TunnelEnvConfig
 from .spawn_sampler import SobolSpawnStream, spawn_box
 from .width_profile import constant_profile
@@ -67,10 +68,12 @@ class TunnelVecEnv:
             [0.0, self.dt],
         ], dtype=np.float32)
 
-        # Half-widths of the uniform disturbance box W, per state component
-        # (see the config's noise_bound_p; a Gaussian's std_dev until 2026-09-28).
+        # Radii of the disturbance's disks, per state component, only read to
+        # tell whether W = {0} (see TunnelEnv.__init__).
         self.noise_bound = np.array([self.noise_bound_p, self.noise_bound_p,
                                      self.noise_bound_v, self.noise_bound_v], dtype=np.float32)
+        # effort_penalty / u_max^2, as in TunnelEnv.
+        self._effort_scale = np.float32(c.effort_penalty / c.u_max ** 2)
 
         # Where and how episodes start: see envs/spawn_sampler.py and the
         # config's init_sampler.
@@ -124,21 +127,16 @@ class TunnelVecEnv:
         return self.states.copy(), {}
 
     def step(self, actions: np.ndarray):
-        actions = np.clip(actions, -self.u_max, self.u_max).astype(np.float32)
-        # The speed limit acts on the delivered acceleration, exactly as in
-        # TunnelEnv.step (see the comment there): cut per axis to what brings
-        # the velocity to +-v_max and no further, so a step at top speed
-        # covers v_max * dt and no more.
-        v = self.states[:, 2:]
-        actions = np.clip(actions, (-np.float32(self.v_max) - v) / np.float32(self.dt),
-                          (np.float32(self.v_max) - v) / np.float32(self.dt))
+        # The delivered acceleration, exactly as in TunnelEnv.step (see the
+        # comment there and envs/actuation.py): saturated radially to
+        # ||u|| <= u_max, then cut to what keeps ||v'|| <= v_max.
+        actions = deliver(actions, self.states[:, 2:], self.u_max, self.v_max, self.dt)
         self.steps += 1
 
-        # Uniform in the box W, drawn only when W != {0}, as in the scalar
-        # env's step().
+        # Uniform on the disks of W, drawn only when W != {0}, as in the
+        # scalar env's step().
         if np.any(self.noise_bound > 0):
-            noise = self._np_random.uniform(
-                low=-self.noise_bound, high=self.noise_bound, size=(self.num_envs, 4)).astype(np.float32)
+            noise = sample_disturbance(self._np_random, self.noise_bound_p, self.noise_bound_v, self.num_envs)
         else:
             noise = np.zeros((self.num_envs, 4), dtype=np.float32)
 
@@ -147,7 +145,11 @@ class TunnelVecEnv:
         prev_p_x = self.states[:, 0].copy()
 
         next_states = self.states @ self.A.T + actions @ self.B.T + noise
-        self.states = np.clip(next_states, self.x_min, self.x_max).astype(np.float32)
+        # Position in its box, velocity in the speed disk (a guard, as in
+        # TunnelEnv.step).
+        next_states[:, :2] = np.clip(next_states[:, :2], self.x_min[:2], self.x_max[:2])
+        next_states[:, 2:] = project_disk(next_states[:, 2:], self.v_max)
+        self.states = next_states.astype(np.float32)
 
         p_x, p_y = self.states[:, 0], self.states[:, 1]
 
@@ -172,11 +174,15 @@ class TunnelVecEnv:
         rewards[collision] += self.config.contact_penalty
         rewards[goal] = self.config.goal_reward
 
-        # Potential-based progress shaping. Must
-        # run before `_sample_initial(done)` below mutates `self.states` in
-        # place, since `p_x` is a view into it and would otherwise pick up
+        # Potential-based progress shaping, cut at L as in TunnelEnv.step.
+        # Must run before `_sample_initial(done)` below mutates `self.states`
+        # in place, since `p_x` is a view into it and would otherwise pick up
         # the post-reset row instead of the terminal one.
-        rewards += self.config.progress_reward_coef * (p_x - prev_p_x)
+        rewards += self.config.progress_reward_coef * (np.minimum(p_x, np.float32(self.L)) - prev_p_x)
+
+        # Control effort on the delivered u, as in TunnelEnv.step.
+        effort = self._effort_scale * (actions[:, 0] * actions[:, 0] + actions[:, 1] * actions[:, 1])
+        rewards += effort
 
         # Per-episode wall-contact bookkeeping, per env (see __init__): a
         # running count and the *individual* (not cumulative) penalty of
@@ -208,6 +214,9 @@ class TunnelVecEnv:
             "final_observation": final_observation,
             "final_info": final_info,
             "distance_to_goal": np.maximum(self.L - p_x, 0.0).astype(np.float32),
+            # This step's effort term (already in `rewards`), per env: hPPO
+            # weighs it into its worker's reward on its own.
+            "effort_penalty": effort,
         }
 
         return obs_out, rewards, terminated, truncated, info

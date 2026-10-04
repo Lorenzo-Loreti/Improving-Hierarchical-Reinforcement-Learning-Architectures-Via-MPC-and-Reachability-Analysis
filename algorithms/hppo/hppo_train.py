@@ -100,17 +100,16 @@ def parse_args(scenario):
              "every other script trains against -- see envs/config.py")
 
     parser.add_argument("--noise-bound-p", type=float, default=0.0,
-        help="half-width, in metres, of the uniform disturbance added to each "
-             "position every step (the env config's noise_bound_p, since "
-             "2026-09-28). 0.0, the default, is the deterministic environment "
-             "every earlier run trained on, unchanged bit for bit. The same "
+        help="radius, in metres, of the disk the position disturbance is "
+             "drawn from, uniformly, every step (the env config's "
+             "noise_bound_p, since 2026-09-28; a box's half-width until "
+             "2026-10-04). 0.0, the default, is the deterministic environment. The same "
              "flag as PPO+MPC's (algorithms/ppo_mpc/ppo_mpc_train.py), so the "
              "algorithms can be compared on one disturbed environment; the "
              "level chosen there is 0.005 with --noise-bound-v 0.05")
     parser.add_argument("--noise-bound-v", type=float, default=0.0,
-        help="half-width, in m/s, of the uniform disturbance added to each "
-             "velocity every step (the env config's noise_bound_v); see "
-             "--noise-bound-p")
+        help="radius, in m/s, of the disk the velocity disturbance is drawn "
+             "from (the env config's noise_bound_v); see --noise-bound-p")
     parser.add_argument("--init-sampler", type=str, choices=["uniform", "sobol"],
         default=scenario.make_env_config().init_sampler,
         help="how the vector env draws the start of each training episode "
@@ -344,7 +343,23 @@ def parse_args(scenario):
              "replaced by a fixed forward goal, against ~6 at 0.005. See "
              "that script's summary. "
              "0.0 restores the pre-fix reward, which collapses (2/10 seeds "
-             "ever solved in the sweep, 0/10 at the end)")
+             "ever solved in the sweep, 0/10 at the end). Since 2026-10-04 "
+             "the environment's effort term is taken out of this mix and "
+             "weighted by --worker-effort-coef instead")
+    parser.add_argument("--worker-effort-coef", type=float, default=1.0,
+        help="weight of the environment's control-effort term (the env "
+             "config's effort_penalty * (||u||/u_max)^2, since 2026-10-04) in "
+             "the worker's reward, in place of its share in "
+             "--worker-extrinsic-coef's mix: the worker sees r_int + "
+             "coef_ext * (r_env - r_effort) + coef_effort * r_effort. The "
+             "worker is the one that produces u, and at coef_ext = 0.02 the "
+             "effort would reach it at 0.0002 per full-thrust step against an "
+             "intrinsic stream of ~0.12, i.e. not at all. At 1.0, the "
+             "default, it pays the environment's own price, 0.01 per "
+             "full-thrust step (~8%% of a step's best goal progress): the "
+             "same preference among equally fast trajectories that the "
+             "environment's reward puts to flat PPO and to the oracle. "
+             "0.02 puts it back inside the mix")
     # --- worker observation: a strict feudal separation (2026-09-26) -------
     #
     # The extrinsic-coef sweep (scenarios/slalom/scripts/sweep_extrinsic_coef.py)
@@ -1039,13 +1054,14 @@ def train(args, scenario):
         # extrinsic term swamps the intrinsic one -- the worst case for the
         # hierarchy being a worker that no longer needs its manager -- is a
         # curve rather than a guess. The intrinsic mean is also the worker's
-        # goal progress per step (about v_max*dt = 0.12 m at most; the speed
-        # limit is per axis, so diagonal motion can exceed it slightly, up to
-        # ~0.126 measured): it falling while the return holds would mean the
-        # worker has stopped following goals.
+        # goal progress per step (at most v_max*dt = 0.12 m since the speed
+        # limit bounds ||v|| (2026-10-04); under the per-axis limit diagonal
+        # motion exceeded it, up to ~0.126 measured): it falling while the
+        # return holds would mean the worker has stopped following goals.
         # Read-only, like the near-goal diagnostic.
         reward_intrinsic_sum = reward_intrinsic_abs = 0.0
         reward_extrinsic_sum = reward_extrinsic_abs = 0.0
+        reward_effort_sum = 0.0
 
         for step in range(0, args.num_steps_per_env):
             global_step += args.num_envs
@@ -1101,11 +1117,16 @@ def train(args, scenario):
             # below is added: with the coefficient at 0, `worker_reward` is
             # still this very array when the truncation bootstrap adds into
             # it in place.
-            extrinsic_reward = args.worker_extrinsic_coef * env_reward
+            # The effort term at its own weight, the rest of the reward at
+            # the extrinsic one (see --worker-effort-coef).
+            effort = info["effort_penalty"]
+            extrinsic_reward = (args.worker_extrinsic_coef * (env_reward - effort)
+                                + args.worker_effort_coef * effort)
             reward_intrinsic_sum += float(worker_reward.sum())
             reward_intrinsic_abs += float(np.abs(worker_reward).sum())
             reward_extrinsic_sum += float(extrinsic_reward.sum())
             reward_extrinsic_abs += float(np.abs(extrinsic_reward).sum())
+            reward_effort_sum += float(effort.sum())
 
             # Put the environment's own outcome back into the worker's return
             # -- see --worker-extrinsic-coef for the termination-avoidance
@@ -1115,7 +1136,7 @@ def train(args, scenario):
             # same (mixed) scale. (The removed --worker-success-bonus was
             # applied right after it; see the comment above that flag's
             # former place in parse_args.)
-            if args.worker_extrinsic_coef != 0.0:
+            if args.worker_extrinsic_coef != 0.0 or args.worker_effort_coef != 0.0:
                 worker_reward = worker_reward + extrinsic_reward
 
             # Handle truncation bootstrapping for the worker. The episode did
@@ -1303,6 +1324,10 @@ def train(args, scenario):
         metrics["worker/reward_extrinsic"] = reward_extrinsic_sum / args.num_steps_worker
         metrics["worker/extrinsic_share"] = (
             reward_extrinsic_abs / max(reward_intrinsic_abs + reward_extrinsic_abs, 1e-12))
+        # The environment's effort term per worker step, unweighted: how hard
+        # the worker thrusts, in the reward's units (effort_penalty at full
+        # thrust).
+        metrics["worker/effort_penalty"] = reward_effort_sum / args.num_steps_worker
 
         log_line = (f"update={update} global_step={global_step} SPS={sps} "
                     f"w_ev={metrics['worker/explained_variance']:.3f} "

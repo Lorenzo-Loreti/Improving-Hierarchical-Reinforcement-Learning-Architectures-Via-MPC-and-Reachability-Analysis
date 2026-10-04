@@ -18,7 +18,10 @@ As in Tunnel, the agent is a point mass moving in a two-dimensional plane,
 controlled by choosing an acceleration at every step rather than steering
 directly. Its position and velocity evolve through a double-integrator
 model — the agent has inertia, cannot stop or turn on the spot, and has to
-plan several steps ahead. Time advances in fixed 0.1-second increments.
+plan several steps ahead. Its speed and acceleration are capped in
+magnitude, whatever the direction (since 2026-10-04; each axis separately
+before), so moving sideways takes something away from moving forward. Time
+advances in fixed 0.1-second increments.
 
 The difference from Tunnel is entirely in the shape of the corridor. For
 most of its length the corridor is the same constant 4-meter width. But at
@@ -28,7 +31,8 @@ gate toward one side, the other toward the opposite side. The corridor
 returns to full width, and back to being centered, in between the two gates
 and again after the second one, before the goal line. Just like in Tunnel,
 the environment supports adding small, bounded random disturbances to
-position and velocity (uniform within a fixed box, since 2026-09-28), but
+position and velocity (since 2026-09-28; uniform over a disk for each, the
+same in every direction, since 2026-10-04, and within a fixed box before), but
 the deterministic, noise-free version is the default and what every
 experiment before that date ran on.
 
@@ -53,7 +57,12 @@ through it, then reverse that lateral commitment to line up with the second,
 oppositely-offset gate, before finally recentering for the run to the goal.
 Because the agent's velocity carries momentum, this cannot be done at the
 last second — the lateral maneuver into each gate has to begin while the
-agent is still well before it.
+agent is still well before it. And it costs time: with the speed capped in
+magnitude, every bit of lateral speed is forward speed given up, so even the
+best possible run through the gates arrives a little later (about one step
+on average, up to four) than a straight run down an open corridor would.
+Under the per-axis caps used until 2026-10-04 it did not — the gates were
+free.
 
 This is precisely what makes Slalom relevant to the flat-vs-hierarchical
 question this thesis investigates. A flat policy has to encode this entire
@@ -67,17 +76,17 @@ central empirical question Slalom is used to probe.
 
 ## Reward Design
 
-The reward is built from the same four ingredients as Tunnel — a small
+The reward is built from the same five ingredients as Tunnel — a small
 per-step time penalty, a wall-contact penalty, a large one-off success bonus,
-and a small continuous "forward progress" bonus paid every step — with the
-same historical motivation: an earlier version made wall contact end the
+a small continuous "forward progress" bonus paid every step up to the goal
+line, and a small control-effort penalty (both of the last two as they are
+since 2026-10-04) — with the same historical motivation for the contact
+penalty: an earlier version made wall contact end the
 episode outright, which taught the agent that idling after partial progress
 was safer, in expectation, than ever attempting a gate, so it never did.
 Making contact survivable is what makes a real attempt worth the risk.
 
-Two details are specific to Slalom. First, the success bonus is five times
-larger than in Tunnel (see the parameter table below), reflecting that this
-is deliberately the harder task. Second, the "forward progress" bonus is
+One detail matters more here than in Tunnel: the "forward progress" bonus is
 defined purely in terms of distance covered along the corridor's length,
 never in terms of straight-line distance to the goal — which matters here
 specifically because the two gates are off to the side: a shaping signal
@@ -94,12 +103,13 @@ every time it had to move laterally away from center to line up with a gate.
 | Gate lateral offset | ±1 m from centerline | the two gates sit on opposite sides |
 | Gate 1 location | 4 m to 5 m along the corridor | offset toward one side |
 | Gate 2 location | 7 m to 8 m along the corridor | offset toward the opposite side |
-| Max speed | 1.2 m/s | per-axis velocity bound; at it, more acceleration that way has no effect |
-| Max acceleration | 2.5 m/s² | the agent's control authority |
+| Max speed | 1.2 m/s | bound on the speed, in any direction (per axis until 2026-10-04) |
+| Max acceleration | 2.5 m/s² | bound on the magnitude of the acceleration, the agent's control authority |
 | Control step | 0.1 s | simulated time between decisions |
 | Episode budget | 200 steps (20 s) | timeout if the goal isn't reached in time |
 | Spawn zone | first 2 m, centered laterally | randomized starting box |
-| Success bonus | 1000 | vs. 200 in Tunnel |
+| Success bonus | 1000 | the same as Tunnel's since 2026-09-24 (it was 200 there before) |
+| Effort penalty | 0.01 per full-thrust step | proportional to the squared magnitude of the delivered acceleration (since 2026-10-04) |
 
 ## Layout Sketch (schematic, not to scale)
 
@@ -140,5 +150,5 @@ policy has to approximate without any explicit help.
 |---|---|---|
 | Corridor width | constant 4 m | 4 m, narrowing to 1.5 m at two points |
 | Lateral maneuvering required | none (centerline is always valid) | yes — an S-shaped detour through two offset gates |
-| Success bonus | 200 | 1000 (reflecting the harder task) |
+| Success bonus | 1000 (200 until 2026-09-24) | 1000 |
 | Role in this thesis | baseline / sanity check | primary testbed for flat-vs-hierarchical comparisons |

@@ -108,18 +108,19 @@ def parse_args(scenario):
              "config's own, so omitting it reproduces the environment every other "
              "script trains against -- see envs/config.py")
     parser.add_argument("--noise-bound-p", type=float, default=0.0,
-        help="half-width, in metres, of the uniform disturbance added to each "
-             "position every step (the env config's noise_bound_p). 0.0, the "
-             "default, is the deterministic environment. The worker's tube is "
-             "designed for this same box W unless a checkpoint says otherwise. "
+        help="radius, in metres, of the disk the position disturbance is drawn "
+             "from, uniformly, every step (the env config's noise_bound_p; a "
+             "box's half-width until 2026-10-04). 0.0, the default, is the "
+             "deterministic environment. The worker's tube is designed for this "
+             "same W unless a checkpoint says otherwise. "
              "0.005 with --noise-bound-v 0.05 is the level chosen for the "
              "disturbed experiments (2026-09-28): a disturbance of ~20%% of the "
-             "actuator's authority, which gives a tube of +-8 cm and +-0.21 m/s "
+             "actuator's authority, which gives a tube of radii 8 cm and 0.21 m/s "
              "and plans at <= 0.99 m/s. Flat PPO and hPPO take the same flag")
     parser.add_argument("--noise-bound-v", type=float, default=0.0,
-        help="half-width, in m/s, of the uniform disturbance added to each "
-             "velocity every step (the env config's noise_bound_v); see "
-             "--noise-bound-p. The tube needs both bounds > 0, or both 0")
+        help="radius, in m/s, of the disk the velocity disturbance is drawn "
+             "from (the env config's noise_bound_v); see --noise-bound-p. The "
+             "tube needs both bounds > 0, or both 0")
     parser.add_argument("--init-sampler", type=str, choices=["uniform", "sobol"],
         default=scenario.make_env_config().init_sampler,
         help="how the vector env draws the start of each training episode "
@@ -163,7 +164,8 @@ def parse_args(scenario):
     # algorithm that never solved the slalom (docs/benchmark.md, section 4).
     #
     # Sized from the plant instead: over one segment the displacement cannot
-    # exceed v_max * manager_freq * dt per axis. --goal-bound-slack times
+    # exceed v_max * manager_freq * dt (in norm since 2026-10-04, per axis
+    # before; the box's half-width is the same). --goal-bound-slack times
     # that, not exactly that, because the two axes want opposite things: on
     # y the manager needs resolution, which argues for the tightest box; on
     # x the optimal policy is full speed ahead, and a box pinned at the reach
@@ -180,8 +182,9 @@ def parse_args(scenario):
     # a local minimum it cannot leave by itself (the note's remark 4.6). With
     # the goal held 1.8 m ahead of it and the manager replaced by nothing,
     # it stops in front of the slalom's second gate; with goals placed in
-    # each gate's opening it finishes in 78 steps at a return of 1013.7
-    # without contacts (tests/test_tube_mpc.py). Finding those goals is the
+    # each gate's opening it finishes without contacts, in 82 steps from the
+    # start where the oracle needs 79 (tests/test_tube_mpc.py; 78 steps under
+    # the per-axis limits of 2026-09-28). Finding those goals is the
     # manager's whole job here.
     parser.add_argument("--max-goal-bound", type=float, default=None,
         help="half-width of the manager's goal box in metres: its [-1, 1]^2 "

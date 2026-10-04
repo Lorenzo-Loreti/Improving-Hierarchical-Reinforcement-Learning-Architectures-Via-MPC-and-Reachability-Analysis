@@ -1,17 +1,20 @@
 """Tests for the tube-MPC worker (algorithms/tube_mpc.py).
 
 Three layers: the set computations of the note's chapter 2 against brute
-force or their defining properties; the offline sets of the worker (the
-obstacles against the environment's own contact rule, the big-M constants
-against their definition); and the closed loop, where the claims that
-matter live -- theorem 4.1's candidate is feasible after any disturbance in
-W, the real state never touches a wall, and fixing unreachable binaries
-changes no solution.
+force or their defining properties (for the polytopes the note uses and for
+the disks the environments use since 2026-10-04); the offline sets of the
+worker (the obstacles against the environment's own contact rule, the
+big-M constants against their definition, the tightened disks); and the
+closed loop, where the claims that matter live -- theorem 4.1's candidate is
+feasible after any disturbance in W, the real state never touches a wall
+nor leaves the speed and thrust disks, the plan is the exact optimum
+whatever relaxation found it, and fixing unreachable binaries changes no
+solution.
 
-Every model here stays within the size-limited Gurobi licence that comes
-with `pip install gurobipy` (200 variables for a quadratic model): the
-disturbed worker, whose lifted representation of Z adds 4 * s ~ 70
-variables, runs at a short horizon.
+The disturbed worker runs at a short horizon in a few tests, which keeps
+them fast; the Gurobi model no longer carries Z's lifted representation
+(it lives in the Clarabel problem, see the module docstring), so model size
+is not what limits it.
 
 The shared test directory only puts the tunnel's `envs` on sys.path, so the
 slalom's gates are rebuilt below from the same WidthSegments inside a
@@ -25,8 +28,9 @@ from scipy.optimize import linprog
 from envs.config import TunnelEnvConfig
 from envs.tunnel_env import TunnelEnv
 from envs.width_profile import WidthProfile, WidthSegment
+import tube_mpc
 from tube_mpc import (
-    CANDIDATE, EMERGENCY, SOLVER, Polytope, RPIOuterApprox, TubeMPCWorker,
+    CANDIDATE, EMERGENCY, SOLVER, DiskProduct, Polytope, RPIOuterApprox, TubeMPCWorker,
     corridor_obstacles, dlqr, minkowski_outer, pontryagin_diff,
 )
 
@@ -125,6 +129,53 @@ def test_rpi_set_is_within_eps_of_the_minimal_one():
         assert h_inf - 1e-12 <= Z.support(a) <= h_inf + eps
 
 
+def test_disk_product_support_and_scaling_match_brute_force():
+    """W = {||w_p|| <= b_p, ||w_v|| <= b_v}: h_W(a) = b_p ||a_p|| + b_v ||a_v||
+    against the max over many points of W, and `scaling` -- the smallest
+    alpha with M W in alpha W -- against brute force, exact for a matrix whose
+    2x2 blocks are multiples of rotations (every power of A_K is) and an upper
+    bound for any other."""
+    W = DiskProduct(0.3, 0.7)
+    rng = np.random.default_rng(0)
+    th = rng.uniform(0, 2 * np.pi, (20000, 2))
+    pts = np.column_stack([0.3 * np.cos(th[:, 0]), 0.3 * np.sin(th[:, 0]),
+                           0.7 * np.cos(th[:, 1]), 0.7 * np.sin(th[:, 1])])   # W's extreme points
+    for a in rng.standard_normal((10, 4)):
+        assert W.support(a) == pytest.approx(np.max(pts @ a), rel=1e-3)
+        assert W.support(a) >= np.max(pts @ a) - 1e-12
+
+    def brute(M):
+        img = pts @ M.T
+        return max(np.linalg.norm(img[:, :2], axis=1).max() / 0.3, np.linalg.norm(img[:, 2:], axis=1).max() / 0.7)
+
+    AK = _worker_ak()
+    for M in (AK, np.linalg.matrix_power(AK, 5)):
+        assert W.scaling(M) == pytest.approx(brute(M), rel=1e-3)
+    generic = rng.standard_normal((4, 4))
+    assert W.scaling(generic) >= brute(generic) - 1e-9
+
+
+def test_rpi_set_of_the_disks_is_robustly_invariant_and_rotation_invariant():
+    """The same two checks as for a box W, for the disks: A_K Z (+) W in Z in
+    sampled directions (proposition 2.3(c)), and Z within eps of the minimal
+    RPI set. And the property the worker's exact disks rest on: Z's support
+    is invariant under rotating the plane, diag(R, R) on [p; v]."""
+    AK = _worker_ak()
+    W = DiskProduct(*NOISE)
+    Z = RPIOuterApprox(AK, W, eps=1e-2)
+    rng = np.random.default_rng(0)
+    gaps = [Z.support(AK.T @ a) + W.support(a) - Z.support(a) for a in rng.standard_normal((500, 4))]
+    assert max(gaps) <= 1e-9
+    powers = [np.linalg.matrix_power(AK, l) for l in range(300)]
+    for a in rng.standard_normal((8, 4)):
+        h_inf = sum(W.support(Ai.T @ a) for Ai in powers)
+        assert h_inf - 1e-12 <= Z.support(a) <= h_inf + 1e-2 * np.abs(a).sum()
+    for a in rng.standard_normal((20, 4)):
+        theta = rng.uniform(0, 2 * np.pi)
+        Rt = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
+        assert Z.support(np.kron(np.eye(2), Rt) @ a) == pytest.approx(Z.support(a), rel=1e-12)
+
+
 def test_no_disturbance_gives_the_zero_tube():
     Z = RPIOuterApprox(_worker_ak(), Polytope.box(np.zeros(4), np.zeros(4)))
     assert Z.s == 0 and Z.lifted_matrices() == []
@@ -197,45 +248,108 @@ def test_tightening_matches_the_note():
     assert hi[2] == pytest.approx(0.989, abs=1e-3)
 
 
+def test_the_tightened_speed_and_thrust_sets_are_exact_disks():
+    """X0 (-) Z on the velocity and U (-) KZ are disks (module docstring):
+    the support of Z's velocity part and of K Z is the same in every
+    direction, so the tightened radii v_bar = v_max - r_v and u_bar = u_max -
+    r_u hold in every direction, not only along the axes."""
+    env = slalom_env(NOISE)
+    w = TubeMPCWorker.from_env(env, horizon=2)
+    for theta in np.linspace(0.0, 2.0 * np.pi, 13):
+        n = np.array([np.cos(theta), np.sin(theta)])
+        assert env.v_max - w.Z.support(np.concatenate([[0.0, 0.0], n])) == pytest.approx(w.v_bar, abs=1e-12)
+        assert env.u_max - w.Z.support(w.K.T @ n) == pytest.approx(w.u_bar, abs=1e-12)
+    assert w.u_bar == pytest.approx(1.692, abs=1e-3)
+
+
+def test_an_asymmetric_closed_loop_is_refused():
+    """The disks are exact only if rotating the plane commutes with the
+    closed loop; a gain that treats the axes differently must fail loudly."""
+    w = TubeMPCWorker.from_env(slalom_env(), horizon=2)
+    w.K = w.K * np.array([[1.0], [0.9]])
+    w.AK = w.A + w.B @ w.K
+    with pytest.raises(ValueError, match="rotation-symmetric"):
+        w._check_rotation_symmetry()
+
+
+def test_the_gauge_oracle_separates_z():
+    """gamma_Z(e) <= 1 for points of Z (built from its lifted representation
+    with every omega_l in W), > 1 past them, and the returned y has
+    h_Z(y) = 1, so y^T e <= 1 is a valid cut that the point violates."""
+    w = TubeMPCWorker.from_env(slalom_env(NOISE), horizon=2)
+    L = w.Z.lifted_matrices()
+    rng = np.random.default_rng(0)
+    for _ in range(10):
+        th = rng.uniform(0, 2 * np.pi, (len(L), 2))
+        r = np.sqrt(rng.uniform(size=(len(L), 2)))
+        om = np.column_stack([NOISE[0] * r[:, 0] * np.cos(th[:, 0]), NOISE[0] * r[:, 0] * np.sin(th[:, 0]),
+                              NOISE[1] * r[:, 1] * np.cos(th[:, 1]), NOISE[1] * r[:, 1] * np.sin(th[:, 1])])
+        e = sum(Ll @ o for Ll, o in zip(L, om))
+        gamma, y = w._gauge(e)
+        assert gamma <= 1.0 + 1e-7
+        assert w.Z.support(y) == pytest.approx(1.0, abs=1e-12)
+        gamma2, y2 = w._gauge(1.5 * e / gamma)
+        assert gamma2 == pytest.approx(1.5, rel=1e-5) and y2 @ (1.5 * e / gamma) > 1.0
+
+
 # ----------------------------------------------------------------------------
 # The closed loop
 # ----------------------------------------------------------------------------
 
-def _run(worker, env, target_fn, steps=200, seed=1, vertex_noise=None):
-    """Roll the worker out; `vertex_noise` adds w on a random vertex of that
-    box after every step (the environment's own disturbance is uniform, and
-    the vertices are the worst case; section 5.6 (iii))."""
+def _edge_of_w(rng, noise):
+    """A random extreme point of W: on the edge of both disks, at independent
+    angles. W's extreme points are the worst case (section 5.6 (iii)); since
+    2026-10-04 they are the disks' circles, no longer a box's vertices, which
+    lie outside the disks."""
+    th = rng.uniform(0.0, 2.0 * np.pi, 2)
+    return np.array([noise[0] * np.cos(th[0]), noise[0] * np.sin(th[0]),
+                     noise[1] * np.cos(th[1]), noise[1] * np.sin(th[1])])
+
+
+def _run(worker, env, target_fn, steps=200, seed=1, edge_noise=None):
+    """Roll the worker out; `edge_noise` adds w at a random extreme point of
+    W (`_edge_of_w`) after every step (the environment's own disturbance is
+    uniform on W). Also tracks the largest real speed and input."""
     rng = np.random.default_rng(seed)
     obs, _ = env.reset(seed=seed)
     worker.reset()
-    outcomes, ratios, walls = [], [], 0
+    outcomes, ratios, walls, speed, thrust = [], [], 0, 0.0, 0.0
     for t in range(steps):
         u, info = worker.act(obs, target_fn(obs))
         outcomes.append(info["outcome"])
         ratios.append(info["tube_ratio"])
+        thrust = max(thrust, float(np.linalg.norm(u)))
         obs, _, terminated, truncated, step_info = env.step(u.astype(np.float32))
+        speed = max(speed, float(np.linalg.norm(obs[2:])))
         if terminated or truncated:
             break
-        if vertex_noise is not None:
-            b = np.array([vertex_noise[0], vertex_noise[0], vertex_noise[1], vertex_noise[1]])
-            env.state = (env.state + b * rng.choice([-1.0, 1.0], size=4)).astype(np.float32)
+        if edge_noise is not None:
+            env.state = (env.state + _edge_of_w(rng, edge_noise)).astype(np.float32)
             obs = env.state.copy()
+            speed = max(speed, float(np.linalg.norm(obs[2:])))
             y_lo, y_hi = env.width_profile.bounds_at(obs[0])
             walls += int(not (y_lo < obs[1] < y_hi))
     return dict(steps=t + 1, success=step_info["is_success"], contacts=step_info["collision_count"] + walls,
-                outcomes=np.array(outcomes), ratios=np.array(ratios), final=obs)
+                outcomes=np.array(outcomes), ratios=np.array(ratios), final=obs, speed=speed, thrust=thrust)
 
 
 def test_a_manager_that_aims_at_the_openings_threads_the_slalom():
     """Without a disturbance, goals in each gate's opening take the worker
-    through both gates without a contact, near the oracle's time (the
-    oracle's mean over the spawn grid is ~1013 at ~77 steps; measured here
-    2026-09-28: 78 steps, return 1013.7)."""
-    w = TubeMPCWorker.from_env(slalom_env())
-    out = _run(w, slalom_env(), gate_target)
+    through both gates without a contact, near the oracle's time, at the
+    speed limit and inside the thrust disk. Measured 2026-10-04 with the
+    disks: 82 steps from this start (seed 1), where the oracle needs 79.
+    With the per-axis limits, on 2026-09-28: 78 steps, the oracle's mean
+    over the spawn grid ~77 -- steering then cost nothing."""
+    from optimal_solver import MinTimeSolver
+    env = slalom_env()
+    w = TubeMPCWorker.from_env(env)
+    out = _run(w, env, gate_target)
     assert out["success"] and out["contacts"] == 0
-    assert out["steps"] <= 80
+    env.reset(seed=1)
+    assert out["steps"] <= MinTimeSolver().solve(env).length + 4
     assert np.all(out["outcomes"] == SOLVER)
+    assert env.v_max - 1e-5 < out["speed"] <= env.v_max + 1e-5
+    assert out["thrust"] <= env.u_max + 1e-9
 
 
 def test_a_goal_straight_ahead_leaves_the_worker_stuck_at_a_gate():
@@ -251,18 +365,20 @@ def test_a_goal_straight_ahead_leaves_the_worker_stuck_at_a_gate():
 
 
 def test_the_tube_holds_under_worst_case_disturbances():
-    """Theorem 4.1 in closed loop: with w on a random vertex of W at every
-    step, the real state never touches a wall, the error stays in Z (its
-    bounding box, which is what the tube ratio measures), and every step has
-    a plan. A short horizon keeps the model inside the size-limited licence
-    and makes the run slow, not unsafe."""
+    """Theorem 4.1 in closed loop: with w at a random extreme point of W at
+    every step, the real state never touches a wall nor exceeds the speed
+    limit, the input stays in the thrust disk, the error stays in Z (its
+    projections, which is what the tube ratio measures), and every step has
+    a plan. A short horizon keeps the test fast and makes the run slow, not
+    unsafe."""
     env = slalom_env()                      # the disturbance is injected by _run
     w = TubeMPCWorker.from_env(env, horizon=4, noise_bound_p=NOISE[0], noise_bound_v=NOISE[1])
     for seed in (0, 1):
-        out = _run(w, env, gate_target, seed=seed, vertex_noise=NOISE)
+        out = _run(w, env, gate_target, seed=seed, edge_noise=NOISE)
         assert out["success"] and out["contacts"] == 0
         assert np.nanmax(out["ratios"]) <= 1.0 + 1e-6
         assert not np.any(out["outcomes"] == EMERGENCY)
+        assert out["speed"] <= env.v_max + 1e-6 and out["thrust"] <= env.u_max + 1e-9
 
 
 def test_the_uniform_environment_disturbance_is_what_the_tube_is_built_for():
@@ -277,33 +393,30 @@ def test_the_uniform_environment_disturbance_is_what_the_tube_is_built_for():
 
 def test_the_shifted_candidate_is_feasible_after_a_disturbance():
     """Theorem 4.1's candidate, checked constraint by constraint after a
-    disturbance on a vertex of W: dynamics, the tightened boxes, the terminal
-    rest state, at least one free face of every obstacle at every stage, and
-    x+ - z~_0 in Z through the lifted representation (2.8), by LP."""
+    disturbance at an extreme point of W: dynamics, the position box, the
+    speed disk on stages 1..N-1, the thrust disk, the terminal rest state, at
+    least one free face of every obstacle at every stage, and x+ - z~_0 in Z
+    by its gauge (the separation oracle)."""
     env = slalom_env()
     w = TubeMPCWorker.from_env(env, horizon=4, noise_bound_p=NOISE[0], noise_bound_v=NOISE[1])
-    b = np.array([NOISE[0], NOISE[0], NOISE[1], NOISE[1]])
     rng = np.random.default_rng(3)
     x = np.array([3.6, 0.4, 0.8, 0.3])       # just before gate 1
     for _ in range(12):
         target = gate_target(x)
         u, _ = w.act(x, target)
-        x = w.A @ x + w.B @ u + b * rng.choice([-1.0, 1.0], size=4)
+        x = w.A @ x + w.B @ u + _edge_of_w(rng, NOISE)
         cand = w._candidate(0, np.array([*target, 0.0, 0.0]))
         z, v = cand["z"], cand["v"]
         np.testing.assert_allclose(z[1:], z[:-1] @ w.A.T + v @ w.B.T, atol=1e-6)
         lo, hi = w.Xbar0.bounds
-        assert np.all(z >= lo - 1e-6) and np.all(z <= hi + 1e-6)
-        assert np.all(np.abs(v) <= w.V.bounds[1] + 1e-6)
+        assert np.all(z[:, :2] >= lo[:2] - 1e-6) and np.all(z[:, :2] <= hi[:2] + 1e-6)
+        assert np.all(np.linalg.norm(z[1:w.N, 2:], axis=1) <= w.v_bar + 1e-6)
+        assert np.all(np.linalg.norm(v, axis=1) <= w.u_bar + 1e-6)
         np.testing.assert_allclose(z[-1, 2:], 0.0, atol=1e-9)
         for Ob in w.Obar:
             assert np.all(np.any(z @ Ob.H.T >= Ob.h - 1e-4, axis=1))
-        # x - z_0 = sum_l L_l w_l with every w_l in W: a feasibility LP.
-        L = w.Z.lifted_matrices()
-        A_eq = np.hstack(L)
-        res = linprog(np.zeros(A_eq.shape[1]), A_eq=A_eq, b_eq=x - z[0],
-                      bounds=[(-bi, bi) for _ in L for bi in b], method="highs")
-        assert res.status == 0
+        gamma, _ = w._gauge(x - z[0])
+        assert gamma <= 1.0 + 1e-6
 
 
 def test_fixing_unreachable_binaries_changes_no_solution():
@@ -327,11 +440,12 @@ def test_fixing_unreachable_binaries_changes_no_solution():
 
 def test_a_state_outside_the_feasible_set_brakes_as_an_emergency():
     """A first state no plan can start from -- here inside a gate's wall --
-    has no candidate either: the worker reports EMERGENCY and brakes."""
+    has no candidate either: the worker reports EMERGENCY and brakes, at full
+    thrust straight against the velocity."""
     w = TubeMPCWorker.from_env(slalom_env())
     u, info = w.act(np.array([4.5, -1.0, 1.0, -0.5]), np.array([6.0, 1.0]))
     assert info["outcome"] == EMERGENCY
-    np.testing.assert_allclose(u, [-2.5, 2.5])
+    np.testing.assert_allclose(u, 2.5 * np.array([-1.0, 0.5]) / np.linalg.norm([1.0, 0.5]))
 
 
 def test_the_candidate_takes_over_when_the_solver_finds_nothing():
@@ -347,7 +461,9 @@ def test_the_candidate_takes_over_when_the_solver_finds_nothing():
     w._optimize = lambda mdl: None
     u, second = w.act(obs, gate_target(obs))
     assert first["outcome"] == SOLVER and second["outcome"] == CANDIDATE
-    np.testing.assert_allclose(u, expected["v"][0] + w.K @ (obs - expected["z"][0]))
+    # Up to the final projection onto the thrust disk, which only absorbs
+    # the solvers' tolerances.
+    np.testing.assert_allclose(u, expected["v"][0] + w.K @ (obs - expected["z"][0]), rtol=1e-6)
     np.testing.assert_array_equal(w._prev[0][0], expected["z"])
 
 
@@ -383,17 +499,53 @@ def test_slots_do_not_share_plans():
     X = np.array([[1.0, 0.0, 0.0, 0.0], [2.0, 0.5, 0.5, 0.0]])
     U, stats = w.act_batch(X, X[:, :2] + [1.8, 0.5])
     assert U.shape == (2, 2) and np.all(stats["outcome"] == SOLVER)
-    np.testing.assert_allclose(w._prev[1][0][0], X[1])   # Z = {0}: z_0 = x
+    np.testing.assert_allclose(w._prev[1][0][0], X[1], atol=1e-9)   # Z = {0}: z_0 = x
     w.reset(1)
     assert w._prev[0] is not None and w._prev[1] is None
 
 
-def test_the_tunnel_is_a_plain_qp_that_reaches_the_line():
+def test_the_tunnel_is_convex_and_reaches_the_line():
+    """No obstacles, so no binaries: every step is the convex problem alone,
+    solved by Clarabel without a mixed-integer round."""
     env = TunnelEnv(config=TunnelEnvConfig())
     w = TubeMPCWorker.from_env(env)
     assert w.Obar == []
+    obs, _ = env.reset(seed=0)
+    _, info = w.act(obs, np.array([obs[0] + 1.8, 0.0]))
+    assert info["outcome"] == SOLVER and info["cut_rounds"] == 0
     out = _run(w, env, lambda p: np.array([p[0] + 1.8, 0.0]))
     assert out["success"] and out["contacts"] == 0
+
+
+def test_the_plan_is_the_exact_optimum_whatever_relaxation_found_it():
+    """The relaxation only proposes binaries and a lower bound; the plan is
+    the exact problem's optimum (module docstring). So a much coarser or
+    finer starting polygon -- 4 sides, a square 41% past the disk, or 64 --
+    gives the same cost, at states near each gate where binaries are free
+    and the speed or thrust disk binds; and the plan satisfies the disks to
+    the solver's precision, not to the polygon's."""
+    env = slalom_env(NOISE)
+    states = ([3.4, 0.6, 1.0, 0.25], [4.6, 1.0, 0.95, -0.3], [6.4, 0.2, 0.8, -0.7], [7.5, -1.0, 0.98, 0.1])
+    costs = {}
+    for sides in (4, 16, 64):
+        polygon = np.array([[np.cos(t), np.sin(t)] for t in 2.0 * np.pi * np.arange(sides) / sides])
+        old = tube_mpc._POLYGON
+        tube_mpc._POLYGON = polygon
+        try:
+            w = TubeMPCWorker.from_env(env)
+        finally:
+            tube_mpc._POLYGON = old
+        costs[sides] = []
+        for x in states:
+            x = np.array(x)
+            u, info = w.act(x, gate_target(x))
+            w.reset()
+            assert info["outcome"] == SOLVER
+            assert np.all(np.linalg.norm(info["plan"][1:w.N, 2:], axis=1) <= w.v_bar + 1e-6)
+            assert np.linalg.norm(u) <= env.u_max + 1e-9
+            costs[sides].append(info["J"])
+    np.testing.assert_allclose(costs[4], costs[16], rtol=2e-4)
+    np.testing.assert_allclose(costs[64], costs[16], rtol=2e-4)
 
 
 def test_from_env_takes_the_environments_disturbance_unless_told_otherwise():

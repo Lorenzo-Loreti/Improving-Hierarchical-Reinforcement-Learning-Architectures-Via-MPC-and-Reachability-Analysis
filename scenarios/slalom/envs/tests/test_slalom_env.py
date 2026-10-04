@@ -77,14 +77,18 @@ def test_step_dynamics_matches_A_B_with_action():
     np.testing.assert_allclose(next_obs, expected, atol=1e-5)
 
 
-def test_action_is_clipped_before_applied():
-    env = make(noise_bound_p=0.0, noise_bound_v=0.0, u_max=1.0)
-    obs, _ = env.reset(seed=0)
-    oversized_action = np.array([5.0, -5.0], dtype=np.float32)
-    next_obs, *_ = env.step(oversized_action)
-    clipped_action = np.array([1.0, -1.0], dtype=np.float32)
-    expected = np.clip(env.A @ obs + env.B @ clipped_action, env.x_min, env.x_max)
-    np.testing.assert_allclose(next_obs, expected, atol=1e-5)
+def test_action_is_saturated_radially_before_applied():
+    """The thrust limit is ||u|| <= u_max (envs/actuation.py): an oversized
+    command keeps its direction and is scaled to the disk's edge -- not
+    clipped per axis, which would turn (5, 1) toward the diagonal and let
+    (5, -5) through at sqrt(2) u_max."""
+    for command in ([5.0, -5.0], [5.0, 1.0], [0.0, -3.0]):
+        env = make(noise_bound_p=0.0, noise_bound_v=0.0, u_max=1.0)
+        obs, _ = env.reset(seed=0)
+        command = np.array(command, dtype=np.float32)
+        next_obs, *_ = env.step(command)
+        saturated = command / np.linalg.norm(command) * env.u_max
+        np.testing.assert_allclose(next_obs, env.A @ obs + env.B @ saturated, atol=1e-5)
 
 
 def test_collision_at_wall_boundary():
@@ -121,8 +125,11 @@ def test_goal_reached_at_boundary():
     obs, reward, terminated, truncated, info = env.step(action)
     assert terminated is True
     # goal_reward plus the same progress-shaping term every other step gets,
-    # on the actual (post-clip) p_x delta -- not a bare goal_reward compare.
-    expected = env.config.goal_reward + env.config.progress_reward_coef * (obs[0] - p_x_prev)
+    # up to the goal line where the potential is cut -- not a bare
+    # goal_reward compare. Thrusting along v at top speed delivers nothing,
+    # so no effort is charged.
+    assert info["effort_penalty"] == 0.0
+    expected = env.config.goal_reward + env.config.progress_reward_coef * (env.L - p_x_prev)
     assert reward == pytest.approx(expected)
     assert info["is_success"] is True
     assert info["collision"] is False
@@ -143,7 +150,8 @@ def test_truncation_at_max_steps():
 def test_observation_stays_within_space_after_out_of_bounds_step():
     env = make(noise_bound_p=0.0, noise_bound_v=0.0)
     env.reset(seed=0)
-    env.state = np.array([env.L, 0.0, env.v_max, env.v_max], dtype=np.float32)
+    diagonal = env.v_max / np.sqrt(2.0)
+    env.state = np.array([env.L, 0.0, diagonal, diagonal], dtype=np.float32)
     action = np.array([env.u_max, env.u_max], dtype=np.float32)
     obs, *_ = env.step(action)
     assert env.observation_space.contains(obs)
@@ -160,6 +168,7 @@ def test_observation_stays_within_space_after_out_of_bounds_step():
         {"noise_bound_p": -0.1},
         {"noise_bound_v": -0.1},
         {"max_steps": 0},
+        {"effort_penalty": 0.01},
     ],
 )
 def test_invalid_config_raises(kwargs):
@@ -184,6 +193,7 @@ def test_default_config_pins_current_tuned_values():
     assert config.contact_penalty == -50.0
     assert config.goal_reward == 1000.0
     assert config.progress_reward_coef == 10.0
+    assert config.effort_penalty == -0.01
 
 
 def test_overrides_replace_config_fields():
@@ -254,7 +264,7 @@ def test_progress_reward_coef_zero_is_noop():
     actually changes step to step -- the shaping term is additive and must
     vanish cleanly when disabled. Passed explicitly since the default is no
     longer 0.0 (see config.py's Historical note)."""
-    env = make(noise_bound_p=0.0, noise_bound_v=0.0, progress_reward_coef=0.0)
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0, progress_reward_coef=0.0, effort_penalty=0.0)
     env.reset(seed=0)
     action = np.array([env.u_max, 0.0], dtype=np.float32)
     _, reward, terminated, truncated, _ = env.step(action)
@@ -316,8 +326,27 @@ def test_progress_shaping_additive_on_goal():
     next_obs, reward, terminated, _, info = env.step(action)
     assert terminated is True
     assert info["is_success"] is True
-    expected = env.config.goal_reward + coef * (next_obs[0] - p_x_prev)
+    assert next_obs[0] > env.L
+    expected = env.config.goal_reward + coef * (env.L - p_x_prev)
     assert reward == pytest.approx(expected)
+
+
+def test_progress_is_cut_at_the_goal_line():
+    """The crossing step's progress is paid up to L, however far past it the
+    vehicle lands: the return of a successful episode depends on its length,
+    effort and contacts alone, as the oracle assumes (see the config's
+    progress_reward_coef). Two crossings from the same state at different
+    speeds land at different p_x and earn the same progress."""
+    rewards = []
+    for v_x in (0.6, 1.2):
+        env = make(noise_bound_p=0.0, noise_bound_v=0.0, effort_penalty=0.0)
+        env.reset(seed=0)
+        env.state = np.array([env.L - 0.05, 0.0, v_x, 0.0], dtype=np.float32)
+        obs, reward, terminated, *_ = env.step(np.zeros(2, dtype=np.float32))
+        assert terminated and obs[0] > env.L
+        rewards.append(reward)
+    assert rewards[0] == pytest.approx(rewards[1])
+    assert rewards[0] == pytest.approx(env.config.goal_reward + env.config.progress_reward_coef * 0.05, abs=1e-4)
 
 
 def test_progress_shaping_telescopes_over_episode():
@@ -328,7 +357,7 @@ def test_progress_shaping_telescopes_over_episode():
     env = make(
         noise_bound_p=0.0, noise_bound_v=0.0, max_steps=3,
         tunnel_length=1000.0, tunnel_width=1000.0,
-        progress_reward_coef=coef,
+        progress_reward_coef=coef, effort_penalty=0.0,
     )
     obs0, _ = env.reset(seed=0)
     p_x_initial = float(obs0[0])
@@ -369,7 +398,7 @@ def test_collision_penalty_matches_contact_formula():
     assert env.steps == 3
 
     p_x_prev = float(env.state[0])
-    env.state = np.array([p_x_prev, env.W / 2.0 - 1e-4, 0.0, 1.5], dtype=np.float32)
+    env.state = np.array([p_x_prev, env.W / 2.0 - 1e-4, 0.0, 1.0], dtype=np.float32)
     next_obs, reward, terminated, _, info = env.step(np.zeros(2, dtype=np.float32))
     assert terminated is False
     assert info["collision"] is True
@@ -393,7 +422,7 @@ def test_collision_penalty_independent_of_timestep():
 
     env_early = make(**common)
     env_early.reset(seed=0)
-    env_early.state = np.array([1.0, env_early.W / 2.0 - 1e-4, 0.0, 1.5], dtype=np.float32)
+    env_early.state = np.array([1.0, env_early.W / 2.0 - 1e-4, 0.0, 1.0], dtype=np.float32)
     _, reward_early, terminated_early, _, info_early = env_early.step(np.zeros(2, dtype=np.float32))
     assert not terminated_early and info_early["collision"]
     contact_delta_early = reward_early - env_early.config.step_penalty
@@ -405,7 +434,7 @@ def test_collision_penalty_independent_of_timestep():
     for _ in range(10):
         _, _, terminated, truncated, _ = env_late.step(safe_action)
         assert not terminated and not truncated
-    env_late.state = np.array([float(env_late.state[0]), env_late.W / 2.0 - 1e-4, 0.0, 1.5], dtype=np.float32)
+    env_late.state = np.array([float(env_late.state[0]), env_late.W / 2.0 - 1e-4, 0.0, 1.0], dtype=np.float32)
     _, reward_late, terminated_late, _, info_late = env_late.step(np.zeros(2, dtype=np.float32))
     assert not terminated_late and info_late["collision"]
     contact_delta_late = reward_late - env_late.config.step_penalty
@@ -483,53 +512,130 @@ def test_a_step_at_top_speed_covers_v_max_dt_however_hard_the_thrust():
     """The speed limit acts on the delivered acceleration. Before 2026-09-24
     it was a clip of the state after the full LTI update, so thrusting at top
     speed covered v_max*dt + u_max*dt**2/2 per step, 10% more, and trained
-    agents used it to beat the min-time oracle (see SlalomEnv.step)."""
+    agents used it to beat the min-time oracle (see envs/actuation.py). Since
+    2026-10-04 the limit is on ||v||, so this holds for a heading off the
+    axes too, and for a thrust in any direction."""
+    heading = np.array([np.cos(-0.5), np.sin(-0.5)])
+    for angle in np.linspace(0.0, 2.0 * np.pi, 13):
+        env = make(noise_bound_p=0.0, noise_bound_v=0.0)
+        env.reset(seed=0)
+        env.state = np.array([5.0, 0.0, *(env.v_max * heading)], dtype=np.float32)
+        thrust = env.u_max * np.array([np.cos(angle), np.sin(angle)], dtype=np.float32)
+        obs, *_ = env.step(thrust)
+        assert np.linalg.norm(obs[:2] - [5.0, 0.0]) <= env.v_max * env.dt + 1e-6
+        assert np.linalg.norm(obs[2:]) <= env.v_max + 1e-6
+    # Thrust along the heading: exactly v_max * dt along it, at v_max.
     env = make(noise_bound_p=0.0, noise_bound_v=0.0)
     env.reset(seed=0)
-    for u in (0.0, env.u_max):
-        env.state = np.array([5.0, 0.0, env.v_max, -env.v_max], dtype=np.float32)
-        obs, *_ = env.step(np.array([u, -u], dtype=np.float32))
-        assert obs[0] - 5.0 == pytest.approx(env.v_max * env.dt, abs=1e-5)
-        assert obs[1] == pytest.approx(-env.v_max * env.dt, abs=1e-5)
-        assert obs[2] == pytest.approx(env.v_max) and obs[3] == pytest.approx(-env.v_max)
+    env.state = np.array([5.0, 0.0, *(env.v_max * heading)], dtype=np.float32)
+    obs, _, _, _, info = env.step((env.u_max * heading).astype(np.float32))
+    np.testing.assert_allclose(obs[:2] - [5.0, 0.0], env.v_max * env.dt * heading, atol=1e-5)
+    np.testing.assert_allclose(obs[2:], env.v_max * heading, atol=1e-5)
+    assert info["effort_penalty"] == pytest.approx(0.0, abs=1e-7)
+
+
+def test_steering_at_top_speed_costs_forward_speed():
+    """What the per-axis limits got wrong: there, a lateral thrust at
+    v_x = v_max left v_x alone, so steering was free. On the speed disk the
+    velocity turns but its magnitude stays at v_max, so v_x drops."""
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0)
+    env.reset(seed=0)
+    env.state = np.array([5.0, 0.0, env.v_max, 0.0], dtype=np.float32)
+    obs, *_ = env.step(np.array([0.0, env.u_max], dtype=np.float32))
+    assert np.linalg.norm(obs[2:]) == pytest.approx(env.v_max, abs=1e-6)
+    assert obs[3] > 0.2
+    assert obs[2] < env.v_max - 0.01
 
 
 def test_reaching_the_speed_limit_gives_the_in_bounds_actions_state():
     """A step that hits the limit lands exactly where the in-bounds action
-    (v_max - v) / dt lands: the plant the oracle and MPCWorker model."""
+    (v' - v) / dt lands, v' the projection of v + u dt onto the speed disk --
+    and that action is admissible, ||u|| <= u_max: the plant the oracle and
+    the tube MPC model (envs/actuation.py)."""
     env = make(noise_bound_p=0.0, noise_bound_v=0.0)
     env.reset(seed=0)
-    start = np.array([5.0, 0.0, 1.0, -1.1], dtype=np.float32)
+    start = np.array([5.0, 0.0, 1.0, -0.5], dtype=np.float32)
     env.state = start.copy()
-    obs, *_ = env.step(np.array([env.u_max, -env.u_max], dtype=np.float32))
-    in_bounds = np.array([(env.v_max - 1.0) / env.dt, (-env.v_max + 1.1) / env.dt], dtype=np.float32)
+    command = np.array([env.u_max, -env.u_max], dtype=np.float32)
+    obs, *_ = env.step(command)
+    saturated = command / np.linalg.norm(command) * env.u_max
+    v_next = start[2:] + saturated * env.dt
+    assert np.linalg.norm(v_next) > env.v_max
+    in_bounds = (v_next / np.linalg.norm(v_next) * env.v_max - start[2:]) / env.dt
+    assert np.linalg.norm(in_bounds) <= env.u_max
     np.testing.assert_allclose(obs, env.A @ start + env.B @ in_bounds, atol=1e-5)
 
 
-def test_noise_is_uniform_in_the_bounded_box():
-    """The disturbance is drawn uniformly from the box W (see the config's
-    noise_bound_p): every component of every step's w stays inside its
-    bound, and over many steps each fills most of it -- a bounded, not a
-    Gaussian, disturbance."""
+def test_delivered_input_is_admissible_and_untouched_inside_the_limits():
+    """envs/actuation.deliver over random velocities in the speed disk and
+    random commands, many far outside the thrust disk: the delivered u is
+    always admissible (||u|| <= u_max, ||v + u dt|| <= v_max, up to float32
+    rounding), and a command that breaks neither limit comes back bit for
+    bit."""
+    from envs.actuation import deliver
+    env = make()
+    rng = np.random.default_rng(0)
+    n = 20000
+    radius = env.v_max * np.sqrt(rng.uniform(size=n))
+    angle = rng.uniform(0.0, 2.0 * np.pi, size=n)
+    v = np.stack([radius * np.cos(angle), radius * np.sin(angle)], axis=1).astype(np.float32)
+    u = rng.uniform(-3.0 * env.u_max, 3.0 * env.u_max, size=(n, 2)).astype(np.float32)
+    delivered = deliver(u, v, env.u_max, env.v_max, env.dt)
+    assert np.all(np.linalg.norm(delivered, axis=1) <= env.u_max * (1 + 1e-5))
+    assert np.all(np.linalg.norm(v + delivered * np.float32(env.dt), axis=1) <= env.v_max * (1 + 1e-6))
+    inside = (np.linalg.norm(u, axis=1) <= env.u_max) & \
+             (np.linalg.norm(v + u * np.float32(env.dt), axis=1) <= env.v_max)
+    assert inside.sum() > 100
+    np.testing.assert_array_equal(delivered[inside], u[inside])
+
+
+def test_effort_penalty_is_charged_on_the_delivered_input():
+    """effort_penalty * (||u|| / u_max)^2 per step, on what the plant
+    delivered: a full-thrust step from rest costs effort_penalty, whatever
+    its direction or how far past u_max the command was; half thrust costs a
+    quarter of it; and a thrust the speed limit absorbs entirely costs
+    nothing. It adds to the rest of the reward."""
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0, tunnel_width=1000.0)
+    c = env.config.effort_penalty
+    for command, expected in (([env.u_max, 0.0], c), ([0.0, -0.5 * env.u_max], 0.25 * c),
+                              ([0.6 * env.u_max, 0.8 * env.u_max], c), ([4.0 * env.u_max, 0.0], c)):
+        env.reset(seed=0, options={"init_state": np.array([3.0, 0.0, 0.0, 0.0], dtype=np.float32)})
+        obs, reward, _, _, info = env.step(np.array(command, dtype=np.float32))
+        assert info["effort_penalty"] == pytest.approx(expected, rel=1e-5)
+        progress = env.config.progress_reward_coef * (obs[0] - 3.0)
+        assert reward == pytest.approx(env.config.step_penalty + progress + expected, abs=1e-5)
+    env.reset(seed=0, options={"init_state": np.array([3.0, 0.0, env.v_max, 0.0], dtype=np.float32)})
+    _, _, _, _, info = env.step(np.array([env.u_max, 0.0], dtype=np.float32))
+    assert info["effort_penalty"] == 0.0
+
+
+def test_noise_is_uniform_on_the_bounded_disks():
+    """The disturbance is drawn uniformly from W = {||w_p|| <= noise_bound_p,
+    ||w_v|| <= noise_bound_v} (see the config's noise_bound_p): every step's
+    w stays inside both disks, fills them out to the edge off the axes too
+    (isotropic, not a box), and is uniform in area -- a quarter of the draws
+    inside half the radius."""
     bound_p, bound_v = 0.01, 0.05
     env = make(noise_bound_p=bound_p, noise_bound_v=bound_v, tunnel_length=1000.0, max_steps=10000)
-    bound = np.array([bound_p, bound_p, bound_v, bound_v])
     start = np.array([1.0, 0.0, 0.3, 0.0], dtype=np.float32)
     env.reset(seed=0, options={"init_state": start})
     ws = []
-    for _ in range(2000):
+    for _ in range(4000):
         # Restarted from the same mid-corridor state every step, so no
-        # random walk ever reaches a wall or the speed limit, whose clips
+        # random walk ever reaches a wall or the speed limit, whose guards
         # would be mistaken for the disturbance.
         env.state = start.copy()
-        before = env.state.astype(np.float64)
-        predicted = env.A.astype(np.float64) @ before
+        predicted = env.A.astype(np.float64) @ env.state.astype(np.float64)
         env.step(np.zeros(2, dtype=np.float32))
         ws.append(env.state.astype(np.float64) - predicted)
     ws = np.array(ws)
-    assert np.all(np.abs(ws) <= bound + 1e-6)
-    assert np.all(ws.max(axis=0) > 0.9 * bound)
-    assert np.all(ws.min(axis=0) < -0.9 * bound)
+    for block, bound in ((ws[:, :2], bound_p), (ws[:, 2:], bound_v)):
+        radius = np.linalg.norm(block, axis=1)
+        assert np.all(radius <= bound * (1 + 1e-4) + 1e-6)
+        assert radius.max() > 0.98 * bound
+        assert 0.22 < np.mean(radius <= bound / 2) < 0.28
+        diagonal = np.abs(block @ np.array([1.0, 1.0]) / np.sqrt(2.0))
+        assert diagonal.max() > 0.95 * bound
 
 
 def test_zero_noise_draws_no_randomness():

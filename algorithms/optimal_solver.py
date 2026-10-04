@@ -1,33 +1,57 @@
-"""Offline, scenario-agnostic minimum-time / maximum-return oracle.
+"""Offline, scenario-agnostic maximum-return oracle (minimum time, then
+minimum effort).
 
 Both TunnelEnv and SlalomEnv share the same reward shape: a -1 per-step
 penalty, a +goal_reward on arrival (replacing that step's penalty), a
-per-contact penalty, and a progress term `progress_reward_coef*(p_x'-p_x)`
-that telescopes over an episode to `progress_reward_coef*(p_x_final -
-p_x_initial)` -- a constant for any successful path with the same
-endpoints. So for a *successful, contact-free* episode of length N:
+per-contact penalty, a progress term `progress_reward_coef * (min(p_x', L) -
+p_x)` that telescopes over a successful episode to `progress_reward_coef *
+(L - p_x0)`, and an effort term `effort_penalty * (||u_k|| / u_max)^2` on
+every step's delivered acceleration. So for a *successful, contact-free*
+episode that crosses the goal line on step N:
 
-    return = goal_reward - (N - 1) + progress_reward_coef * (L - p_x0)
+    return = goal_reward + step_penalty * (N - 1) + progress_reward_coef * (L - p_x0)
+             + (effort_penalty / u_max^2) * Sum_{k<N} ||u_k||^2
 
-Maximizing return is therefore equivalent to minimizing the arrival time N
-(then avoiding wall contact), which is a well-posed minimum-time optimal
-control problem: both envs are a discrete-time double integrator with
-independent per-axis dynamics (the A/B matrices are block-diagonal per
-axis), constrained only through the corridor, whose lateral (y) bound is a
-function of the current x position -- itself a decision variable. That
-position-dependent bound is what makes the problem non-convex; everything
-else here is a convex QP.
+(A contact costs 50 steps' worth and failing the episode costs the goal
+reward, so the best episode is always successful and contact-free.) For a
+fixed N the return is maximised by the trajectory that crosses on step N with
+the least Sum ||u_k||^2; over N, a later arrival can only win if it saves
+more effort than the steps it adds. That is a convex problem per N and a
+one-dimensional search over N:
 
-This solves it via SCP (sequential convex programming): for a candidate
-horizon length N, repeatedly (a) freeze the corridor's y-bound at every
-stage using the *previous* iterate's x-trajectory, (b) solve the resulting
-convex multi-stage QP (the same "state trajectory as an explicit decision
-variable, dynamics as equality constraints" transcription `MPCWorker`
-already uses in `_setup_cvxpy`, but full-horizon rather than receding), and
-(c) stop once the segment assignment implied by the new solution matches
+- Per N, minimise Sum ||u_k||^2 over the discrete-time double integrator with
+  ||u_k|| <= u_max and ||v_k|| <= v_max (second-order cones, the environment's
+  own limits: envs/actuation.py), the corridor's lateral bound at every
+  stage, p_x_k < L before step N and p_x_N >= L. The lateral bound is a
+  function of the current x position -- itself a decision variable -- and is
+  what makes the problem non-convex; everything else is convex.
+- Over N, from a lower bound upward (`_x_only_min_time_steps`): stop at the
+  first N whose return, even with zero effort, could not beat the best one
+  found so far. With the canonical effort_penalty = -0.01 a whole episode's
+  effort is worth less than one step, so the first feasible N is always the
+  answer: the oracle is the minimum-time trajectory that spends the least
+  effort among the minimum-time ones.
+
+The oracle and the reward therefore maximise the same thing, by
+construction, since 2026-10-04. Before, the oracle minimised arrival time and
+used Sum ||u||^2 only to pick one of the many min-time trajectories, while the
+reward knew nothing about effort and paid the crossing step's overshoot past
+L; it was then the min-time ceiling, but not the maximum return, and a policy
+could exceed its return by up to 1.2 on the same arrival step (see the
+envs' config.py, progress_reward_coef). Also until 2026-10-04 the limits were
+per axis, |u_i| <= u_max and |v_i| <= v_max, and each stage a QP solved by
+OSQP; the cones need Clarabel (an interior-point conic solver; OSQP solves QPs
+only).
+
+The corridor is handled by SCP (sequential convex programming): for a
+candidate horizon length N, repeatedly (a) freeze the corridor's y-bound at
+every stage using the *previous* iterate's x-trajectory, (b) solve the
+resulting convex multi-stage problem (the same "state trajectory as an
+explicit decision variable, dynamics as equality constraints" transcription
+`MPCWorker` uses in `_setup_cvxpy`, but full-horizon rather than receding),
+and (c) stop once the segment assignment implied by the new solution matches
 the one used to build it (a fixed point, hence a genuinely feasible
-trajectory for that N -- not just for its own linearization). The smallest
-N for which this converges is taken as the arrival time.
+trajectory for that N -- not just for its own linearization).
 
 This is a heuristic, not a certified global optimum: SCP can in principle
 get stuck in a locally-feasible-looking loop that never reaches a fixed
@@ -40,15 +64,16 @@ collision count) is exactly what a policy executing these actions would
 receive -- never a value computed from this module's own model of the
 dynamics/reward.
 
-Performance note: like `MPCWorker` (see its class docstring), a QP rebuilt
-from scratch on every solve pays cvxpy's Python-side canonicalization cost
-every time even though the problem's sparsity pattern is fixed for a given
-horizon length N. `_HorizonQP` builds the N-stage problem once, with the
-per-stage y-bound and the initial state as `cp.Parameter`s, so every SCP
-iteration/restart/episode that reuses the same N only pays for a parameter
-update and a warm-started re-solve. `MinTimeSolver` keeps one `_HorizonQP`
+Performance note: like `MPCWorker` (see its class docstring), a problem
+rebuilt from scratch on every solve pays cvxpy's Python-side
+canonicalization cost every time even though its sparsity pattern is fixed
+for a given horizon length N. `_HorizonSOCP` builds the N-stage problem once,
+with the per-stage y-bound and the initial state as `cp.Parameter`s, so
+every SCP iteration/restart/episode that reuses the same N only pays for a
+parameter update and a re-solve. `MinTimeSolver` keeps one `_HorizonSOCP`
 per N it has ever needed, across `solve()` calls -- built for exactly the
 CLI scripts' use case of solving many episodes of the same scenario config.
+The 25-start grid takes ~4 s on the slalom.
 """
 
 import warnings
@@ -57,14 +82,15 @@ from dataclasses import dataclass
 import numpy as np
 import cvxpy as cp
 
-# The QP models dynamics in float64; the real envs store state in float32
-# and clip every step, so a trajectory the QP resolves to exactly p_x==L
-# can come back from `env.step` a few 1e-6 short (observed: ~7e-6 over a
-# ~70-step Tunnel episode) -- enough to miss the env's `p_x >= L` check by
-# a hair and have the replay run past `horizon_used` without terminating.
+# The solver models dynamics in float64; the real envs store state in
+# float32 and clip every step, so a trajectory solved to exactly p_x==L can
+# come back from `env.step` a few 1e-6 short (observed: ~7e-6 over a
+# ~70-step Tunnel episode) -- enough to miss the env's `p_x >= L` check by a
+# hair and have the replay run past `horizon_used` without terminating.
 # Solving for `p_x_N >= L + _TERMINAL_MARGIN` instead absorbs that, with
 # plenty of room to spare relative to a single step's travel (~0.1-0.12
-# units near cruise speed).
+# units near cruise speed). The same margin on the other side, `p_x_k <= L -
+# _TERMINAL_MARGIN` for k < N, keeps the replay from crossing a step early.
 _TERMINAL_MARGIN = 1e-3
 
 # Both envs flag wall contact with an *inclusive* p_y <= y_lo / p_y >= y_hi
@@ -88,17 +114,21 @@ class OptimalResult:
     success: bool
     collision_count: int
     horizon_used: int         # the SCP horizon N whose solution was replayed
+    predicted_return: float   # the return formula's value for the solved plan,
+                              # before the replay (the module docstring's)
 
 
 def _x_only_min_time_steps(p_x0, L, v_max, u_max, dt):
     """Closed-form bang-cruise minimum time for the x-axis alone (ignoring
     the y-corridor entirely), rounded up to a step count.
 
-    A valid lower bound on the true minimum time for the full problem
-    (dropping a constraint can only make it easier), and the exact answer
-    whenever the corridor never actually restricts y along the way -- e.g.
-    every TunnelEnv episode, since `constant_profile` never binds tighter
-    than the spawn box the agent already starts inside.
+    A valid lower bound on the true minimum time for the full problem:
+    dropping the corridor, the y-axis and the sampling (a continuous-time
+    input can do anything a piecewise-constant one can) only makes it
+    easier, and ||u|| <= u_max, ||v|| <= v_max imply |u_x| <= u_max,
+    |v_x| <= v_max. The exact answer whenever the corridor never makes the
+    vehicle steer -- e.g. every TunnelEnv episode, since `constant_profile`
+    never binds tighter than the spawn box the agent already starts inside.
     """
     d = max(L - p_x0, 0.0)
     if d <= 1e-9:
@@ -148,13 +178,22 @@ def _bounds_converged(width_profile, p_x_used, p_x_new):
     return np.array_equal(y_lo_used, y_lo_new) and np.array_equal(y_hi_used, y_hi_new)
 
 
-class _HorizonQP:
-    """The N-stage QP, built once and re-solved with updated Parameters.
+class _HorizonSOCP:
+    """The N-stage problem, built once and re-solved with updated Parameters:
+    min Sum ||u_k||^2 subject to the dynamics, ||u_k|| <= u_max,
+    ||v_k|| <= v_max, the p_x clip box, the frozen per-stage lateral bound,
+    p_x_k <= L - margin for k < N and p_x_N >= L + margin.
 
     `A`/`B`/`u_max`/`v_max`/`x_min[0]`/`x_max[0]`/`L` are baked in as plain
     constants: for one `MinTimeSolver` (one scenario config) they never
     change across episodes or SCP iterations. Only the initial state and
     the per-stage y-bound do, so those alone are `cp.Parameter`s.
+
+    The objective is the reward's own effort term up to its (negative)
+    scale, effort_penalty / u_max^2, which does not move the minimiser. The
+    initial velocity is a parameter, not a constraint, so an initial state
+    outside the speed disk makes the problem infeasible rather than quietly
+    pulling it inside.
     """
 
     def __init__(self, N, A, B, u_max, v_max, x_min0, x_max0, L):
@@ -166,15 +205,15 @@ class _HorizonQP:
         y_lo_param = cp.Parameter(N + 1)
         y_hi_param = cp.Parameter(N + 1)
 
-        constraints = [x[:, 0] == x0_param]
-        for k in range(N):
-            constraints += [x[:, k + 1] == A @ x[:, k] + B @ u[:, k]]
-            constraints += [u[:, k] >= -u_max, u[:, k] <= u_max]
-        constraints += [x[0, :] >= x_min0, x[0, :] <= x_max0]
-        constraints += [x[1, :] >= y_lo_param, x[1, :] <= y_hi_param]
-        constraints += [x[2, :] >= -v_max, x[2, :] <= v_max]
-        constraints += [x[3, :] >= -v_max, x[3, :] <= v_max]
-        constraints += [x[0, N] >= L + _TERMINAL_MARGIN]
+        constraints = [x[:, 0] == x0_param,
+                       x[:, 1:] == A @ x[:, :-1] + B @ u,
+                       cp.norm(u, 2, axis=0) <= u_max,
+                       cp.norm(x[2:4, :], 2, axis=0) <= v_max,
+                       x[0, :] >= x_min0, x[0, :] <= x_max0,
+                       x[1, :] >= y_lo_param, x[1, :] <= y_hi_param,
+                       x[0, N] >= L + _TERMINAL_MARGIN]
+        if N > 1:
+            constraints.append(x[0, 1:N] <= L - _TERMINAL_MARGIN)
 
         self.x, self.u = x, u
         self.x0_param, self.y_lo_param, self.y_hi_param = x0_param, y_lo_param, y_hi_param
@@ -191,7 +230,7 @@ class _HorizonQP:
             # the bare, process-global `warnings.filterwarnings` call.
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                self.prob.solve(solver=cp.OSQP, warm_start=True)
+                self.prob.solve(solver=cp.CLARABEL)
         except Exception:
             return None
         if self.prob.status not in ("optimal", "optimal_inaccurate"):
@@ -226,21 +265,26 @@ _RESTART_VARIANTS = [
 
 class MinTimeSolver:
     """Solves `solve_min_time`'s problem for many episodes of one scenario
-    config, caching the per-horizon-length QP (`_HorizonQP`) across calls --
-    built for the CLI scripts' Monte-Carlo-over-initial-conditions use case,
-    where the same handful of horizon lengths recur across episodes.
+    config, caching the per-horizon-length problem (`_HorizonSOCP`) across
+    calls -- built for the CLI scripts' Monte-Carlo-over-initial-conditions
+    use case, where the same handful of horizon lengths recur across
+    episodes.
+
+    The name is from when the oracle minimised arrival time alone. It now
+    maximises the return (the module docstring), which with the canonical
+    effort_penalty is still the minimum-time trajectory.
     """
 
     def __init__(self, max_scp_iters=20, restarts=3):
         self.max_scp_iters = max_scp_iters
         self.restarts = restarts
-        self._qp_cache = {}  # (A/B/u_max/v_max/x_min0/x_max0/L) -> {N: _HorizonQP}
+        self._qp_cache = {}  # (A/B/u_max/v_max/x_min0/x_max0/L) -> {N: _HorizonSOCP}
 
     def _get_qp(self, key, N, A, B, u_max, v_max, x_min0, x_max0, L):
         cache = self._qp_cache.setdefault(key, {})
         qp = cache.get(N)
         if qp is None:
-            qp = _HorizonQP(N, A, B, u_max, v_max, x_min0, x_max0, L)
+            qp = _HorizonSOCP(N, A, B, u_max, v_max, x_min0, x_max0, L)
             cache[N] = qp
         return qp
 
@@ -251,7 +295,8 @@ class MinTimeSolver:
 
         Returns an `OptimalResult` built entirely from replaying the solved
         action sequence through `env.step`, not from this module's own
-        model of the reward.
+        model of the reward; the model's value is kept alongside, as
+        `predicted_return`, and the two agree to float32 rounding.
         """
         if env.state is None:
             raise ValueError("env must be reset() before calling solve()")
@@ -268,31 +313,48 @@ class MinTimeSolver:
         max_steps = int(env.max_steps)
         dt = float(env.dt)
 
-        # QPs are cached per (dt, L, v_max, u_max, x bounds) -- everything
-        # a `_HorizonQP` bakes in as a constant. Not per width_profile: the
-        # profile only ever enters through the per-solve y_lo/y_hi
-        # Parameters, so the same cached QP is valid across different
-        # corridors sharing the same scenario physics.
+        # Problems are cached per (dt, L, v_max, u_max, x bounds) --
+        # everything a `_HorizonSOCP` bakes in as a constant. Not per
+        # width_profile: the profile only ever enters through the per-solve
+        # y_lo/y_hi Parameters, so the same cached problem is valid across
+        # different corridors sharing the same scenario physics. Not per
+        # reward either: the reward only enters `return_of` below.
         cache_key = (dt, L, v_max, u_max, x_min0, x_max0)
+
+        # The module docstring's return formula, for a plan crossing on step
+        # N with Sum ||u||^2 = effort.
+        cfg = env.config
+        base = cfg.goal_reward + cfg.progress_reward_coef * (L - x0[0])
+        effort_scale = cfg.effort_penalty / u_max ** 2
+
+        def return_of(N, effort=0.0):
+            return base + cfg.step_penalty * (N - 1) + effort_scale * effort
 
         n_min = _x_only_min_time_steps(x0[0], L, v_max, u_max, dt)
 
         x_sol = u_sol = horizon_used = None
+        best = -np.inf
         for N in range(n_min, max_steps + 1):
+            # Even with no effort at all, no N from here on can beat the
+            # best plan found: stop. (The return falls by |step_penalty| per
+            # step; effort only lowers it further.)
+            if return_of(N) <= best:
+                break
             qp = self._get_qp(cache_key, N, A, B, u_max, v_max, x_min0, x_max0, L)
             for kwargs in _RESTART_VARIANTS[: self.restarts]:
                 p_x_guess, _ = _initial_guess(x0, L, N, width_profile, **kwargs)
                 solved = _scp_solve(qp, x0, width_profile, p_x_guess, self.max_scp_iters)
                 if solved is not None:
-                    x_sol, u_sol = solved
-                    horizon_used = N
+                    value = return_of(N, float(np.sum(solved[1] ** 2)))
+                    if value > best:
+                        best = value
+                        x_sol, u_sol = solved
+                        horizon_used = N
                     break
-            if horizon_used is not None:
-                break
 
         if horizon_used is None:
             raise RuntimeError(
-                f"optimal_solver: no feasible minimum-time trajectory found up "
+                f"optimal_solver: no feasible trajectory found up "
                 f"to max_steps={max_steps} for initial state {x0.tolist()} "
                 f"under this width_profile. Either the corridor is genuinely "
                 f"infeasible in time from this start (e.g. a gate offset the "
@@ -329,6 +391,7 @@ class MinTimeSolver:
             success=bool(info.get("is_success", False)),
             collision_count=int(info.get("collision_count", 0)),
             horizon_used=horizon_used,
+            predicted_return=float(best),
         )
 
 

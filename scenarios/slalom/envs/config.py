@@ -11,15 +11,22 @@ class SlalomEnvConfig:
     dt: float = 0.1
     tunnel_length: float = 10.0
     tunnel_width: float = 4.0
+    # The speed and thrust limits bound magnitudes, ||v|| <= v_max and
+    # ||u|| <= u_max, since 2026-10-04; until then they bounded each axis
+    # (git tag box-limits-final). See envs/actuation.py.
     v_max: float = 1.2
     u_max: float = 2.5
-    # Additive process disturbance w, drawn every step independently per
-    # component and uniformly from the box W = {|w_p| <= noise_bound_p on
-    # each position, |w_v| <= noise_bound_v on each velocity}: the compact set
-    # the tube MPC worker (algorithms/tube_mpc.py) is designed against. 0.0,
-    # the default, is the deterministic environment every experiment before
-    # 2026-09-28 ran on; nothing is drawn then, so those runs are
-    # bit-identical.
+    # Additive process disturbance w = (w_p, w_v), drawn every step uniformly
+    # from W = {||w_p|| <= noise_bound_p, ||w_v|| <= noise_bound_v}, two
+    # disks: the compact set the tube MPC worker (algorithms/tube_mpc.py) is
+    # designed against. 0.0, the default, is the deterministic environment;
+    # nothing is drawn then.
+    #
+    # W was a box, |w| <= noise_bound per component, from 2026-09-28 until
+    # 2026-10-04, when the speed and thrust limits became disks and the
+    # disturbance followed them (envs/actuation.py says why: the tube MPC's
+    # tightened sets stay disks only under an isotropic W). The disturbed
+    # studies before 2026-10-04 ran on the box, with the same bounds.
     #
     # Until 2026-09-28 the disturbance was Gaussian (sigma_p, sigma_v, both
     # 0.0 in every run). It was replaced because a Gaussian has unbounded
@@ -68,12 +75,44 @@ class SlalomEnvConfig:
     contact_penalty: float = -50.0
     goal_reward: float = 1000.0
 
-    # Potential-based progress shaping: adds `progress_reward_coef * (p_x' - p_x)`
-    # to the reward every step, on top of whichever branch (time penalty /
-    # collision / goal) fired. Depends only on p_x, never p_y -- important
-    # here since the gates are off-center, so a Euclidean-distance-to-goal
-    # potential would fight them.
+    # Potential-based progress shaping: adds `progress_reward_coef *
+    # (min(p_x', L) - p_x)` to the reward every step, on top of whichever
+    # branch (time penalty / collision / goal) fired. Depends only on p_x,
+    # never p_y -- important here since the gates are off-center, so a
+    # Euclidean-distance-to-goal potential would fight them.
+    #
+    # The potential is cut at the goal line L since 2026-10-04, so the
+    # crossing step pays for the distance up to L and not for how far past
+    # it the vehicle lands. The return of a successful episode then depends
+    # only on its length, its control effort and its contacts, which is what
+    # the oracle maximises (algorithms/optimal_solver.py). Uncut, a policy
+    # could beat the oracle's return by up to progress_reward_coef * v_max *
+    # dt = 1.2 while arriving on the same step, by crossing at top speed
+    # where the oracle aims for L itself.
     progress_reward_coef: float = 10.0
+
+    # Control-effort penalty: adds `effort_penalty * (||u||/u_max)^2` to the
+    # reward every step, on top of the rest (the goal step included), u the
+    # acceleration the plant actually delivered (after the thrust and speed
+    # limits, envs/actuation.py). A step at full thrust costs |effort_penalty|.
+    # Since 2026-10-04; 0.0 before.
+    #
+    # Why -0.01. Small enough that time always comes first: an episode at
+    # full thrust throughout costs at most 0.01 per step, and a min-time
+    # episode from the spawn box lasts at most ~90 steps, so its whole effort
+    # is worth less than one step of step_penalty. Every trajectory that
+    # arrives earlier therefore still has the higher return, and the oracle
+    # is the min-time trajectory that uses the least effort among the
+    # min-time ones (before 2026-10-04 its Sum ||u||^2 objective was only a
+    # tie-break the reward did not know about; now reward and oracle agree).
+    # What the penalty adds is a preference among the many trajectories
+    # that arrive on the same step -- smooth thrust over bang-bang chatter --
+    # for every algorithm alike: it is part of the environment's reward, so
+    # PPO, hPPO's manager and worker (algorithms/hppo/hppo_train.py) and
+    # PPO+MPC's manager, which is charged for the effort its MPC worker
+    # spends, all see it. A larger weight would make the task a time-energy
+    # trade-off, where arriving later can pay.
+    effort_penalty: float = -0.01
 
     # Piecewise-constant lateral width profile (see width_profile.py, e.g.
     # slalom_profile()), overriding the plain constant width `tunnel_width`
@@ -103,3 +142,5 @@ class SlalomEnvConfig:
             raise ValueError(f"init_sampler must be one of {INIT_SAMPLERS}, got {self.init_sampler!r}")
         if self.max_steps <= 0:
             raise ValueError(f"max_steps must be > 0, got {self.max_steps}")
+        if self.effort_penalty > 0:
+            raise ValueError(f"effort_penalty must be <= 0, got {self.effort_penalty}")

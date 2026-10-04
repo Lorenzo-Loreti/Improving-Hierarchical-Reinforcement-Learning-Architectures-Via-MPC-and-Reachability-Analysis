@@ -18,8 +18,8 @@ from envs.config import TunnelEnvConfig
 from envs.width_profile import WidthSegment, WidthProfile
 
 
-def _make_env(width_profile=None, seed=0):
-    config = TunnelEnvConfig(width_profile=width_profile) if width_profile is not None else TunnelEnvConfig()
+def _make_env(width_profile=None, seed=0, **overrides):
+    config = TunnelEnvConfig(width_profile=width_profile, **overrides)
     env = TunnelEnv(config=config)
     env.reset(seed=seed)
     return env
@@ -73,22 +73,64 @@ def test_offset_gate_is_threaded_without_collision():
 
 
 def test_return_matches_closed_form_reward_formula():
-    env = _make_env(seed=4)
-    p_x0 = float(env.state[0])
-    result = solve_min_time(env)
-    assert result.collision_count == 0
+    """goal_reward - (N - 1) + progress_reward_coef * (L - p_x0) plus the
+    effort term: the potential is cut at L (since 2026-10-04), so the
+    overshoot the solver adds to survive float32 replay noise
+    (`_TERMINAL_MARGIN`) earns nothing, and the effort is the replayed
+    actions' own. The model's prediction agrees with the replay."""
+    for profile, seed in ((None, 4), (_gate_profile(), 3)):
+        env = _make_env(width_profile=profile, seed=seed)
+        p_x0 = float(env.state[0])
+        result = solve_min_time(env)
+        assert result.collision_count == 0
+        assert result.states[-1, 0] > env.L
 
-    # Uses the *actual* replayed final p_x, not the idealized L: the solver
-    # deliberately overshoots L by `_TERMINAL_MARGIN` to survive float32
-    # replay noise (see optimal_solver.py), so the telescoped progress term
-    # is progress_reward_coef*(p_x_final - p_x0), not *(L - p_x0).
-    p_x_final = float(result.states[-1, 0])
-    expected = (
-        env.config.goal_reward
-        - (result.length - 1)
-        + env.config.progress_reward_coef * (p_x_final - p_x0)
-    )
-    assert result.total_return == pytest.approx(expected, abs=1e-3)
+        effort = env.config.effort_penalty / env.u_max ** 2 * np.sum(result.actions ** 2)
+        expected = (
+            env.config.goal_reward
+            - (result.length - 1)
+            + env.config.progress_reward_coef * (env.L - p_x0)
+            + effort
+        )
+        assert effort < 0
+        assert result.total_return == pytest.approx(expected, abs=1e-3)
+        assert result.predicted_return == pytest.approx(result.total_return, abs=1e-3)
+
+
+def test_plan_respects_the_disk_limits():
+    """The oracle's model is the environment's: ||u|| <= u_max and
+    ||v|| <= v_max (envs/actuation.py), not the per-axis box it used until
+    2026-10-04. Through an offset gate, where the per-axis limits let the
+    old oracle steer at no cost in time, the disks make it pay: it arrives
+    later than the x-only lower bound."""
+    from optimal_solver import _x_only_min_time_steps
+    env = _make_env(width_profile=_gate_profile(), seed=0)
+    env.reset(options={"init_state": np.array([0.0, -1.0, 0.0, 0.0], dtype=np.float32)})
+    result = solve_min_time(env)
+    assert np.all(np.linalg.norm(result.actions, axis=1) <= env.u_max + 1e-4)
+    assert np.all(np.linalg.norm(result.states[:, 2:], axis=1) <= env.v_max + 1e-4)
+    assert result.length > _x_only_min_time_steps(0.0, env.L, env.v_max, env.u_max, env.dt)
+
+
+def test_a_heavy_effort_penalty_trades_time_for_effort():
+    """The search over N maximises the return, not just the arrival time:
+    with an effort weight large enough to outweigh a few steps, the oracle
+    arrives later than the minimum time and earns more than the minimum-time
+    plan would in the same environment."""
+    start = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    cheap = _make_env(effort_penalty=0.0)
+    cheap.reset(options={"init_state": start})
+    fastest = solve_min_time(cheap)
+
+    costly = _make_env(effort_penalty=-20.0)
+    costly.reset(options={"init_state": start})
+    best = solve_min_time(costly)
+    costly.reset(options={"init_state": start})
+    fastest_there = sum(costly.step(a)[1] for a in fastest.actions.astype(np.float32))
+
+    assert best.length > fastest.length
+    assert best.total_return > fastest_there + 1.0
+    assert best.predicted_return == pytest.approx(best.total_return, abs=1e-3)
 
 
 def test_spawn_grid_shape_bounds_and_zero_velocity():
@@ -138,16 +180,20 @@ def test_infeasible_profile_raises_instead_of_lying():
 @pytest.mark.parametrize("start", [(0.0, -1.0), (1.0, 0.0), (2.0, 1.0)])
 def test_full_thrust_does_not_beat_the_oracle(start):
     """Regression for the speed-limit defect fixed on 2026-09-24 (see
-    SlalomEnv.step): full thrust down the open corridor used to arrive 7
+    envs/actuation.py): full thrust down the open corridor used to arrive 7
     steps before the oracle, which was then no upper bound on the env. Now
-    the oracle's |v| <= v_max model is the env's, and it arrives no later."""
+    the oracle's ||v|| <= v_max model is the env's, and it arrives no later
+    -- nor earns more."""
     env = _make_env()
     init = np.array([start[0], start[1], 0.0, 0.0], dtype=np.float32)
     env.reset(options={"init_state": init})
-    steps, done = 0, False
+    steps, total, done = 0, 0.0, False
     while not done:
-        _, _, terminated, truncated, _ = env.step(np.array([env.u_max, 0.0], dtype=np.float32))
+        _, reward, terminated, truncated, _ = env.step(np.array([env.u_max, 0.0], dtype=np.float32))
         steps += 1
+        total += reward
         done = terminated or truncated
     env.reset(options={"init_state": init})
-    assert steps >= MinTimeSolver().solve(env).length
+    oracle = MinTimeSolver().solve(env)
+    assert steps >= oracle.length
+    assert total <= oracle.total_return + 1e-4

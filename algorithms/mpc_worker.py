@@ -19,6 +19,12 @@ class MPCWorker:
     """The fixed (unlearned) low-level controller: a constrained LQR-style MPC
     that drives the vehicle toward the manager's goal state.
 
+    It models the per-axis limits |u_i| <= u_max and |v_i| <= v_max, which the
+    environments used until 2026-10-04 (git tag box-limits-final); they now
+    bound ||u|| and ||v|| (envs/actuation.py). Only ppo_mpc_reach still uses
+    this worker, and its scripts refuse to run until it is ported (PPO+MPC's
+    worker, algorithms/tube_mpc.py, models the disks exactly).
+
     Two backends solve the identical problem.
 
     `"osqp"` (the default) assembles the QP once per horizon length and then

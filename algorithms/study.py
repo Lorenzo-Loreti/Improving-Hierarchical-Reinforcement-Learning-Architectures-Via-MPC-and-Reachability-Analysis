@@ -18,14 +18,20 @@ Three phases, so a figure can be redrawn without retraining:
     plot      redraw every figure from analysis.pkl (seconds).
     all       (default) train, then analyze.
 
-What an oracle comparison can and cannot say. On the canonical slalom the
-gates cost no time at all: the oracle reaches the lower bound of an
-unobstructed straight run from every start (docs/benchmark.md). Many
-trajectories therefore share the minimum arrival time, and the oracle returns
-one of them: the one with the least control effort, sum of |u|^2. An agent
-whose path differs from the oracle's but arrives on the same step is just as
-optimal. The figures compare arrival steps and returns, and present the
-oracle's path as *one* optimal solution, not *the* optimal solution.
+What an oracle comparison can and cannot say. Since 2026-10-04 the oracle
+maximises exactly the environment's undiscounted return: minimum time first,
+then, among the minimum-time trajectories, the least control effort, which
+the reward now charges (effort_penalty, envs/config.py) -- so an agent that
+arrives on the oracle's step and thrusts harder scores slightly less, by at
+most 0.01 per full-thrust step. With the speed and thrust limits on ||v||
+and ||u|| (envs/actuation.py) the slalom's gates cost time: the oracle needs
+79.2 steps on average over the grid, against 78.0 for an unobstructed
+straight run. Until then the limits were per axis and the gates cost no
+time at all (the oracle reached that lower bound from every start, see
+docs/benchmark.md), and the many trajectories sharing the minimum arrival
+time all scored the same, so an agent whose path differed from the oracle's
+but arrived on the same step was just as optimal. The figures compare
+arrival steps and returns.
 
 The first studies found that the oracle could be beaten, and this is why
 the environment's speed limit changed. The oracle is optimal under its own
@@ -46,18 +52,20 @@ oracle is an upper bound again. The figures still let a negative gap show,
 should one reappear: the grid heatmap's scale is centred on zero, and the
 solved-check panel of the learning curves is symmetric-log.
 
-One residual, much smaller, that is not a defect: the oracle is exactly
-min-time, but not exactly max-return. The progress term telescopes to
-progress_reward_coef * (p_x_final - p_x0), and p_x_final is where the goal
-step lands *past* the line, which the oracle, aiming at L plus a 1 mm margin,
-does not maximise. At the same arrival step an agent can therefore out-score
-it by up to progress_reward_coef * v_max * dt = 1.2, and one step later it can
-still come out up to 0.2 ahead. Measured in the 20-seed studies on the fixed
-environment (2026-09-24, 204 800 steps): where PPO arrived on the oracle's
-step it crossed 3.6 cm past the line on average against the oracle's 0.1 cm,
-for return gaps down to -0.73. This is well inside the solved-check's
-tolerance of 5, and it is why a trained agent may settle one step behind the
-oracle's time at almost no cost in return (hPPO does so from most starts).
+A residual that existed until 2026-10-04, and why it is gone: the oracle
+was exactly min-time, but not exactly max-return. The progress term
+telescoped to progress_reward_coef * (p_x_final - p_x0), and p_x_final was
+where the goal step landed *past* the line, which the oracle, aiming at L
+plus a 1 mm margin, did not maximise. At the same arrival step an agent
+could out-score it by up to progress_reward_coef * v_max * dt = 1.2, and one
+step later still come out up to 0.2 ahead. Measured in the 20-seed studies
+(2026-09-24, 204 800 steps): where PPO arrived on the oracle's step it
+crossed 3.6 cm past the line on average against the oracle's 0.1 cm, for
+return gaps down to -0.73 -- which is why a trained agent could settle one
+step behind the oracle's time at almost no cost in return (hPPO did so from
+most starts). The potential is now cut at L (envs/config.py,
+progress_reward_coef), so the overshoot earns nothing and a return gap
+below 0 can only mean the oracle's SCP missed the optimum.
 
 Imported by bare name once algorithms/ is on sys.path; the study scripts put it
 there.
@@ -349,22 +357,25 @@ def rollout(env, make_policy_fn, init_state):
     obs, _ = env.reset(options={"init_state": np.asarray(init_state, dtype=np.float32)})
     goal_trace = []
     policy_fn = make_policy_fn(goal_trace)
-    states, actions, rewards, contacts = [np.asarray(obs, dtype=float)], [], [], []
+    states, actions, rewards, contacts, efforts = [np.asarray(obs, dtype=float)], [], [], [], []
     done, info = False, {}
     while not done:
         action = np.asarray(policy_fn(obs), dtype=float)
         obs, reward, terminated, truncated, info = env.step(action)
-        # What the plant actually received: the env clips out-of-range actions.
-        actions.append(np.clip(action, env.action_space.low, env.action_space.high))
+        # What the plant actually received: the command saturated radially
+        # and cut by the speed limit (envs/actuation.py), as the env reports it.
+        actions.append(np.asarray(info["delivered_action"], dtype=float))
         states.append(np.asarray(obs, dtype=float))
         rewards.append(float(reward))
         contacts.append(bool(info["collision"]))
+        efforts.append(float(info["effort_penalty"]))
         done = terminated or truncated
     return {
         "states": np.asarray(states),           # (T+1, 4): p_x, p_y, v_x, v_y
         "actions": np.asarray(actions),         # (T, 2)
         "rewards": np.asarray(rewards),         # (T,)
         "contacts": np.asarray(contacts),       # (T,) wall contact on that step
+        "effort": float(np.sum(efforts)),       # the episode's effort term, in reward units
         "success": bool(info.get("is_success", False)),
         "return": float(np.sum(rewards)),
         "length": len(rewards),
@@ -564,6 +575,7 @@ def seed_table(analysis):
             "grid_worst_extra_steps": int(np.max(delta)),
             "grid_worst_return_gap": float(np.max(gap)),
             "grid_contacts": int(sum(a["contacts"].sum() for a in agent)),
+            "grid_mean_effort": float(np.mean([a["effort"] for a in agent])),
         })
     return rows
 
@@ -589,14 +601,15 @@ def write_summary(analysis, out_dir):
         "",
         "Grid columns replay the checkpoint from the 25 points of the solved-check grid; "
         "extra steps = agent arrival step - oracle arrival step (0 = as fast as the oracle, "
-        "negative = the agent arrives first). A return gap slightly below 0 (down to about "
-        "-1.2) is not an agent beating the oracle's time: the goal step's progress term pays "
-        "for how far past the line the agent crosses, which the oracle does not maximise. "
+        "negative = the agent arrives first). Effort: the episode's effort term (the env's "
+        "effort_penalty * sum of (||u||/u_max)^2), mean over the grid; the oracle's is "
+        + f"{np.mean([o['effort'] for o in analysis['oracle_grid']]):.3f}. "
         "See the notes on the oracle in algorithms/study.py.",
         "",
         "| seed | first solve | final eval return | % of oracle | eval contacts/ep | solved at end "
-        "| grid: reached goal | grid: mean / worst extra steps | grid: worst return gap | grid: contacts |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| grid: reached goal | grid: mean / worst extra steps | grid: worst return gap | grid: contacts "
+        "| grid: mean effort |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for r in rows:
         lines.append(
@@ -604,7 +617,7 @@ def write_summary(analysis, out_dir):
             f"| {r['final_eval_return']:.1f} | {r['pct_of_oracle']:.1f} % | {r['final_eval_contacts']:.2f} "
             f"| {'yes' if r['solved_at_end'] else 'no'} | {r['grid_success']}/25 "
             f"| {r['grid_mean_extra_steps']:.2f} / {r['grid_worst_extra_steps']} "
-            f"| {r['grid_worst_return_gap']:.1f} | {r['grid_contacts']} |")
+            f"| {r['grid_worst_return_gap']:.1f} | {r['grid_contacts']} | {r['grid_mean_effort']:.3f} |")
     with open(os.path.join(out_dir, "summary.md"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     print(f"[{analysis['label']}] wrote {os.path.join(out_dir, 'summary.md')}")

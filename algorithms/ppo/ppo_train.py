@@ -63,17 +63,16 @@ def parse_args(scenario):
     parser.add_argument("--env-u-max", type=float, default=None,
         help=scenario.env_u_max_help)
     parser.add_argument("--noise-bound-p", type=float, default=0.0,
-        help="half-width, in metres, of the uniform disturbance added to each "
-             "position every step (the env config's noise_bound_p, since "
-             "2026-09-28). 0.0, the default, is the deterministic environment "
-             "every earlier run trained on, unchanged bit for bit. The same "
+        help="radius, in metres, of the disk the position disturbance is "
+             "drawn from, uniformly, every step (the env config's "
+             "noise_bound_p, since 2026-09-28; a box's half-width until "
+             "2026-10-04). 0.0, the default, is the deterministic environment. The same "
              "flag as PPO+MPC's (algorithms/ppo_mpc/ppo_mpc_train.py), so the "
              "algorithms can be compared on one disturbed environment; the "
              "level chosen there is 0.005 with --noise-bound-v 0.05")
     parser.add_argument("--noise-bound-v", type=float, default=0.0,
-        help="half-width, in m/s, of the uniform disturbance added to each "
-             "velocity every step (the env config's noise_bound_v); see "
-             "--noise-bound-p")
+        help="radius, in m/s, of the disk the velocity disturbance is drawn "
+             "from (the env config's noise_bound_v); see --noise-bound-p")
     parser.add_argument("--init-sampler", type=str, choices=["uniform", "sobol"],
         default=scenario.make_env_config(None).init_sampler,
         help="how the vector env draws the start of each training episode "

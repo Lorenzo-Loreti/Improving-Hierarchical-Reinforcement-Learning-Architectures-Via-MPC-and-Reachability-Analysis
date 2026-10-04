@@ -19,16 +19,24 @@ velocity, and the velocity into a position. This is a *double integrator*:
 position depends on velocity, velocity depends on the chosen acceleration,
 and neither can change instantaneously. Concretely, this means the agent has
 inertia — it cannot stop or change direction on the spot, and has to plan a
-few steps ahead to avoid drifting into a wall. Speed along each axis is
-capped: once the agent is at top speed in a direction, pushing harder that
-way has no effect, on its velocity or on how far it travels in the step.
+few steps ahead to avoid drifting into a wall. Its speed and its
+acceleration are capped in magnitude, whatever the direction: it behaves
+like a vehicle with a single thruster that can point anywhere, so moving
+diagonally is no faster than moving straight, and steering at top speed
+turns the velocity instead of adding to it. Once the agent is at top speed,
+pushing harder in the direction it is going has no effect, on its velocity
+or on how far it travels in the step. (Until 2026-10-04 both caps applied
+to each axis separately, which let the agent move about 40% faster on a
+diagonal.)
 
 Time advances in fixed increments of 0.1 seconds (so ten control decisions
 per simulated second). The corridor runs along one axis (call it the
 "forward" direction) and has two parallel walls a fixed distance apart along
 the other ("lateral") axis. The environment also supports adding small,
 bounded random disturbances to position and velocity at every step
-(uniform within a fixed box, since 2026-09-28), to model imperfect
+(since 2026-09-28; uniform over a disk for the position and another for the
+velocity, the same in every direction, since 2026-10-04, and within a fixed
+box before), to model imperfect
 actuation or measurement — but the deterministic, noise-free version is the
 default and what every experiment before that date ran on, so there the
 dynamics are exact.
@@ -78,7 +86,7 @@ ingredient in Slalom.
 
 ## Reward Design
 
-The reward given to the agent at every step is built from four pieces:
+The reward given to the agent at every step is built from five pieces:
 
 - **A small time penalty** on every step, which pushes the agent to reach
   the goal as quickly as possible rather than dawdling.
@@ -91,7 +99,18 @@ The reward given to the agent at every step is built from four pieces:
   forward progress was made that step (and only forward progress — lateral
   movement does not count). This gives the agent a continuous signal to
   follow even long before it is anywhere near the goal, instead of relying
-  purely on the sparse, one-off success bonus.
+  purely on the sparse, one-off success bonus. It is paid only up to the
+  goal line: how far past it the last step lands earns nothing (since
+  2026-10-04), so a successful episode is scored only by how long it took,
+  how hard the agent pushed and how often it touched a wall.
+- **A small control-effort penalty**, in proportion to the squared magnitude
+  of the acceleration the vehicle actually delivers (since 2026-10-04). A
+  step at full thrust costs a hundredth of a time step, so over a whole
+  episode the effort is worth less than a single step: the agent still goes
+  as fast as it can, and among the equally fast ways of doing so it prefers
+  the smoothest. It is the same quantity the reference solution (the
+  minimum-time oracle) minimizes, so the agent and the oracle are scored on
+  exactly the same objective.
 
 An earlier version of this reward made wall contact *terminal* (i.e., it
 ended the episode immediately) with a large penalty. That design backfired:
@@ -110,11 +129,13 @@ and is what makes an honest attempt at reaching the goal worth the risk.
 |---|---|---|
 | Corridor length | 10 m | forward distance from start to goal |
 | Corridor width | 4 m | fixed lateral distance between the two walls |
-| Max speed | 1.2 m/s | per-axis velocity bound; at it, more acceleration that way has no effect |
-| Max acceleration | 2.5 m/s² | the agent's control authority |
+| Max speed | 1.2 m/s | bound on the speed, in any direction (per axis until 2026-10-04) |
+| Max acceleration | 2.5 m/s² | bound on the magnitude of the acceleration, the agent's control authority |
 | Control step | 0.1 s | simulated time between decisions |
 | Episode budget | 200 steps (20 s) | timeout if the goal isn't reached in time |
 | Spawn zone | first 2 m, centered laterally | randomized starting box |
+| Success bonus | 1000 | the same as Slalom's since 2026-09-24 (200 before) |
+| Effort penalty | 0.01 per full-thrust step | proportional to the squared magnitude of the delivered acceleration (since 2026-10-04) |
 
 ## Layout Sketch (schematic, not to scale)
 
@@ -147,5 +168,5 @@ this thesis actually uses to compare flat and hierarchical policies.
 |---|---|---|
 | Corridor width | constant 4 m | 4 m, narrowing to 1.5 m at two points |
 | Lateral maneuvering required | none (centerline is always valid) | yes — an S-shaped detour through two offset gates |
-| Success bonus | 200 | 1000 (reflecting the harder task) |
+| Success bonus | 1000 (200 until 2026-09-24) | 1000 |
 | Role in this thesis | baseline / sanity check | primary testbed for flat-vs-hierarchical comparisons |

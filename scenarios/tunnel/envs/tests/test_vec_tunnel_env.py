@@ -145,7 +145,7 @@ def test_vec_env_progress_shaping_uses_terminal_px_not_post_reset_px():
 
     # Row 0 is one step from the goal; row 1 stays far from termination.
     vec_env.states = np.array(
-        [[2.0 - 1e-4, 0.0, 2.0, 0.0], [0.0, 0.0, 0.0, 0.0]], dtype=np.float32
+        [[2.0 - 1e-4, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 0.0]], dtype=np.float32
     )
     p_x_prev_row0 = float(vec_env.states[0, 0])
 
@@ -154,14 +154,20 @@ def test_vec_env_progress_shaping_uses_terminal_px_not_post_reset_px():
 
     assert terminated[0] and info["final_info"]["is_success"][0]
     terminal_p_x_row0 = float(info["final_observation"][0, 0])
-    expected_reward_row0 = config.goal_reward + coef * (terminal_p_x_row0 - p_x_prev_row0)
+    assert terminal_p_x_row0 > config.tunnel_length
+    # The potential is cut at L, so the terminal row earns the distance up
+    # to the line, plus its effort term.
+    expected_reward_row0 = (config.goal_reward + coef * (config.tunnel_length - p_x_prev_row0)
+                            + info["effort_penalty"][0])
+    assert info["effort_penalty"][0] < 0
     assert rewards[0] == pytest.approx(expected_reward_row0)
 
     # The bug this guards against: computing the shaping term from the
     # post-reset row instead would use obs[0, 0] (freshly sampled in [0, 2))
     # rather than the terminal p_x (~2.0+) -- a materially different delta.
     post_reset_p_x_row0 = float(obs[0, 0])
-    wrong_reward_row0 = config.goal_reward + coef * (post_reset_p_x_row0 - p_x_prev_row0)
+    wrong_reward_row0 = (config.goal_reward + coef * (post_reset_p_x_row0 - p_x_prev_row0)
+                         + info["effort_penalty"][0])
     assert rewards[0] != pytest.approx(wrong_reward_row0)
 
 
@@ -226,21 +232,19 @@ def test_final_observation_reconstructs_a_physically_continuous_trajectory():
     pre-reset state has to come from `info["final_observation"]`.
 
     Asserted as a physical bound: one step cannot move the vehicle further than
-    v_max * dt plus the position kick a full-magnitude action itself
-    contributes (0.5 * u_max * dt**2, from the LTI's B matrix) on each axis,
-    whatever the policy does. x and y are actuated independently, so the
-    worst-case *Euclidean* displacement compared against below is that
-    per-axis bound scaled by sqrt(2), not the per-axis bound itself. A wall
-    contact does not loosen this bound either -- it only clamps p_y back to
-    the boundary, never past it.
+    v_max * dt, whatever the policy does -- the position integrates over the
+    average of the velocities before and after the step, both inside the
+    speed disk (envs/actuation.py). Until 2026-10-04 the limits were per
+    axis and the bound here was sqrt(2) times a per-axis one. A wall contact
+    does not loosen this bound either -- it only clamps p_y back to the
+    boundary, never past it.
     """
     config = TunnelEnvConfig(noise_bound_p=0.0, noise_bound_v=0.0)
     num_envs = 8
     vec_env = TunnelVecEnv(num_envs=num_envs, config=config)
     obs, _ = vec_env.reset(seed=0)
     rng = np.random.default_rng(0)
-    per_axis_bound = config.v_max * config.dt + 0.5 * config.u_max * config.dt**2
-    bound = np.sqrt(2) * per_axis_bound + 1e-6
+    bound = config.v_max * config.dt + 1e-6
 
     worst_reconstructed = 0.0
     worst_naive = 0.0
@@ -335,10 +339,11 @@ def test_vec_env_collision_bookkeeping_resets_per_row_on_autoreset():
 
 
 def test_vec_env_applies_the_speed_limit_like_the_single_env():
-    """Rows at or near top speed, thrusting into the limit (see SlalomEnv.step)."""
+    """Rows at or near top speed, thrusting into the limit or across it, and
+    one command outside the thrust disk (see envs/actuation.py)."""
     config = TunnelEnvConfig(noise_bound_p=0.0, noise_bound_v=0.0)
-    starts = np.array([[5.0, 0.0, 1.2, -1.2], [5.0, 0.0, 1.0, 0.3], [2.0, 0.5, -1.1, 1.2]], dtype=np.float32)
-    actions = np.array([[2.5, -2.5], [2.5, 2.5], [-2.5, 2.5]], dtype=np.float32)
+    starts = np.array([[5.0, 0.0, 0.85, -0.85], [5.0, 0.0, 1.0, 0.3], [2.0, 0.5, -0.4, 1.1]], dtype=np.float32)
+    actions = np.array([[2.5, -2.5], [0.0, 2.5], [-9.0, 2.5]], dtype=np.float32)
     vec_env = TunnelVecEnv(num_envs=3, config=config)
     vec_env.reset(seed=0)
     vec_env.states[:] = starts
@@ -350,25 +355,41 @@ def test_vec_env_applies_the_speed_limit_like_the_single_env():
         np.testing.assert_array_equal(vec_obs[i], obs)
 
 
-def test_vec_env_noise_is_uniform_in_the_bounded_box():
-    """As the scalar env's test of the same name: every component of the
-    disturbance stays inside its bound and fills most of it."""
+def test_vec_env_noise_is_uniform_on_the_bounded_disks():
+    """As the scalar env's test of the same name: every draw stays inside both
+    disks, reaches their edge, and is uniform in area."""
     bound_p, bound_v = 0.01, 0.05
     config = TunnelEnvConfig(noise_bound_p=bound_p, noise_bound_v=bound_v, tunnel_length=1000.0, max_steps=10000)
-    bound = np.array([bound_p, bound_p, bound_v, bound_v])
     vec_env = TunnelVecEnv(num_envs=4, config=config)
     vec_env.reset(seed=0)
     ws = []
-    for _ in range(500):
+    for _ in range(1000):
         # Restarted every step; see the scalar test.
         vec_env.states[:] = np.array([1.0, 0.0, 0.3, 0.0], dtype=np.float32)
         predicted = vec_env.states.astype(np.float64) @ vec_env.A.T.astype(np.float64)
         vec_env.step(np.zeros((4, 2), dtype=np.float32))
         ws.append(vec_env.states.astype(np.float64) - predicted)
     ws = np.concatenate(ws)
-    assert np.all(np.abs(ws) <= bound + 1e-6)
-    assert np.all(ws.max(axis=0) > 0.9 * bound)
-    assert np.all(ws.min(axis=0) < -0.9 * bound)
+    for block, bound in ((ws[:, :2], bound_p), (ws[:, 2:], bound_v)):
+        radius = np.linalg.norm(block, axis=1)
+        assert np.all(radius <= bound * (1 + 1e-4) + 1e-6)
+        assert radius.max() > 0.98 * bound
+        assert 0.22 < np.mean(radius <= bound / 2) < 0.28
+
+
+def test_vec_env_reports_the_effort_term_it_charged():
+    """info["effort_penalty"] is each row's effort term for this step, the one
+    already inside `rewards` (hPPO's worker reads it): effort_penalty for a
+    full-thrust row, 0 for an idle one."""
+    config = TunnelEnvConfig(tunnel_width=1000.0)
+    vec_env = TunnelVecEnv(num_envs=3, config=config)
+    vec_env.reset(seed=0)
+    vec_env.states[:] = np.array([3.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    actions = np.array([[config.u_max, 0.0], [0.0, 0.0], [0.0, -0.5 * config.u_max]], dtype=np.float32)
+    obs, rewards, *_, info = vec_env.step(actions)
+    np.testing.assert_allclose(info["effort_penalty"], config.effort_penalty * np.array([1.0, 0.0, 0.25]), rtol=1e-5)
+    progress = config.progress_reward_coef * (obs[:, 0] - 3.0)
+    np.testing.assert_allclose(rewards, config.step_penalty + progress + info["effort_penalty"], atol=1e-5)
 
 
 def test_vec_env_zero_noise_draws_no_randomness():

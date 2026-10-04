@@ -4,6 +4,7 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 
+from .actuation import deliver, project_disk, sample_disturbance
 from .config import SlalomEnvConfig
 from .spawn_sampler import spawn_box
 from .width_profile import constant_profile
@@ -12,12 +13,14 @@ from .width_profile import constant_profile
 class SlalomEnv(gym.Env):
     """
     Discrete-time LTI double-integrator environment: the agent navigates a
-    2D slalom from left to right.
+    2D slalom from left to right, with ||u|| <= u_max and ||v|| <= v_max
+    (envs/actuation.py).
 
     Reward: a dense -1 per-step time penalty, a per-step penalty on wall
     contact (non-terminal -- the episode continues through an inelastic
-    bounce), a sparse terminal reward on reaching the goal, and optional
-    potential-based progress shaping — all configurable via SlalomEnvConfig.
+    bounce), a sparse terminal reward on reaching the goal, potential-based
+    progress shaping cut at the goal line, and a small control-effort
+    penalty — all configurable via SlalomEnvConfig.
     """
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
@@ -87,11 +90,17 @@ class SlalomEnv(gym.Env):
             [0.0, self.dt]
         ], dtype=np.float32)
 
-        # Half-widths of the disturbance box W, per state component (see
-        # the config's noise_bound_p). This replaced a Gaussian's `std_dev`
-        # (and a `Sigma` covariance kept for inspection) on 2026-09-28.
+        # Radii of the disturbance's disks, repeated per state component (see
+        # the config's noise_bound_p): only read to tell whether W = {0}. A
+        # box's half-widths from 2026-09-28 to 2026-10-04, a Gaussian's
+        # `std_dev` (and a `Sigma` covariance kept for inspection) before.
         self.noise_bound = np.array([self.noise_bound_p, self.noise_bound_p,
                                      self.noise_bound_v, self.noise_bound_v], dtype=np.float32)
+
+        # effort_penalty / u_max^2, so a step's effort term is this times
+        # ||u||^2, in float32 like the rest of the reward (and so bit for bit
+        # SlalomVecEnv's).
+        self._effort_scale = np.float32(config.effort_penalty / config.u_max ** 2)
 
         self.state = None
         self.steps = 0
@@ -137,6 +146,8 @@ class SlalomEnv(gym.Env):
             "collision_count": 0,
             "collision_impacts": [],
             "distance_to_goal": float(max(self.L - self.state[0], 0.0)),
+            "effort_penalty": 0.0,
+            "delivered_action": np.zeros(2, dtype=np.float32),
         }
 
         if self.render_mode == "human":
@@ -151,54 +162,32 @@ class SlalomEnv(gym.Env):
         # update overwrites self.state.
         p_x_prev = float(self.state[0])
 
-        # Clip action to bounds (just in case)
-        u = np.clip(action, self.action_space.low, self.action_space.high)
+        # The acceleration the plant delivers: the command saturated
+        # radially to ||u|| <= u_max, then cut to what keeps ||v'|| <= v_max
+        # (envs/actuation.py, which also has the history of both limits). The
+        # action space stays the box [-u_max, u_max]^2, the disk's bounding
+        # box; its corners are saturated like everything else outside the
+        # disk.
+        u = deliver(action, self.state[2:], self.u_max, self.v_max, self.dt)
 
-        # The speed limit acts on the acceleration the plant actually
-        # delivers: u is cut, per axis, to what brings the velocity exactly to
-        # +-v_max and no further. A step that stays below the limit is the
-        # plain LTI step, unchanged. A step that reaches it integrates the
-        # position over the velocity the agent really had, the average of v
-        # and the capped v', so a step at top speed covers v_max * dt and no
-        # more.
-        #
-        # Until 2026-09-24 the limit was only the state clip below, applied
-        # after the full A @ s + B @ u update. The position had then already
-        # taken u's u * dt**2 / 2 term, so thrusting while at v_max covered
-        # v_max * dt + u_max * dt**2 / 2 = 0.1325 m per step instead of 0.12
-        # (+10%), for a velocity that was then clipped back to v_max. Trained
-        # agents found it: in the seed studies (algorithms/study.py, 13 seeds
-        # each, 163 840 steps) every flat-PPO seed reached the goal 5-6 steps
-        # before the min-time oracle from every one of the 25 grid starts, and
-        # every hPPO seed 3-5 steps before it, by holding a_x near u_max at
-        # top speed. The oracle (algorithms/optimal_solver.py) treats
-        # |v| <= v_max as a hard constraint on the state, as MPCWorker does, so
-        # it could not do the same, and it was not an upper bound on the
-        # environment as implemented; see docs/benchmark.md's "Is the oracle
-        # actually optimal?". With the limit applied here the two agree again:
-        # a step that reaches the limit gives exactly the state the in-bounds
-        # action (v_max - v) / dt gives, so the environment reaches no state
-        # the oracle's model cannot. TunnelEnv and both vector environments
-        # apply the same limit.
-        v = self.state[2:]
-        u = np.clip(u, (-np.float32(self.v_max) - v) / np.float32(self.dt),
-                    (np.float32(self.v_max) - v) / np.float32(self.dt))
-
-        # Additive disturbance, uniform in the box W (see the config's
+        # Additive disturbance, uniform on the disks of W (see the config's
         # noise_bound_p). Nothing is drawn when W = {0}, so the
         # deterministic environment consumes no randomness here.
         if np.any(self.noise_bound > 0):
-            w = self.np_random.uniform(low=-self.noise_bound, high=self.noise_bound)
+            w = sample_disturbance(self.np_random, self.noise_bound_p, self.noise_bound_v, 1)[0]
         else:
             w = np.zeros(4, dtype=np.float32)
 
         # LTI step
         next_state = self.A @ self.state + self.B @ u + w
 
-        # Clip to state bounds. For the velocity this is now only a guard
-        # against noise and float32 rounding: the speed limit is applied to u
+        # Keep the state in bounds: the position in its box, the velocity in
+        # the speed disk. For the velocity this is only a guard against the
+        # disturbance and float32 rounding: the speed limit is applied to u
         # above.
-        self.state = np.clip(next_state, self.x_min, self.x_max).astype(np.float32)
+        next_state[:2] = np.clip(next_state[:2], self.x_min[:2], self.x_max[:2])
+        next_state[2:] = project_disk(next_state[2:], self.v_max)
+        self.state = next_state.astype(np.float32)
 
         # Extract positions
         p_x, p_y = self.state[0], self.state[1]
@@ -242,8 +231,13 @@ class SlalomEnv(gym.Env):
             truncated = True
 
         # Potential-based progress shaping (Sec 8.5), on top of whichever
-        # branch fired above.
-        reward += self.config.progress_reward_coef * (p_x - p_x_prev)
+        # branch fired above. The potential is cut at L (see the config's
+        # progress_reward_coef): the crossing step is paid up to the line.
+        reward += self.config.progress_reward_coef * (min(p_x, np.float32(self.L)) - p_x_prev)
+
+        # Control effort (the config's effort_penalty), on the delivered u.
+        effort = self._effort_scale * (u[0] * u[0] + u[1] * u[1])
+        reward += effort
 
         self._trail.append(self.state[:2].copy())
 
@@ -254,6 +248,10 @@ class SlalomEnv(gym.Env):
             "collision_count": self._episode_collision_count,
             "collision_impacts": list(self._episode_collision_impacts),
             "distance_to_goal": float(max(self.L - p_x, 0.0)),
+            "effort_penalty": float(effort),
+            # The acceleration the plant delivered (envs/actuation.py), which
+            # the effort term is charged on.
+            "delivered_action": u.copy(),
         }
 
         if self.render_mode == "human":

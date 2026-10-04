@@ -245,6 +245,18 @@ def make_env(config=None):
     return SlalomEnv(config=config)
 
 if __name__ == "__main__":
+    # Not ported to the disk limits yet. Since 2026-10-04 the environments
+    # bound ||u|| <= u_max and ||v|| <= v_max (envs/actuation.py), while this
+    # agent's worker (algorithms/mpc_worker.py) and its reachable goal set
+    # (ppo_mpc_reach.reachable_goal) still model the per-axis box |u_i| <=
+    # u_max, |v_i| <= v_max: on the current environment it would plan with
+    # sqrt(2) times the thrust and speed the plant allows on a diagonal. It is
+    # to be rebuilt on the tube MPC worker; until then it runs from the git tag
+    # box-limits-final, whose environments it matches.
+    raise SystemExit(
+        "ppo_mpc_reach models the per-axis limits of git tag box-limits-final, not the "
+        "disk limits the environments use since 2026-10-04; run it from that tag "
+        "(see the comment above this line)")
     args = parse_args()
     run_name = f"{args.exp_name}_{args.seed}_{int(time.time())}"
 

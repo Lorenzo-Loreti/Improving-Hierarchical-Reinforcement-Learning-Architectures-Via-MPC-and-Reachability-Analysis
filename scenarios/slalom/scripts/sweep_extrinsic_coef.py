@@ -64,10 +64,11 @@ delayed collapse as a clean one.
 too conservative. 0.01 and 0.005 did not collapse on any seed. The collapsed
 runs at 0 harvest ~0.055 m of goal progress per step, not 0.12, and with that
 rate in place of v_max*dt the floor is ~0.005 on the slalom, and on the tunnel
-too now that the two share goal_reward (~0.018 at its former 200). v_max*dt is
+too now that the two share goal_reward (~0.018 at its former 200). v_max*dt was
 not a hard ceiling on the progress either: the
-environment limits speed per axis, so diagonal motion covers slightly more,
-and runs log up to ~0.126.)
+environment then limited speed per axis, so diagonal motion covered slightly
+more, and runs logged up to ~0.126. Since 2026-10-04 the limit is on ||v||
+and v_max*dt is exact.)
 
 The coefficient scales a second effect independently of the floor. A wall
 contact costs the worker coef * contact_penalty: -1.0 at 0.02, -0.25 at 0.005.
@@ -716,7 +717,7 @@ def fig_learning_curves(analysis, fig_dir):
                 ax.axhline(0.0, color=INK, lw=0.8, ls="--")
             if key == "worker/reward_intrinsic":
                 ax.axhline(v_step, color=MUTED, lw=0.8, ls="--")
-                ax.text(0.99, v_step, "$v_{max}\\,dt$ (per axis)", color=MUTED, ha="right", va="bottom",
+                ax.text(0.99, v_step, "$v_{max}\\,dt$", color=MUTED, ha="right", va="bottom",
                         transform=ax.get_yaxis_transform(), fontsize=8)
             if key in ("eval/success_rate", "worker/extrinsic_share"):
                 ax.set_ylim(-0.03, 1.03)

@@ -329,42 +329,53 @@ def fig_all_seeds(analysis, fig_dir, name, plot_env):
 
 
 def fig_kinematics(analyses, fig_dir, name):
-    """Velocity and acceleration against time, from the center start. The
-    oracle reaches v_max within about a second and then cruises. Its a_x
-    starts at u_max and tapers off rather than being bang-bang: the arrival
-    step is an integer, which leaves slack, and among the paths that arrive on
-    it the oracle takes the one with the least control effort. Before the
-    speed-limit fix this was the figure that showed trained agents holding a_x
-    near u_max while v_x was pinned at v_max, which the environment rewarded
-    with extra distance per step (see the note on the oracle in study.py);
-    thrust at the limit now buys nothing."""
+    """Velocity and acceleration against time, from the center start: both
+    components and the magnitudes, ||v|| and ||u||, which are what the limits
+    bound since 2026-10-04 (envs/actuation.py; the panels were v_x, v_y, a_x,
+    a_y against per-axis limits before). The oracle reaches v_max within
+    about a second and then cruises; its thrust starts at u_max and tapers off
+    rather than being bang-bang: the arrival step is an integer, which leaves
+    slack, and among the paths that arrive on it the oracle takes the one with
+    the least control effort -- which the reward now charges too (the
+    effort_penalty in envs/config.py). Before the speed-limit fix of
+    2026-09-24 this was the figure that showed trained agents holding a_x near
+    u_max while v_x was pinned at v_max, which the environment rewarded with
+    extra distance per step (see the note on the oracle in study.py); thrust
+    at the limit now buys nothing. The accelerations are the ones the plant
+    delivered (the rollout's "actions")."""
     ref = analyses[0]
     cfg = ref["env_config"]
     dt = cfg.dt
     oracle = ref["oracle_grid"][ref["center"]]
-    fig, axes = plt.subplots(2, 2, figsize=(7.4, 4.8), sharex=True)
+    fig, axes = plt.subplots(2, 3, figsize=(10.0, 4.8), sharex=True)
     series = [(a["label"], a["color"], "-", _center(a)[0]) for a in analyses]
     series.append(("oracle", INK, "--", oracle))
     for label, color, ls, ro in series:
         t_state = np.arange(len(ro["states"])) * dt
         t_act = np.arange(len(ro["actions"]) + 1) * dt
         lw = 1.3 if ls == "--" else 1.8
-        for col, ax in ((2, axes[0, 0]), (3, axes[0, 1])):
-            ax.plot(t_state, ro["states"][:, col], color=color, ls=ls, lw=lw)
-        for col, ax in ((0, axes[1, 0]), (1, axes[1, 1])):
-            u = np.append(ro["actions"][:, col], ro["actions"][-1, col])
-            ax.step(t_act, u, where="post", color=color, ls=ls, lw=lw)
-    for ax, title, lim in ((axes[0, 0], "(a) $v_x$ (m/s)", cfg.v_max), (axes[0, 1], "(b) $v_y$ (m/s)", cfg.v_max),
-                           (axes[1, 0], "(c) $a_x$ (m/s²)", cfg.u_max), (axes[1, 1], "(d) $a_y$ (m/s²)", cfg.u_max)):
-        for y in (-lim, lim):
-            ax.axhline(y, color=MUTED, lw=0.8)
+        v = ro["states"][:, 2:]
+        for y, ax in ((v[:, 0], axes[0, 0]), (v[:, 1], axes[0, 1]), (np.linalg.norm(v, axis=1), axes[0, 2])):
+            ax.plot(t_state, y, color=color, ls=ls, lw=lw)
+        acts = ro["actions"]
+        for y, ax in ((acts[:, 0], axes[1, 0]), (acts[:, 1], axes[1, 1]),
+                      (np.linalg.norm(acts, axis=1), axes[1, 2])):
+            ax.step(t_act, np.append(y, y[-1]), where="post", color=color, ls=ls, lw=lw)
+    for ax, title in ((axes[0, 0], "(a) $v_x$ (m/s)"), (axes[0, 1], "(b) $v_y$ (m/s)"),
+                      (axes[1, 0], "(d) $a_x$ (m/s²)"), (axes[1, 1], "(e) $a_y$ (m/s²)")):
+        ax.axhline(0, color=MUTED, lw=0.6)
+        ax.set_title(title)
+    for ax, title, lim in ((axes[0, 2], r"(c) speed $\|v\|$ (m/s)", cfg.v_max),
+                           (axes[1, 2], r"(f) thrust $\|a\|$ (m/s²)", cfg.u_max)):
+        ax.axhline(lim, color=MUTED, lw=0.8)
+        ax.set_ylim(0, 1.08 * lim)
         ax.set_title(title)
     for ax in axes[1]:
         ax.set_xlabel("time (s)")
     start = oracle["states"][0, :2]
     handles = [Line2D([], [], color=c, ls=ls, lw=1.8 if ls == "-" else 1.3, label=l)
                for l, c, ls, _ in series]
-    handles.append(Line2D([], [], color=MUTED, lw=0.8, label="limits $\\pm v_{max}$, $\\pm u_{max}$"))
+    handles.append(Line2D([], [], color=MUTED, lw=0.8, label="limits $v_{max}$, $u_{max}$"))
     fig.legend(handles=handles, loc="lower center", ncol=len(handles), bbox_to_anchor=(0.5, -0.01))
     fig.suptitle(f"Kinematics from ({start[0]:.1f}, {start[1]:.1f})", x=0.01, ha="left",
                  fontsize=9.5, fontweight="bold")
