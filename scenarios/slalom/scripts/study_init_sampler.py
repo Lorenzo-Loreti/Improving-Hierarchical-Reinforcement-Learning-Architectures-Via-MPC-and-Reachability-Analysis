@@ -148,6 +148,10 @@ def parse_args():
         help="seeds of every arm (see algorithms/study.py's --seeds for why 20)")
     parser.add_argument("--total-timesteps", type=int, default=DEFAULT_TOTAL_TIMESTEPS,
         help="training budget of every run")
+    parser.add_argument("--budget", type=str, default="",
+        help="per-algorithm budgets overriding --total-timesteps, e.g. "
+             "'ppo=1024000,hppo=1024000' (since 2026-10-04: with a gate's face a wall, "
+             "flat PPO and hPPO need far more steps on the slalom than PPO+MPC)")
     parser.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2),
         help="runs trained in parallel, each pinned to one thread")
     args, passthrough = parse_known_args_with_phase(parser)
@@ -158,6 +162,13 @@ def parse_args():
         parser.error(f"unknown algorithms {unknown}; choose from {list(ALGOS)}")
     if passthrough and args.phase not in ("all", "train"):
         parser.error(f"unrecognized arguments for the {args.phase} phase: {' '.join(passthrough)}")
+    budget = {algo: args.total_timesteps for algo in ALGOS}
+    for part in filter(None, args.budget.split(",")):
+        algo, _, steps = part.partition("=")
+        if algo not in ALGOS:
+            parser.error(f"--budget: unknown algorithm {algo!r}")
+        budget[algo] = int(steps)
+    args.budget = budget
     return args, passthrough
 
 
@@ -186,13 +197,13 @@ def train_phase(args, passthrough):
         for seed in args.seed_list:
             for sampler in SAMPLERS:
                 study = arm_study(args.out, algo, sampler)
-                if find_arm_run(study, sampler, seed, args.total_timesteps) is not None:
+                if find_arm_run(study, sampler, seed, args.budget[algo]) is not None:
                     skipped += 1
                     continue
-                tasks.append(TrainTask(study, study.out_dir, seed, args.total_timesteps,
+                tasks.append(TrainTask(study, study.out_dir, seed, args.budget[algo],
                                        ("--init-sampler", sampler, *passthrough)))
     if skipped:
-        print(f"[init_sampler] {skipped} runs already finished at {args.total_timesteps} steps, skipped")
+        print(f"[init_sampler] {skipped} runs already finished, skipped")
     train_runs(tasks, args.jobs)
 
 
@@ -250,13 +261,13 @@ def analyze(args):
     for algo in args.algo_list:
         for sampler in SAMPLERS:
             study = arm_study(args.out, algo, sampler)
-            runs = {s: find_arm_run(study, sampler, s, args.total_timesteps) for s in args.seed_list}
+            runs = {s: find_arm_run(study, sampler, s, args.budget[algo]) for s in args.seed_list}
             seeds = [s for s, r in runs.items() if r is not None]
             if not seeds:
                 print(f"[init_sampler] {study.label}: no finished runs, left out")
                 continue
             arm_args = SimpleNamespace(out=study.out_dir, seed_list=seeds,
-                                       total_timesteps=args.total_timesteps, checkpoint="final")
+                                       total_timesteps=args.budget[algo], checkpoint="final")
             analysis = analyze_phase(study, arm_args)
             study_plots.plot_study(study, analysis, study.out_dir, animate=False)
             write_summary(analysis, study.out_dir)
@@ -266,7 +277,8 @@ def analyze(args):
                                          os.path.join(study.out_dir, "logs", f"seed_{s}.log"))
                            for s in analysis["seeds"]},
             }
-    experiment = {"algos": args.algo_list, "arms": arms, "total_timesteps": args.total_timesteps}
+    experiment = {"algos": args.algo_list, "arms": arms,
+                  "budget": {algo: args.budget[algo] for algo in args.algo_list}}
     with open(os.path.join(args.out, "analysis.pkl"), "wb") as f:
         pickle.dump(experiment, f)
     return experiment
@@ -391,7 +403,9 @@ def write_experiment_summary(experiment, analyses, out):
     lines = [
         "# Independent vs Sobol' training starts on the slalom",
         "",
-        f"Every arm: the same seeds, {experiment['total_timesteps']} steps, every early stop off; "
+        "Every arm: the same seeds, "
+        + ", ".join(f"{a} {experiment['budget'][a]}" for a in experiment["algos"])
+        + " steps, every early stop off; "
         "the arms of an algorithm differ only in --init-sampler. p: two-sided Mann-Whitney U over "
         "the seeds, against the same algorithm's uniform arm (a seed that never solved ranks after "
         "every seed that did).",

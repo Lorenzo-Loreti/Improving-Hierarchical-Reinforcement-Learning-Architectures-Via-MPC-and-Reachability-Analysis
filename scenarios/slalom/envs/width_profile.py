@@ -87,6 +87,24 @@ class WidthProfile:
             return float(y_lo[0]), float(y_hi[0])
         return y_lo.reshape(x.shape), y_hi.reshape(x.shape)
 
+    def boundary_between(self, x_from, x_to):
+        """The segment boundary a move from `x_from` to `x_to` crosses: the
+        `x_start` of the segment entered when moving forward, its `x_end`
+        when moving backward -- the face the vehicle enters it through --
+        and NaN where both lie in the same segment. Vectorized like
+        `bounds_at`. A step crosses at most one boundary here: no segment is
+        shorter than a step's travel (0.12 m against 1 m gates)."""
+        a = np.asarray(x_from, dtype=np.float64)
+        b = np.asarray(x_to, dtype=np.float64)
+        scalar_input = a.ndim == 0 and b.ndim == 0
+        a, b = np.broadcast_arrays(np.atleast_1d(a), np.atleast_1d(b))
+        last = len(self._starts) - 1
+        ia = np.clip(np.searchsorted(self._starts, a, side="right") - 1, 0, last)
+        ib = np.clip(np.searchsorted(self._starts, b, side="right") - 1, 0, last)
+        edges = np.append(self._starts, np.inf)
+        face = np.where(ib > ia, edges[ib], np.where(ib < ia, edges[np.minimum(ib + 1, last + 1)], np.nan))
+        return float(face[0]) if scalar_input else face
+
     def envelope(self):
         """`(y_lo, y_hi)` of the union of every segment's bound -- the
         widest lateral extent this profile ever allows, used to build
@@ -95,6 +113,20 @@ class WidthProfile:
         y_lo = float(np.min(self._center_ys - self._half_widths))
         y_hi = float(np.max(self._center_ys + self._half_widths))
         return y_lo, y_hi
+
+
+def outside_face(face, forward):
+    """The float32 position closest to `face` on the side a vehicle moving
+    `forward` (or backward) comes from: below it moving forward, at it
+    moving backward, since a segment covers x_start <= p_x < x_end. Where a
+    vehicle that ran into a segment's face is put back (the environments'
+    step). Vectorized over `face` and `forward`."""
+    face = np.asarray(face, dtype=np.float64)
+    f = face.astype(np.float32)
+    below = np.where(f < face, f, np.nextafter(f, np.float32(-np.inf)))
+    at_or_above = np.where(f >= face, f, np.nextafter(f, np.float32(np.inf)))
+    out = np.where(forward, below, at_or_above).astype(np.float32)
+    return out[()] if out.ndim == 0 else out
 
 
 def constant_profile(tunnel_width):

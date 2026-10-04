@@ -69,7 +69,10 @@ Touching a wall does **not** end the episode. Physically, a wall contact is
 treated as a fully inelastic bounce: the agent's lateral position is clamped
 back to the wall, its lateral velocity is zeroed (it stops pushing into the
 wall), but its forward velocity is untouched, so it keeps moving down the
-corridor. The agent is simply penalized for the contact and continues.
+corridor. The agent is simply penalized for the contact and continues. (A
+corridor with narrower sections, like Slalom's gates, also has walls across
+it, the sections' front faces; hitting one stops the agent's forward motion
+instead, see the Slalom description. The tunnel's walls are all along it.)
 
 ## What Makes Tunnel Distinct
 

@@ -149,6 +149,11 @@ def parse_args():
     parser.add_argument("--noise-bound-p", type=float, default=0.005)
     parser.add_argument("--noise-bound-v", type=float, default=0.05)
     parser.add_argument("--total-timesteps", type=int, default=DEFAULT_TOTAL_TIMESTEPS)
+    parser.add_argument("--budget", type=str, default="",
+        help="per-algorithm budgets overriding --total-timesteps, e.g. "
+             "'ppo=1024000,hppo=1024000'. Since 2026-10-04, with a gate's face a wall "
+             "that stops the vehicle, flat PPO and hPPO need far more steps to find "
+             "the way through the gates than PPO+MPC does")
     parser.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2),
         help="runs trained in parallel, each pinned to one thread")
     parser.add_argument("--out", type=str, default=None,
@@ -163,6 +168,14 @@ def parse_args():
         lo, _, hi = part.partition("-")
         seeds += list(range(int(lo), int(hi or lo) + 1))
     args.seed_list = seeds
+    # Every algorithm's budget: --total-timesteps unless --budget says otherwise.
+    budget = {algo: args.total_timesteps for algo in ALGOS}
+    for part in filter(None, args.budget.split(",")):
+        algo, _, steps = part.partition("=")
+        if algo not in ALGOS:
+            parser.error(f"--budget: unknown algorithm {algo!r}")
+        budget[algo] = int(steps)
+    args.budget = budget
     if args.out is None:
         args.out = os.path.join(HERE, "..", "studies",
                                 f"disturbed_{args.noise_bound_p:g}_{args.noise_bound_v:g}")
@@ -181,7 +194,7 @@ def find_run(args, algo, seed):
         if not os.path.exists(os.path.join(run_dir, "final.pt")):
             continue
         config = read_config(run_dir)
-        if (config.get("total_timesteps") == args.total_timesteps
+        if (config.get("total_timesteps") == args.budget[algo]
                 and config.get("noise_bound_p") == args.noise_bound_p
                 and config.get("noise_bound_v") == args.noise_bound_v):
             return run_dir
@@ -200,7 +213,8 @@ def train_phase(args):
         return
     env = dict(os.environ, OMP_NUM_THREADS="1", MKL_NUM_THREADS="1")
     jobs = max(1, min(args.jobs, len(todo)))
-    print(f"[disturbed] training {len(todo)} runs at {args.total_timesteps} steps, "
+    print(f"[disturbed] training {len(todo)} runs at " +
+          ", ".join(f"{a} {args.budget[a]}" for a in args.algo_list) + " steps, "
           f"|w_p| <= {args.noise_bound_p}, |w_v| <= {args.noise_bound_v}, {jobs} at a time")
     pending, running, failed = list(todo), {}, []
     t0 = time.time()
@@ -213,7 +227,7 @@ def train_phase(args):
                 os.makedirs(os.path.join(arm_dir, "logs"), exist_ok=True)
                 cmd = [sys.executable, "-u", os.path.join(HERE, script),
                        "--seed", str(seed), "--exp-name", exp_name,
-                       "--total-timesteps", str(args.total_timesteps),
+                       "--total-timesteps", str(args.budget[algo]),
                        "--noise-bound-p", repr(args.noise_bound_p),
                        "--noise-bound-v", repr(args.noise_bound_v),
                        "--solved-early-stop", "false",
@@ -293,10 +307,11 @@ def summary_phase(args):
         for seed in args.seed_list:
             run_dir = find_run(args, algo, seed)
             if run_dir is not None:
-                results[algo][seed] = run_summary(run_dir, args.total_timesteps)
+                results[algo][seed] = run_summary(run_dir, args.budget[algo])
     lines = [f"# Disturbed slalom: |w_p| <= {args.noise_bound_p}, |w_v| <= {args.noise_bound_v}",
              "",
-             f"{args.total_timesteps} steps per run, every early stop off; medians over seeds "
+             ", ".join(f"{a} {args.budget[a]}" for a in args.algo_list) +
+             " steps per run, every early stop off; medians over seeds "
              f"[min, max], and a two-sided Mann-Whitney p against {REFERENCE}. A clean "
              "evaluation: every episode at the goal, no contact (seeds that never have one "
              "count as the budget).",
@@ -308,7 +323,7 @@ def summary_phase(args):
         for algo in args.algo_list:
             vals = [r[key] for r in results[algo].values()]
             if key == "first_clean":
-                vals = [args.total_timesteps if v is None else v for v in vals]
+                vals = [args.budget[algo] if v is None else v for v in vals]
                 vals = [v / 1e3 for v in vals]
             vals = np.array([v for v in vals if v is not None and not np.isnan(v)])
             if vals.size == 0:
@@ -320,7 +335,7 @@ def summary_phase(args):
                 cell += f" (never: {never})" if never else ""
             ref = [r[key] for r in results.get(REFERENCE, {}).values()]
             if key == "first_clean":
-                ref = [(args.total_timesteps if v is None else v) / 1e3 for v in ref]
+                ref = [(args.budget[REFERENCE] if v is None else v) / 1e3 for v in ref]
             ref = np.array([v for v in ref if v is not None and not np.isnan(v)])
             if algo != REFERENCE and ref.size and vals.size and not (np.all(ref == ref[0]) and np.all(vals == ref[0])):
                 cell += f", p={mannwhitneyu(vals, ref, alternative='two-sided').pvalue:.2g}"

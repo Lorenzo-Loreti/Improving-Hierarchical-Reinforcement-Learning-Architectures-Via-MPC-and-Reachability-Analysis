@@ -4,7 +4,7 @@ from gymnasium import spaces
 from .actuation import deliver, project_disk, sample_disturbance
 from .config import TunnelEnvConfig
 from .spawn_sampler import SobolSpawnStream, spawn_box
-from .width_profile import constant_profile
+from .width_profile import constant_profile, outside_face
 
 
 class TunnelVecEnv:
@@ -143,6 +143,7 @@ class TunnelVecEnv:
         # Captured for the progress-shaping term below, before the line
         # after next rebinds self.states.
         prev_p_x = self.states[:, 0].copy()
+        prev_p_y = self.states[:, 1].astype(np.float64)
 
         next_states = self.states @ self.A.T + actions @ self.B.T + noise
         # Position in its box, velocity in the speed disk (a guard, as in
@@ -153,17 +154,30 @@ class TunnelVecEnv:
 
         p_x, p_y = self.states[:, 0], self.states[:, 1]
 
-        # Wall contact, looked up at the post-step, post-clip p_x. A fully
-        # inelastic bounce: p_y is clamped to the violated bound and v_y is
-        # zeroed for every collided env (v_x untouched). No mirroring is
-        # needed since a zero-restitution bounce cannot overshoot the
-        # opposite wall. The episode no longer ends on contact.
+        # Wall contact, looked up at the post-step, post-clip p_x: a fully
+        # inelastic bounce off the wall that was hit, exactly as in
+        # TunnelEnv.step (see the comment there). A row that entered a gate
+        # outside its opening hit the gate's face: p_x put back just outside
+        # it, v_x zeroed. Any other contact -- or a corner's lateral part --
+        # is with a wall along the corridor: p_y clamped, v_y zeroed. The
+        # episode no longer ends on contact.
         y_lo, y_hi = self.width_profile.bounds_at(p_x)
         collision = (p_y <= y_lo) | (p_y >= y_hi)
         if np.any(collision):
+            face = self.width_profile.boundary_between(prev_p_x, p_x)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                y_face = prev_p_y + (face - prev_p_x) / (p_x.astype(np.float64) - prev_p_x) \
+                    * (p_y.astype(np.float64) - prev_p_y)
+            hit_face = collision & np.isfinite(face) & ~((y_lo < y_face) & (y_face < y_hi))
+            if np.any(hit_face):
+                self.states[hit_face, 0] = outside_face(face, p_x > prev_p_x)[hit_face]
+                self.states[hit_face, 2] = 0.0
+                p_x = self.states[:, 0]
+                y_lo, y_hi = self.width_profile.bounds_at(p_x)
+            lateral = collision & ((p_y <= y_lo) | (p_y >= y_hi))
             clamped_y = np.where(p_y <= y_lo, y_lo, y_hi)
-            self.states[collision, 1] = clamped_y[collision]
-            self.states[collision, 3] = 0.0
+            self.states[lateral, 1] = clamped_y[lateral]
+            self.states[lateral, 3] = 0.0
             p_y = self.states[:, 1]
 
         goal = p_x >= self.L

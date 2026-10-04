@@ -7,7 +7,7 @@ import numpy as np
 from .actuation import deliver, project_disk, sample_disturbance
 from .config import TunnelEnvConfig
 from .spawn_sampler import spawn_box
-from .width_profile import constant_profile
+from .width_profile import constant_profile, outside_face
 
 
 class TunnelEnv(gym.Env):
@@ -161,6 +161,7 @@ class TunnelEnv(gym.Env):
         # Captured for the progress-shaping term below, before the LTI
         # update overwrites self.state.
         p_x_prev = float(self.state[0])
+        p_y_prev = float(self.state[1])
 
         # The acceleration the plant delivers: the command saturated
         # radially to ||u|| <= u_max, then cut to what keeps ||v'|| <= v_max
@@ -199,18 +200,47 @@ class TunnelEnv(gym.Env):
         reward = self.config.step_penalty
 
         # Wall contact, looked up at the post-step, post-clip p_x. A fully
-        # inelastic bounce: p_y is clamped to the violated bound and v_y is
-        # zeroed (v_x is untouched -- only the wall-normal component is
-        # absorbed on impact). No mirroring/reflection is needed since a
-        # zero-restitution bounce can only move p_y back to the boundary,
-        # never past the opposite wall. The episode does not end; the
-        # contact is charged a small per-step penalty (additive to
+        # inelastic bounce off the wall that was hit: the velocity component
+        # normal to it is absorbed and the position put back on its side;
+        # the tangential motion is untouched. No mirroring/reflection is
+        # needed since a zero-restitution bounce can only move the vehicle
+        # back to the wall, never past the opposite one. The episode does not
+        # end; the contact is charged a small per-step penalty (additive to
         # step_penalty) instead of the old terminal one.
+        #
+        # Which wall: a step that enters a narrower segment (a gate) outside
+        # its opening ran into the gate's face, a wall across the corridor,
+        # and is stopped in x -- p_x put back just outside the face, v_x
+        # zeroed, its lateral motion untouched. Any other contact is with a
+        # wall along the corridor: p_y clamped to the violated bound, v_y
+        # zeroed. The two are told apart by where the step crossed the
+        # segment boundary (linear between the two samples): outside the new
+        # segment's opening, the face; inside, the opening, and the contact
+        # is with a gate's side wall. At a corner both apply. (Since
+        # 2026-10-04. Before, every contact was the second kind, so a vehicle
+        # entering a gate outside its opening was clamped across the face,
+        # sideways into the opening: a lateral jump of 0.63 m on average and
+        # up to 1.5 m, against 0.12 m for a whole step at top speed. Once the
+        # speed limit bounded ||v|| and moving sideways cost forward speed,
+        # every flat-PPO seed of the 20-seed study settled on arriving at gate
+        # 2 misaligned and taking the jump, ~1.1 contacts per episode at -50
+        # each to save ~2 steps, and none passed the solved-check; all 579
+        # grid contacts were entries through a face. The oracle and the tube
+        # MPC never touch a wall, so neither rule changes them.)
         y_lo, y_hi = self.width_profile.bounds_at(p_x)
         if p_y <= y_lo or p_y >= y_hi:
-            p_y = y_lo if p_y <= y_lo else y_hi
-            self.state[1] = p_y
-            self.state[3] = 0.0
+            face = self.width_profile.boundary_between(p_x_prev, p_x)
+            if np.isfinite(face):
+                y_face = p_y_prev + (face - p_x_prev) / (float(p_x) - p_x_prev) * (float(p_y) - p_y_prev)
+                if not y_lo < y_face < y_hi:
+                    p_x = outside_face(face, p_x > p_x_prev)
+                    self.state[0] = p_x
+                    self.state[2] = 0.0
+                    y_lo, y_hi = self.width_profile.bounds_at(p_x)
+            if p_y <= y_lo or p_y >= y_hi:
+                p_y = y_lo if p_y <= y_lo else y_hi
+                self.state[1] = p_y
+                self.state[3] = 0.0
             collision = True
 
             contact_cost = self.config.contact_penalty

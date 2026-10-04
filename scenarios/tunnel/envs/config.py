@@ -62,10 +62,13 @@ class TunnelEnvConfig:
     # clearly undesirable while making an honest attempt worth the risk in
     # expectation -- but was still a narrow, fragile window.
     #
-    # The wall is no longer a terminal event: a contact clamps p_y to the
-    # violated bound and zeroes v_y (a fully inelastic bounce -- v_x is
-    # untouched, only the wall-normal component is absorbed), and the
-    # episode continues. `contact_penalty` is the small, per-step-of-contact
+    # The wall is no longer a terminal event: a contact is a fully inelastic
+    # bounce off the wall that was hit -- only the wall-normal velocity
+    # component is absorbed and the position put back on its side -- and the
+    # episode continues. Along the corridor that clamps p_y and zeroes v_y;
+    # against a gate's face, entered outside its opening, it puts p_x back in
+    # front of the face and zeroes v_x (since 2026-10-04; before, that case
+    # too clamped p_y, sideways through the face -- see the env's step). `contact_penalty` is the small, per-step-of-contact
     # penalty this now costs (additive to step_penalty, not a replacement),
     # flat regardless of the impact speed. -50.0 is a starting point, not a
     # tuned value -- unlike the old terminal reward this can fire on many

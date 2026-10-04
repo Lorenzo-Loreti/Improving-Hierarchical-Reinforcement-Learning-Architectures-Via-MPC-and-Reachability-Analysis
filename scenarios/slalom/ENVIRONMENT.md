@@ -44,9 +44,15 @@ also covers how training draws these positions, independently or evenly
 spread) and must reach the far end of the corridor within a fixed budget of
 200 control steps (20 simulated seconds). Reaching the goal ends the episode successfully;
 otherwise it is cut off at the timeout. Wall contact — including contact
-with a gate's narrower walls — is never terminal: it is a soft, inelastic
-bounce (the agent's lateral push into the wall is absorbed, its forward
-motion is untouched) with a penalty, and the episode continues.
+with a gate's walls — is never terminal: it is a soft, inelastic bounce with
+a penalty, and the episode continues. Against a wall along the corridor the
+agent's lateral push into it is absorbed and its forward motion is
+untouched. Arriving at a gate outside its opening, the agent hits the gate's
+front face, a wall across the corridor: it is stopped in front of it, its
+forward speed absorbed, and has to line up with the opening before going on.
+(Until 2026-10-04 that case was handled like a side wall, which moved the
+agent sideways through the face into the opening — a jump of up to 1.5 m in
+one step that trained agents learned to use.)
 
 ## What Makes Slalom Distinct
 

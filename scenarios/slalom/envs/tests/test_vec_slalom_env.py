@@ -392,3 +392,27 @@ def test_vec_env_zero_noise_draws_no_randomness():
     rng_state = vec_env._np_random.bit_generator.state
     vec_env.step(np.ones((3, 2), dtype=np.float32))
     assert vec_env._np_random.bit_generator.state == rng_state
+
+
+def test_vec_env_resolves_gate_face_contacts_like_the_single_env():
+    """Rows hitting a gate's face, its back face, a side wall through the
+    opening, and a corner -- and one row passing cleanly -- give exactly the
+    single environment's states."""
+    from envs.width_profile import WidthProfile, WidthSegment
+    profile = WidthProfile([WidthSegment(-np.inf, 7.0, 2.0, 0.0), WidthSegment(7.0, 8.0, 0.75, -1.0),
+                            WidthSegment(8.0, np.inf, 2.0, 0.0)])
+    config = SlalomEnvConfig(noise_bound_p=0.0, noise_bound_v=0.0, width_profile=profile)
+    starts = np.array([[6.981, 0.512, 1.17, -0.267], [8.03, 1.0, -0.6, 0.1], [6.95, -0.27, 1.0, 0.3],
+                       [6.97, 1.99, 0.6, 0.6], [6.95, -1.0, 1.0, 0.0]], dtype=np.float32)
+    vec_env = SlalomVecEnv(num_envs=len(starts), config=config)
+    vec_env.reset(seed=0)
+    vec_env.states[:] = starts
+    actions = np.zeros((len(starts), 2), dtype=np.float32)
+    vec_obs, vec_rewards, *_ , vec_info = vec_env.step(actions)
+    for i in range(len(starts)):
+        env = SlalomEnv(config=config)
+        env.reset(options={"init_state": starts[i]})
+        obs, reward, *_, info = env.step(actions[i])
+        np.testing.assert_array_equal(vec_obs[i], obs)
+        assert vec_rewards[i] == reward
+        assert vec_info["final_info"]["collision"][i] == info["collision"]

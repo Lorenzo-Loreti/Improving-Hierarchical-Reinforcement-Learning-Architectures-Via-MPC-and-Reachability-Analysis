@@ -647,3 +647,69 @@ def test_zero_noise_draws_no_randomness():
     rng_state = env.np_random.bit_generator.state
     env.step(np.array([1.0, -1.0], dtype=np.float32))
     assert env.np_random.bit_generator.state == rng_state
+
+
+def _second_gate_profile():
+    """One gate like the slalom's second: x in [7, 8), opening y in
+    [-1.75, -0.25], full width (|y| < 2) elsewhere."""
+    from envs.width_profile import WidthProfile, WidthSegment
+    return WidthProfile([WidthSegment(-np.inf, 7.0, 2.0, 0.0), WidthSegment(7.0, 8.0, 0.75, -1.0),
+                         WidthSegment(8.0, np.inf, 2.0, 0.0)])
+
+
+def test_entering_a_gate_outside_its_opening_stops_at_its_face():
+    """A step into a gate outside its opening hits the gate's face, a wall
+    across the corridor: the vehicle is put back just in front of it with v_x
+    absorbed, its lateral motion untouched, and charged one contact. Before
+    2026-10-04 it was clamped sideways through the face into the opening
+    instead -- here 0.74 m in one step, the jump every flat-PPO seed learned
+    to use (see the env's step). The case is that one, from a seed's
+    trajectory."""
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0, width_profile=_second_gate_profile(),
+               progress_reward_coef=0.0, effort_penalty=0.0)
+    env.reset(options={"init_state": np.array([6.981, 0.512, 1.17, -0.267], dtype=np.float32)})
+    obs, reward, terminated, _, info = env.step(np.zeros(2, dtype=np.float32))
+    assert info["collision"] and not terminated
+    assert obs[0] < 7.0 and obs[0] == pytest.approx(7.0, abs=1e-6)
+    assert obs[2] == 0.0
+    assert obs[1] == pytest.approx(0.512 - 0.0267, abs=1e-4)     # y moved on, not clamped
+    assert obs[3] == pytest.approx(-0.267, abs=1e-3)   # the start is a hair over v_max
+    assert reward == pytest.approx(env.config.step_penalty + env.config.contact_penalty)
+    # Pushing on into the face is another contact, and gets no further.
+    obs, _, _, _, info = env.step(np.array([env.u_max, 0.0], dtype=np.float32))
+    assert info["collision"] and obs[0] < 7.0 and obs[2] == 0.0
+
+
+def test_a_gates_back_face_stops_a_vehicle_moving_backward():
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0, width_profile=_second_gate_profile())
+    env.reset(options={"init_state": np.array([8.03, 1.0, -0.6, 0.1], dtype=np.float32)})
+    obs, _, _, _, info = env.step(np.zeros(2, dtype=np.float32))
+    assert info["collision"]
+    assert obs[0] == 8.0 and obs[2] == 0.0
+    assert obs[3] == pytest.approx(0.1)
+
+
+def test_entering_through_the_opening_and_grazing_a_side_wall_is_a_lateral_contact():
+    """Where the step crosses the gate's boundary inside the opening the
+    vehicle went through it, so a contact that step is with the gate's side
+    wall: p_y clamped, v_y absorbed, v_x untouched."""
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0, width_profile=_second_gate_profile())
+    env.reset(options={"init_state": np.array([6.95, -0.27, 1.0, 0.3], dtype=np.float32)})
+    obs, _, _, _, info = env.step(np.zeros(2, dtype=np.float32))
+    assert info["collision"]
+    assert obs[0] > 7.0 and obs[2] == pytest.approx(1.0)
+    assert obs[1] == pytest.approx(-0.25) and obs[3] == 0.0
+
+
+def test_a_corner_hit_absorbs_both_components():
+    """Into the face and, within the same step, past the outer wall: both
+    walls bounce the vehicle, one contact."""
+    from envs.width_profile import WidthProfile, WidthSegment
+    profile = WidthProfile([WidthSegment(-np.inf, 7.0, 2.0, 0.0), WidthSegment(7.0, 8.0, 0.75, -1.0),
+                            WidthSegment(8.0, np.inf, 2.0, 0.0)])
+    env = make(noise_bound_p=0.0, noise_bound_v=0.0, width_profile=profile)
+    env.reset(options={"init_state": np.array([6.97, 1.99, 0.6, 0.6], dtype=np.float32)})
+    obs, _, _, _, info = env.step(np.zeros(2, dtype=np.float32))
+    assert info["collision"] and info["collision_count"] == 1
+    assert obs[0] < 7.0 and obs[1] == pytest.approx(2.0)
+    assert obs[2] == 0.0 and obs[3] == 0.0
