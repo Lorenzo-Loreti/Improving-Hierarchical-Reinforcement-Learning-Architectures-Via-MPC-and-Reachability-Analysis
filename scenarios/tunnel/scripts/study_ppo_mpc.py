@@ -15,6 +15,34 @@ The tunnel's seed studies were added on 2026-10-04, with the disk limits and
 the effort penalty (scenarios/tunnel/envs/actuation.py, envs/config.py);
 before that the tunnel had only the 3-seed benchmark of 2026-09-23
 (docs/benchmark.md).
+
+Result (2026-10-04): PPO+MPC seeds 1-10, flat PPO and hPPO seeds 1-20, all at
+204 800 steps, no disturbance. p: Mann-Whitney on the first-solve steps,
+against PPO.
+
+                                   PPO+MPC       hPPO                 PPO
+  solved within the budget         10/10         20/20                20/20
+  first solve, median / mean       72k / 67k     31k / 33k            26k / 26k
+                                   (p = 5e-6)    (p = 9e-5)
+  first solve, range               51k-82k       31k-41k              20k-31k
+  solved at the last evaluation    10/10         20/20                20/20
+  solved-checks passed after the
+    first solve                    100%          100%                 100%
+  training contacts per episode    0             0.19                 0.11
+  grid starts on the oracle's step 80%           46%                  70%
+  grid mean extra steps            +0.20         +0.58                +0.30
+  grid effort per episode          -0.051        -0.038               -0.041   (oracle -0.035)
+
+- Every algorithm solves the tunnel, every seed, and holds it: the straight
+  corridor is a control problem, not an exploration one. Flat PPO is the
+  fastest learner, hPPO a few thousand steps behind, PPO+MPC the slowest
+  (its manager has to learn where to put goals a fixed controller then
+  tracks conservatively) but the most precise, on the oracle's step from
+  80% of the starts.
+- The learners' effort is within 10-20% of the oracle's; the tube worker
+  spends ~45% more (1.8 times on the slalom).
+- Wall clock, 7 runs in parallel: ~5 min per PPO run, ~6 per hPPO run, ~25
+  per PPO+MPC run.
 """
 import os
 import sys

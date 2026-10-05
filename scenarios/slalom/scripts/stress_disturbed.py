@@ -38,6 +38,31 @@ seeds of each seed's mean over the grid: contacts per episode, the share
 of episodes with a contact, success, return, the gap to the undisturbed
 oracle, and the smallest clearance to a wall reached in an episode.
 
+Result on the current dynamics (2026-10-06): seeds 1-10 of every arm of both
+disturbed studies (PPO+MPC at 500k steps, flat PPO and hPPO at 1M; see
+compare_disturbed.py). Medians over seeds [min, max].
+
+  contacts per episode           uniform   edge      adversary
+  |w| <= 0.005 / 0.05  PPO+MPC     0         0         0                       (min clearance 4-16 mm)
+                       hPPO        0         0         0                       (never reaches the goal)
+                       PPO         0.02      0.02      8.1 [0.08, 46] (46%)    success 0.92
+  |w| <= 0.01 / 0.1    PPO+MPC     0         0         0                       (min clearance 19-23 mm)
+                       hPPO        0         0         4.5 [0, 42] (100%)      (never reaches the goal)
+                       PPO         0         0         102 [3.8, 170] (100%)   success 0 [0, 1]
+
+- PPO+MPC has no contact under any disturbance at either level, and reaches
+  the goal from every start; under the adversary its real state came within
+  4 mm of a wall at the first level and 19 mm at twice it (the margin rho is
+  1 mm), at a cost of 0.6 and 3.9 in return against uniform noise.
+- Flat PPO's margins hold against random disturbances, uniform or on W's
+  edge, and fail against the aimed one: 8 contacts per episode at the first
+  level, and at twice it the adversary pins the vehicle to the walls (~100
+  contacts per episode). (Success is low at twice the level under every
+  disturbance: 6 of its 10 seeds never learned to get through the gates.)
+- hPPO never reaches the goal here either (its policies stop in front of a
+  gate, see compare_disturbed.py); the adversary at twice the level pushes
+  the waiting vehicle into the walls.
+
 Result (2026-09-29, box W and per-axis limits, the "vertex" mode then):
 seeds 1-10 of every arm of both disturbed studies. The figures are medians
 over seeds, with [min, max] where the spread matters.

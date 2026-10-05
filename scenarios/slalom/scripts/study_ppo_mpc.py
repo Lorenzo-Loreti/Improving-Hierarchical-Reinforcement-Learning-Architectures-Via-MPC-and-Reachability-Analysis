@@ -12,7 +12,50 @@ worker rebuilt with the settings it was trained with (ppo_mpc_train.load_agent).
 Runs trained with a disturbance are refused by study.py; see
 compare_disturbed.py for those.
 
-Result (2026-09-29): seeds 1-10, 204 800 steps, no disturbance, set against
+Result (2026-10-04, the current dynamics: speed and thrust bounded in
+norm, the effort term, the gates' faces walls; docs/disk-limits-and-effort.md).
+PPO+MPC seeds 1-10 at 204 800 steps; flat PPO and hPPO seeds 1-20 at
+1 024 000, since without the old clamp through the gates' faces they need
+far more steps to find the way through (section 7 of that document).
+p: Mann-Whitney on the first-solve steps.
+
+                                   PPO+MPC      hPPO           PPO
+  solved within the budget         8/10         0/20           9/20
+  first solve, median / mean       118k / 125k  --             748k / 701k (p = 6e-4)
+  first solve, range               102k-195k    --             338k-973k
+  solved at the last evaluation    4/10         0/20           6/20
+  solved-checks passed after the
+    first solve                    50%          --             52%
+  training contacts per episode    0            0.28           0.28
+  grid starts on the oracle's step 8%           0%             1%
+  grid mean extra steps            +1.36        never arrives  +37.9
+  grid effort per episode          -0.073       -0.398         -0.052   (oracle -0.040)
+
+- PPO+MPC is the only algorithm that solves the slalom at the old budget,
+  and its worker still never touches a wall. It is less precise than on the
+  box: the gates now cost time, and arriving on the oracle's step takes goals
+  placed where the time-optimal path threads them; it ends 1.4 steps behind
+  the oracle on average, and the strict check (gap <= 5 at all 25 starts)
+  flickers, passed by 4 of 10 seeds at the last evaluation.
+- hPPO never gets through: every seed ends stopped, waiting out the clock --
+  17 between the gates in front of gate 2, 2 in front of gate 1, 1 inside
+  gate 1. On the
+  tunnel it solves 20/20 at 31k, so it is the gates' faces it cannot get
+  past, not the hierarchy that is broken. With the old clamp it reached the
+  goal from every start, by taking the jump (~1 contact per episode).
+- Flat PPO finds the way through on 14 of 20 seeds, late (first solve
+  338k-973k), and then reaches the goal from every start; 6 seeds stay
+  stopped in front of a gate. Of the 14, 9 passed the strict check.
+- Effort: PPO+MPC's tube worker spends 1.8 times the oracle's effort (its
+  tracking cost weighs the input lightly, r = 0.1 against 10 on position
+  errors); flat PPO is close to the oracle; hPPO's stopped workers keep
+  thrusting to hold position.
+- Wall clock, 7 runs in parallel: ~90 min per PPO+MPC run, ~30 min per
+  1M-step PPO run and ~35 per hPPO run.
+
+Result (2026-09-29, per-axis limits, no effort term, the old contact rule:
+the environments of git tag box-limits-final): seeds 1-10, 204 800 steps, no
+disturbance, set against
 the 20-seed PPO and hPPO studies of 2026-09-24 (same protocol, same
 environment). The p values are Mann-Whitney tests on the first-solve steps.
 

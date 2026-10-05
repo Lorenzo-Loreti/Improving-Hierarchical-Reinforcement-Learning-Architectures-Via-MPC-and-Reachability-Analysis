@@ -41,8 +41,54 @@ This reads each run's metrics.jsonl directly. algorithms/study.py cannot be
 used: it replays the oracle and the policies on one environment, and refuses
 disturbed runs for that reason.
 
-Result (2026-09-28, seeds 1-10 each, 500k steps; summary.md has the rest)
--------------------------------------------------------------------------
+Result on the current dynamics (2026-10-05/06)
+----------------------------------------------
+Speed and thrust bounded in norm, a disk W, the effort term, and the gates'
+faces walls that stop the vehicle (docs/disk-limits-and-effort.md). Seeds
+1-10 each; PPO+MPC at 500k steps, flat PPO and hPPO at 1 024 000 (--budget),
+since without the old clamp through the gates' faces they need far more steps
+to find the way through at all. Medians over seeds; p against PPO+MPC.
+
+  |w_p| <= 0.005, |w_v| <= 0.05   PPO+MPC        hPPO                  PPO
+  eval return, last 100k          1001.8         -146.7  (p = 2e-4)    1008.3  (p = 0.47)
+  grid gap to oracle, last 100k   10.3           1157                  28.7 [2.0, 1176]
+  eval contacts/episode           0              0                     0
+  training contacts/episode       0              0.31 (whole run)      0.34 (whole run)
+  seeds with a clean evaluation   10/10          0/10                  6/10
+  first clean evaluation          51k            never                 532k [307k, never]
+
+  |w_p| <= 0.01, |w_v| <= 0.1     PPO+MPC        hPPO                  PPO
+  eval return, last 100k          991.3          -147.6  (p = 2e-4)    -142.7 [-173, 1008]  (p = 0.14)
+  grid gap to oracle, last 100k   20.9           1158                  1153 [3.4, 1184]
+  eval contacts/episode           0              0 (one seed 0.02)     0 (up to 0.03)
+  training contacts/episode       0              0.30 (whole run)      0.16 (whole run)
+  seeds with a clean evaluation   10/10          0/10                  4/10
+  first clean evaluation          61k            never                 never [195k, never]
+
+- PPO+MPC is the only algorithm every seed of which reaches the goal cleanly,
+  at both levels, from ~50-60k steps on, without a contact in any training
+  episode, a candidate fallback or an emergency. Its price is paid at the
+  end, in time: 10.3 below the undisturbed oracle at the first level and
+  20.9 at twice it (~9 and ~19 steps per episode), against 4.6 and 10.6 on
+  the box -- the gates now cost time on top of the tube's margin.
+- hPPO never gets through, as on the deterministic slalom: every seed ends
+  stopped in front of a gate.
+- Flat PPO gets through on 6 seeds of 10 at the first level and 4 at twice
+  it, late; the rest end stopped in front of a gate (one at twice the level
+  gets through from part of the starts only). Where it gets through it
+  mostly ends closer to the oracle than PPO+MPC -- gaps of 2-9 on 5 of the 6
+  seeds at the first level -- with almost no contact.
+- Wall clock, 14 runs in parallel: ~940 min per PPO+MPC run at the first
+  level and ~1180 at twice it (81 and 96 ms per solve under that load, ~14
+  ms alone with random goals), against 121 min on the box; ~32-58 min per
+  PPO run and ~44-128 per hPPO run. The exact solve (Clarabel through cvxpy,
+  plus Gurobi where binaries are free) is the cost; calling Clarabel
+  without cvxpy is the obvious first saving.
+
+Result on the old dynamics (2026-09-28, git tag box-limits-final: per-axis
+limits, a box W, no effort term, the old contact rule; seeds 1-10 each, 500k
+steps; summary.md has the rest)
+---------------------------------------------------------------------------
                               PPO+MPC          hPPO                    PPO
   eval return, last 100k      1008.3           1012.5  (p = 2e-4)      1012.8  (p = 2e-4)
   mean grid gap to oracle     4.6              0.3                     -0.1
@@ -78,8 +124,9 @@ Result (2026-09-28, seeds 1-10 each, 500k steps; summary.md has the rest)
   per solve under that load, ~4.6 ms alone), against ~14 min for hPPO and
   ~10 min for PPO.
 
-Twice the disturbance (2026-09-29, --noise-bound-p 0.01 --noise-bound-v 0.1)
----------------------------------------------------------------------------
+Twice the disturbance, old dynamics (2026-09-29, --noise-bound-p 0.01
+--noise-bound-v 0.1)
+---------------------------------------------------------------------
 This asks whether the learned policies' own margin stops being enough.
 The tube is then +-0.165 m and +-0.42 m/s, the plan is held to 0.78 m/s
 and 0.90 m/s^2, and a stop takes 9 of the 10 horizon steps. Three times
