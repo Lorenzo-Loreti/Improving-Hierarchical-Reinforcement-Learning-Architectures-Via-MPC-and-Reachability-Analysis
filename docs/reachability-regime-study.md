@@ -1,5 +1,13 @@
 # When does reachability analysis pay?
 
+> **Dynamics.** Every number in this document was measured on the per-axis
+> speed and thrust limits (|v_i| <= v_max, |u_i| <= u_max), with no effort term in
+> the reward and the progress potential uncut at the goal line: the environments
+> up to git tag `box-limits-final`. Since 2026-10-04 the limits bound ||v|| and
+> ||u||, the reward charges control effort, and the oracle maximises it exactly;
+> see [`disk-limits-and-effort.md`](disk-limits-and-effort.md), which also has the
+> studies rerun on the new dynamics.
+
 **What this document is.** The regime study behind
 [`progression.md`](progression.md) §5. It answers a question the canonical
 benchmark cannot: *under what conditions does computing the reachable goal set

@@ -1,5 +1,13 @@
 # From flat PPO to reachability-aware hierarchical MPC
 
+> **Dynamics.** Every number in this document was measured on the per-axis
+> speed and thrust limits (|v_i| <= v_max, |u_i| <= u_max), with no effort term in
+> the reward and the progress potential uncut at the goal line: the environments
+> up to git tag `box-limits-final`. Since 2026-10-04 the limits bound ||v|| and
+> ||u||, the reward charges control effort, and the oracle maximises it exactly;
+> see [`disk-limits-and-effort.md`](disk-limits-and-effort.md), which also has the
+> studies rerun on the new dynamics.
+
 **What this document is.** The spine of the experimental argument: what changes
 as control is moved out of the policy and into a model-based worker, what
 breaks at each step, and what the evidence says about why. It is written to be

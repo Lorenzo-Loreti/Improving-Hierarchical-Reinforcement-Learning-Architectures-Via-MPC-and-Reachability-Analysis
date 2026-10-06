@@ -1,5 +1,13 @@
 # Cross-algorithm benchmark — slalom and tunnel
 
+> **Dynamics.** Every number in this document was measured on the per-axis
+> speed and thrust limits (|v_i| <= v_max, |u_i| <= u_max), with no effort term in
+> the reward and the progress potential uncut at the goal line: the environments
+> up to git tag `box-limits-final`. Since 2026-10-04 the limits bound ||v|| and
+> ||u||, the reward charges control effort, and the oracle maximises it exactly;
+> see [`disk-limits-and-effort.md`](disk-limits-and-effort.md), which also has the
+> studies rerun on the new dynamics.
+
 **Run:** 2026-09-23, 4 algorithms × 3 seeds × 2 scenarios, 24 runs.
 **Companion:** [`worker-termination-avoidance.md`](worker-termination-avoidance.md),
 which is why the hierarchical numbers here differ from anything measured before

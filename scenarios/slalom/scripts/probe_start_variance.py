@@ -42,7 +42,16 @@ run (before, around and after the first solve, ~51k steps). The probe changes
 no training code and draws its own seeds. Results go to
 scenarios/slalom/studies/init_sampler/probe/, which git ignores.
 
-Result (2026-10-03): seeds 1-3, checkpoints at 10k, 31k, 51k and 205k steps,
+Result on the current dynamics (2026-10-06; docs/disk-limits-and-effort.md):
+seeds 1-3 of the 1M-step independent PPO arm, checkpoints at 102k, 307k, 614k
+and 1024k steps (flat PPO now first solves at 338k-973k, if at all; seed 1
+at 338k, seeds 2 and 3 never), 128 batches per condition. Over all 12
+checkpoints, Sobol' / independent = 0.94 (0.85-1.02) and fixed / independent
+= 0.96 (0.87-1.05): the starts are +4 % (-5 % to +13 %) of the gradient's
+variance, as before. Run with --steps 102400,307200,614400,1024000.
+
+Result on the old dynamics (2026-10-03, git tag box-limits-final): seeds 1-3,
+checkpoints at 10k, 31k, 51k and 205k steps,
 128 batches per condition. Over all 12 checkpoints (geometric mean, 95 %
 bootstrap interval), Sobol' / independent = 0.94 (0.88-1.02) and fixed /
 independent = 0.97 (0.89-1.05): the starts are +3 % (-5 % to +11 %) of the

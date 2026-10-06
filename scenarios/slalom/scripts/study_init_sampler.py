@@ -41,8 +41,32 @@ contacts against the oracle). Each training run also logs how evenly its
 latest 32 starts covered the box (spawn/*, algorithms/spawn_coverage.py), so
 the experiment records the mechanism next to its effect.
 
-Result (2026-10-03): seeds 1-20, 204 800 steps, no disturbance; p values are
-Mann-Whitney tests on the first-solve steps, Sobol' against independent.
+Result on the current dynamics (2026-10-06: speed and thrust bounded in norm,
+the effort term, the gates' faces walls; docs/disk-limits-and-effort.md):
+seeds 1-20, flat PPO at 1 024 000 steps and PPO+MPC at 204 800 (--budget), no
+disturbance. hPPO was left out: on these dynamics it never gets through the
+gates at all (0/20 at 1M), so there is no learning for a sampler to speed up.
+Independent / Sobol'.
+
+                                   flat PPO              PPO+MPC
+  solved                           9/20 / 7/20           18/20 / 18/20
+  first solve, median              748k / 553k (p = 0.8) 108k / 108k (p = 0.65)
+  solved at the end                6/20 / 6/20           11/20 / 13/20
+  grid mean extra steps            +37.9 / +67.7 (p = 0.43)  +1.34 / +1.30 (p = 0.6)
+  spawn discrepancy                0.012 / 0.001 in both
+
+- Still nothing measurable, on the harder task: Sobol' starts changed neither
+  whether flat PPO finds the way through the gates nor how fast PPO+MPC
+  learns. (Flat PPO's median shift is undefined: more than half of each arm's
+  seeds never solved.)
+- The independent arms reproduce the seed studies seed for seed: flat PPO's
+  all 20 (9/20, median 748k), and PPO+MPC's seeds 1-10 too, although its seed
+  study was trained before the gate-face fix and this arm after it -- the
+  fix cannot reach a controller that never touches a wall.
+
+Result on the old dynamics (2026-10-03, git tag box-limits-final): seeds
+1-20, 204 800 steps, no disturbance; p values are Mann-Whitney tests on the
+first-solve steps, Sobol' against independent.
 
                                    flat PPO         hPPO             PPO+MPC
   first solve, median (both arms)  51k              72k              72k
@@ -306,7 +330,8 @@ def _p(a, b):
 def _median_shift(a, b, n_boot=10_000):
     """median(b) - median(a), with a 95 % bootstrap interval (seeds resampled
     within each arm): how large a difference the seeds leave room for. Seeds
-    that never solved count as infinite, so the shift can be infinite too."""
+    that never solved count as infinite, so the shift can be infinite too, or
+    undefined (NaN) where both medians are."""
     rng = np.random.default_rng(0)
     a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
     boot = (np.median(rng.choice(b, (n_boot, len(b))), axis=1)
@@ -363,7 +388,9 @@ def write_experiment_summary(experiment, analyses, out):
         if vs is None:
             return "-"
         d, lo, hi = _median_shift(vs["first_ranked"], row["first_ranked"])
-        sign = lambda v: "inf" if np.isinf(v) else f"{v / 1e3:+.0f}k"
+        # inf - inf: both arms' medians lie beyond the budget (more than
+        # half their seeds never solved), and the shift is undefined.
+        sign = lambda v: "--" if np.isnan(v) else ("inf" if np.isinf(v) else f"{v / 1e3:+.0f}k")
         return f"{sign(d)} ({sign(lo)} to {sign(hi)})"
     learning = [
         "| arm | solved | first solve, median / mean (range) | p | median shift (95 % CI) "

@@ -1,5 +1,13 @@
 # Training starts: independent vs Sobol' sampling of the spawn box
 
+> **Dynamics.** Every number in this document was measured on the per-axis
+> speed and thrust limits (|v_i| <= v_max, |u_i| <= u_max), with no effort term in
+> the reward and the progress potential uncut at the goal line: the environments
+> up to git tag `box-limits-final`. Since 2026-10-04 the limits bound ||v|| and
+> ||u||, the reward charges control effort, and the oracle maximises it exactly;
+> see [`disk-limits-and-effort.md`](disk-limits-and-effort.md), which also has the
+> studies rerun on the new dynamics.
+
 **What this document is.** The record of one change to how training episodes
 start (2026-10-03): why it was made, what exactly it changes and what it
 deliberately leaves alone, how it was checked, and what a 20-seed experiment

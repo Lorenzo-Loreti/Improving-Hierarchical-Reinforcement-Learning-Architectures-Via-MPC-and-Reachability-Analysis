@@ -1,5 +1,13 @@
 # The goal box, and why `PPO+MPC` could not solve the slalom
 
+> **Dynamics.** Every number in this document was measured on the per-axis
+> speed and thrust limits (|v_i| <= v_max, |u_i| <= u_max), with no effort term in
+> the reward and the progress potential uncut at the goal line: the environments
+> up to git tag `box-limits-final`. Since 2026-10-04 the limits bound ||v|| and
+> ||u||, the reward charges control effort, and the oracle maximises it exactly;
+> see [`disk-limits-and-effort.md`](disk-limits-and-effort.md), which also has the
+> studies rerun on the new dynamics.
+
 **Date:** 2026-09-23.
 **Companion:** [`benchmark.md`](benchmark.md) §4–5, whose `PPO+MPC` row this
 explains and fixes.
