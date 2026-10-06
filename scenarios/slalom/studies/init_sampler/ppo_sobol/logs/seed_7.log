@@ -1,0 +1,1204 @@
+Using device: cpu
+Solved-check: precomputed optimal returns for 25 fixed initial conditions (mean=1011.8, min=1007.0, max=1014.0); solved-tolerance=5.0
+batch_size=1024 minibatch_size=256 num_updates=1000 timesteps=1024000
+update=1 global_step=1024 SPS=1469 ev=0.002 v_bias=51.6
+update=2 global_step=2048 SPS=1437 ev=0.336 v_bias=17.9 return=-547.0 length=200 success_rate=0.00 collisions/ep=6.75 (n=8)
+update=3 global_step=3072 SPS=1402 ev=-0.332 v_bias=30.3
+update=4 global_step=4096 SPS=1433 ev=0.451 v_bias=20.1 return=-476.7 length=200 success_rate=0.00 collisions/ep=5.12 (n=8)
+update=5 global_step=5120 SPS=1399 ev=-0.291 v_bias=5.5 return=-339.5 length=200 success_rate=0.00 collisions/ep=2.38 (n=8)
+update=6 global_step=6144 SPS=1440 ev=-0.522 v_bias=5.7
+update=7 global_step=7168 SPS=1469 ev=0.498 v_bias=4.2 return=-239.5 length=200 success_rate=0.00 collisions/ep=0.38 (n=8)
+update=8 global_step=8192 SPS=1509 ev=0.709 v_bias=2.9 return=-220.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=9 global_step=9216 SPS=1543 ev=0.108 v_bias=3.0
+update=10 global_step=10240 SPS=1575 ev=0.584 v_bias=3.1 return=-220.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 10: return=-220.89, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 10: solved=False worst_gap=1240.97 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=11 global_step=11264 SPS=536 ev=0.593 v_bias=1.6 return=-220.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=12 global_step=12288 SPS=569 ev=0.502 v_bias=2.4
+update=13 global_step=13312 SPS=601 ev=0.680 v_bias=2.2 return=-220.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=14 global_step=14336 SPS=630 ev=-1.157 v_bias=1.1
+update=15 global_step=15360 SPS=652 ev=0.735 v_bias=1.7 return=-220.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=16 global_step=16384 SPS=679 ev=0.820 v_bias=1.2 return=-220.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=17 global_step=17408 SPS=701 ev=0.148 v_bias=0.6
+update=18 global_step=18432 SPS=725 ev=0.873 v_bias=1.1 return=-220.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=19 global_step=19456 SPS=747 ev=0.498 v_bias=1.9 return=-226.7 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=20 global_step=20480 SPS=762 ev=-2.204 v_bias=0.3
+Evaluation at update 20: return=-220.90, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 20: solved=False worst_gap=1240.98 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=21 global_step=21504 SPS=537 ev=0.904 v_bias=0.8 return=-220.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=22 global_step=22528 SPS=551 ev=0.982 v_bias=0.4 return=-220.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=23 global_step=23552 SPS=565 ev=0.901 v_bias=0.3
+update=24 global_step=24576 SPS=581 ev=0.955 v_bias=0.5 return=-220.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=25 global_step=25600 SPS=597 ev=-0.003 v_bias=5.2 return=-257.9 length=200 success_rate=0.00 collisions/ep=0.75 (n=8)
+update=26 global_step=26624 SPS=611 ev=0.659 v_bias=-0.5
+update=27 global_step=27648 SPS=626 ev=0.946 v_bias=-0.1 return=-220.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=28 global_step=28672 SPS=639 ev=0.102 v_bias=-0.5
+update=29 global_step=29696 SPS=651 ev=0.972 v_bias=-0.2 return=-220.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=30 global_step=30720 SPS=665 ev=0.986 v_bias=-0.1 return=-220.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 30: return=-220.90, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 30: solved=False worst_gap=1240.98 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=31 global_step=31744 SPS=530 ev=-0.027 v_bias=3.7
+update=32 global_step=32768 SPS=541 ev=0.361 v_bias=0.9 return=-251.6 length=200 success_rate=0.00 collisions/ep=0.62 (n=8)
+update=33 global_step=33792 SPS=551 ev=0.882 v_bias=-0.2 return=-220.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=34 global_step=34816 SPS=562 ev=0.910 v_bias=-0.3
+update=35 global_step=35840 SPS=573 ev=0.971 v_bias=0.0 return=-220.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=36 global_step=36864 SPS=584 ev=0.988 v_bias=-0.3 return=-220.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=37 global_step=37888 SPS=595 ev=0.480 v_bias=4.7
+update=38 global_step=38912 SPS=605 ev=-0.080 v_bias=-5.7 return=-168.2 length=199 success_rate=0.12 collisions/ep=1.75 (n=8)
+update=39 global_step=39936 SPS=615 ev=0.230 v_bias=12.5 return=-217.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=40 global_step=40960 SPS=625 ev=0.681 v_bias=4.6 return=-497.8 length=200 success_rate=0.00 collisions/ep=5.71 (n=7)
+Evaluation at update 40: return=-220.90, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 40: solved=False worst_gap=1240.97 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=41 global_step=41984 SPS=533 ev=0.738 v_bias=-0.5 return=-348.7 length=200 success_rate=0.00 collisions/ep=2.75 (n=8)
+update=42 global_step=43008 SPS=541 ev=0.911 v_bias=-1.0
+update=43 global_step=44032 SPS=549 ev=0.855 v_bias=-1.6 return=-226.7 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=44 global_step=45056 SPS=558 ev=0.974 v_bias=-0.6 return=-220.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=45 global_step=46080 SPS=566 ev=0.064 v_bias=-0.4
+update=46 global_step=47104 SPS=574 ev=0.979 v_bias=-0.4 return=-220.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=47 global_step=48128 SPS=581 ev=0.990 v_bias=-0.3 return=-220.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=48 global_step=49152 SPS=590 ev=0.983 v_bias=-0.2
+update=49 global_step=50176 SPS=597 ev=0.949 v_bias=-0.6 return=-220.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=50 global_step=51200 SPS=605 ev=0.734 v_bias=2.9 return=-246.4 length=200 success_rate=0.00 collisions/ep=0.88 (n=8)
+Evaluation at update 50: return=-220.89, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 50: solved=False worst_gap=1240.96 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=51 global_step=52224 SPS=521 ev=0.344 v_bias=5.5
+update=52 global_step=53248 SPS=527 ev=0.629 v_bias=11.1 return=-374.5 length=200 success_rate=0.00 collisions/ep=3.38 (n=8)
+update=53 global_step=54272 SPS=534 ev=0.815 v_bias=1.8
+update=54 global_step=55296 SPS=541 ev=0.819 v_bias=-0.9 return=-323.5 length=200 success_rate=0.00 collisions/ep=2.12 (n=8)
+update=55 global_step=56320 SPS=547 ev=0.813 v_bias=2.1 return=-232.4 length=200 success_rate=0.00 collisions/ep=0.38 (n=8)
+update=56 global_step=57344 SPS=553 ev=0.528 v_bias=-0.5
+update=57 global_step=58368 SPS=559 ev=0.376 v_bias=2.0 return=-220.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=58 global_step=59392 SPS=565 ev=0.845 v_bias=0.5 return=-220.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=59 global_step=60416 SPS=571 ev=0.895 v_bias=0.7
+update=60 global_step=61440 SPS=578 ev=0.924 v_bias=0.2 return=-218.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 60: return=-216.70, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 60: solved=False worst_gap=1235.73 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=61 global_step=62464 SPS=522 ev=0.927 v_bias=-1.1 return=-199.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=62 global_step=63488 SPS=528 ev=0.787 v_bias=2.9
+update=63 global_step=64512 SPS=534 ev=0.924 v_bias=-2.2 return=-239.6 length=200 success_rate=0.00 collisions/ep=0.88 (n=8)
+update=64 global_step=65536 SPS=538 ev=0.796 v_bias=-0.3 return=-217.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=65 global_step=66560 SPS=543 ev=0.912 v_bias=-0.0 return=-209.9 length=200 success_rate=0.00 collisions/ep=0.29 (n=7)
+update=66 global_step=67584 SPS=549 ev=0.638 v_bias=-1.3 return=-216.2 length=200 success_rate=0.00 collisions/ep=0.50 (n=8)
+update=67 global_step=68608 SPS=553 ev=0.818 v_bias=-1.6
+update=68 global_step=69632 SPS=558 ev=0.848 v_bias=-0.6 return=-213.6 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=69 global_step=70656 SPS=563 ev=0.937 v_bias=-2.2 return=-183.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=70 global_step=71680 SPS=569 ev=0.960 v_bias=-2.4
+Evaluation at update 70: return=-169.67, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 70: solved=False worst_gap=1189.71 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=71 global_step=72704 SPS=521 ev=0.585 v_bias=-0.0 return=-182.1 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=72 global_step=73728 SPS=526 ev=0.915 v_bias=-2.0 return=-196.2 length=200 success_rate=0.00 collisions/ep=0.38 (n=8)
+update=73 global_step=74752 SPS=531 ev=0.375 v_bias=4.3
+update=74 global_step=75776 SPS=537 ev=0.384 v_bias=8.0 return=-338.7 length=200 success_rate=0.00 collisions/ep=3.38 (n=8)
+update=75 global_step=76800 SPS=541 ev=0.610 v_bias=-1.3 return=-180.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=76 global_step=77824 SPS=545 ev=0.818 v_bias=-1.4
+update=77 global_step=78848 SPS=550 ev=0.127 v_bias=5.7 return=-161.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=78 global_step=79872 SPS=554 ev=0.453 v_bias=-2.4
+update=79 global_step=80896 SPS=559 ev=0.883 v_bias=-1.8 return=-232.2 length=200 success_rate=0.00 collisions/ep=1.12 (n=8)
+update=80 global_step=81920 SPS=563 ev=0.941 v_bias=-1.1 return=-169.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 80: return=-163.05, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 80: solved=False worst_gap=1183.08 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=81 global_step=82944 SPS=522 ev=0.897 v_bias=-1.6
+update=82 global_step=83968 SPS=526 ev=0.311 v_bias=11.3 return=-161.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=83 global_step=84992 SPS=530 ev=0.783 v_bias=-0.7 return=-271.4 length=200 success_rate=0.00 collisions/ep=2.25 (n=8)
+update=84 global_step=86016 SPS=535 ev=0.539 v_bias=-1.6
+update=85 global_step=87040 SPS=539 ev=0.770 v_bias=-0.5 return=-174.5 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=86 global_step=88064 SPS=543 ev=0.961 v_bias=-0.5 return=-169.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=87 global_step=89088 SPS=547 ev=0.262 v_bias=7.6
+update=88 global_step=90112 SPS=552 ev=0.523 v_bias=1.2 return=-237.3 length=200 success_rate=0.00 collisions/ep=1.38 (n=8)
+update=89 global_step=91136 SPS=556 ev=0.375 v_bias=0.7 return=-170.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=90 global_step=92160 SPS=560 ev=0.929 v_bias=0.0 return=-195.6 length=200 success_rate=0.00 collisions/ep=0.43 (n=7)
+Evaluation at update 90: return=-172.02, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 90: solved=False worst_gap=1192.08 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=91 global_step=93184 SPS=523 ev=0.958 v_bias=-0.2 return=-170.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=92 global_step=94208 SPS=526 ev=0.931 v_bias=-0.0
+update=93 global_step=95232 SPS=530 ev=0.972 v_bias=-0.7 return=-166.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=94 global_step=96256 SPS=533 ev=0.986 v_bias=-0.9 return=-159.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=95 global_step=97280 SPS=537 ev=0.065 v_bias=32.2
+update=96 global_step=98304 SPS=540 ev=0.637 v_bias=8.4 return=-454.0 length=200 success_rate=0.00 collisions/ep=6.00 (n=8)
+update=97 global_step=99328 SPS=544 ev=0.722 v_bias=-2.7 return=-193.7 length=200 success_rate=0.00 collisions/ep=0.62 (n=8)
+update=98 global_step=100352 SPS=547 ev=0.519 v_bias=-0.4
+update=99 global_step=101376 SPS=551 ev=0.946 v_bias=-1.1 return=-179.9 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=100 global_step=102400 SPS=554 ev=0.797 v_bias=-1.1 return=-169.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 100: return=-170.40, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 100: solved=False worst_gap=1190.46 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=101 global_step=103424 SPS=520 ev=0.965 v_bias=-1.2
+update=102 global_step=104448 SPS=523 ev=0.987 v_bias=-0.6 return=-171.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=103 global_step=105472 SPS=527 ev=0.947 v_bias=-0.1
+update=104 global_step=106496 SPS=531 ev=0.982 v_bias=-0.5 return=-174.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=105 global_step=107520 SPS=534 ev=0.980 v_bias=-0.7 return=-167.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=106 global_step=108544 SPS=537 ev=0.924 v_bias=-0.4
+update=107 global_step=109568 SPS=541 ev=0.989 v_bias=-0.6 return=-168.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=108 global_step=110592 SPS=544 ev=0.992 v_bias=-0.7 return=-166.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=109 global_step=111616 SPS=547 ev=0.984 v_bias=-0.7
+update=110 global_step=112640 SPS=550 ev=0.992 v_bias=-0.7 return=-166.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 110: return=-166.02, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 110: solved=False worst_gap=1186.08 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=111 global_step=113664 SPS=522 ev=0.992 v_bias=-0.8 return=-165.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=112 global_step=114688 SPS=525 ev=0.995 v_bias=-0.6
+update=113 global_step=115712 SPS=529 ev=0.996 v_bias=-0.8 return=-161.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=114 global_step=116736 SPS=532 ev=0.934 v_bias=-1.2 return=-157.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=115 global_step=117760 SPS=535 ev=0.996 v_bias=-1.0 return=-160.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+update=116 global_step=118784 SPS=538 ev=0.995 v_bias=-1.0 return=-156.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=117 global_step=119808 SPS=541 ev=0.026 v_bias=23.9
+update=118 global_step=120832 SPS=544 ev=0.734 v_bias=4.6 return=-353.3 length=200 success_rate=0.00 collisions/ep=4.00 (n=8)
+update=119 global_step=121856 SPS=548 ev=0.873 v_bias=-0.3 return=-158.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=120 global_step=122880 SPS=551 ev=0.721 v_bias=-1.6
+Evaluation at update 120: return=-161.46, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 120: solved=False worst_gap=1181.53 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=121 global_step=123904 SPS=522 ev=0.979 v_bias=-0.1 return=-160.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=122 global_step=124928 SPS=526 ev=0.991 v_bias=-0.6 return=-162.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=123 global_step=125952 SPS=529 ev=0.985 v_bias=-0.1
+update=124 global_step=126976 SPS=531 ev=0.991 v_bias=0.0 return=-166.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=125 global_step=128000 SPS=534 ev=0.982 v_bias=-0.0 return=-164.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=126 global_step=129024 SPS=537 ev=0.995 v_bias=-0.1
+update=127 global_step=130048 SPS=540 ev=0.995 v_bias=-0.2 return=-164.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=128 global_step=131072 SPS=543 ev=0.948 v_bias=-0.0
+update=129 global_step=132096 SPS=546 ev=0.804 v_bias=0.3 return=-165.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=130 global_step=133120 SPS=548 ev=0.991 v_bias=-0.2 return=-170.3 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+Evaluation at update 130: return=-163.89, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 130: solved=False worst_gap=1183.96 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=131 global_step=134144 SPS=523 ev=0.950 v_bias=-0.1
+update=132 global_step=135168 SPS=526 ev=0.994 v_bias=-0.6 return=-162.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=133 global_step=136192 SPS=529 ev=0.996 v_bias=-0.6 return=-160.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=134 global_step=137216 SPS=532 ev=0.994 v_bias=-0.6
+update=135 global_step=138240 SPS=534 ev=0.996 v_bias=-0.7 return=-156.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=136 global_step=139264 SPS=537 ev=0.997 v_bias=-1.0 return=-154.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=137 global_step=140288 SPS=539 ev=0.113 v_bias=15.3
+update=138 global_step=141312 SPS=542 ev=0.749 v_bias=1.7 return=-291.9 length=200 success_rate=0.00 collisions/ep=2.75 (n=8)
+update=139 global_step=142336 SPS=544 ev=-0.551 v_bias=-2.4 return=-153.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=140 global_step=143360 SPS=546 ev=0.985 v_bias=-1.0 return=-157.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+Evaluation at update 140: return=-159.92, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 140: solved=False worst_gap=1179.99 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=141 global_step=144384 SPS=522 ev=0.995 v_bias=-0.8 return=-159.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=142 global_step=145408 SPS=525 ev=0.859 v_bias=-0.7
+update=143 global_step=146432 SPS=527 ev=0.994 v_bias=-0.8 return=-160.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=144 global_step=147456 SPS=530 ev=0.997 v_bias=-0.6 return=-160.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=145 global_step=148480 SPS=532 ev=0.989 v_bias=-0.5
+update=146 global_step=149504 SPS=535 ev=0.996 v_bias=-0.6 return=-158.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=147 global_step=150528 SPS=537 ev=0.997 v_bias=-0.8 return=-157.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=148 global_step=151552 SPS=539 ev=0.997 v_bias=-0.7
+update=149 global_step=152576 SPS=542 ev=0.998 v_bias=-0.6 return=-155.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=150 global_step=153600 SPS=544 ev=0.318 v_bias=0.3 return=-165.8 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+Evaluation at update 150: return=-155.07, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 150: solved=False worst_gap=1175.14 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=151 global_step=154624 SPS=521 ev=0.976 v_bias=0.2
+update=152 global_step=155648 SPS=523 ev=0.994 v_bias=0.1 return=-157.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=153 global_step=156672 SPS=525 ev=0.890 v_bias=0.2
+update=154 global_step=157696 SPS=528 ev=0.996 v_bias=0.0 return=-158.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=155 global_step=158720 SPS=530 ev=0.997 v_bias=0.1 return=-159.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=156 global_step=159744 SPS=532 ev=0.989 v_bias=-0.0
+update=157 global_step=160768 SPS=535 ev=0.997 v_bias=-0.2 return=-156.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=158 global_step=161792 SPS=537 ev=0.998 v_bias=-0.6 return=-152.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=159 global_step=162816 SPS=539 ev=0.996 v_bias=-0.7
+update=160 global_step=163840 SPS=541 ev=0.999 v_bias=-0.7 return=-149.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 160: return=-148.21, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 160: solved=False worst_gap=1168.29 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=161 global_step=164864 SPS=520 ev=0.997 v_bias=-1.1 return=-147.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=162 global_step=165888 SPS=522 ev=0.999 v_bias=-1.0
+update=163 global_step=166912 SPS=524 ev=0.999 v_bias=-0.9 return=-144.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=164 global_step=167936 SPS=526 ev=0.018 v_bias=38.7 return=-239.2 length=200 success_rate=0.00 collisions/ep=2.00 (n=1)
+update=165 global_step=168960 SPS=528 ev=0.732 v_bias=6.9 return=-549.4 length=200 success_rate=0.00 collisions/ep=8.14 (n=7)
+update=166 global_step=169984 SPS=530 ev=0.868 v_bias=-1.0 return=-171.3 length=200 success_rate=0.00 collisions/ep=0.50 (n=8)
+update=167 global_step=171008 SPS=532 ev=0.455 v_bias=-4.0
+update=168 global_step=172032 SPS=534 ev=0.985 v_bias=-2.2 return=-149.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=169 global_step=173056 SPS=537 ev=0.993 v_bias=-2.3 return=-152.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=170 global_step=174080 SPS=538 ev=0.976 v_bias=-2.3
+Evaluation at update 170: return=-153.28, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 170: solved=False worst_gap=1219.36 at p_x0=2.00 p_y0=-1.00 (consecutive=0)
+update=171 global_step=175104 SPS=518 ev=0.996 v_bias=-1.8 return=-152.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=172 global_step=176128 SPS=520 ev=0.997 v_bias=-1.5 return=-152.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=173 global_step=177152 SPS=522 ev=0.509 v_bias=-0.9
+update=174 global_step=178176 SPS=525 ev=0.989 v_bias=-1.6 return=-165.3 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=175 global_step=179200 SPS=527 ev=0.984 v_bias=-1.4 return=-150.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=176 global_step=180224 SPS=529 ev=0.995 v_bias=-1.7
+update=177 global_step=181248 SPS=531 ev=0.998 v_bias=-1.3 return=-147.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=178 global_step=182272 SPS=533 ev=0.214 v_bias=0.1
+update=179 global_step=183296 SPS=535 ev=0.991 v_bias=0.0 return=-159.3 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=180 global_step=184320 SPS=537 ev=0.995 v_bias=-0.5 return=-149.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 180: return=-150.75, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 180: solved=False worst_gap=1170.83 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=181 global_step=185344 SPS=518 ev=0.972 v_bias=-0.4
+update=182 global_step=186368 SPS=520 ev=0.999 v_bias=-0.4 return=-150.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=183 global_step=187392 SPS=522 ev=0.999 v_bias=-0.2 return=-150.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=184 global_step=188416 SPS=524 ev=0.997 v_bias=-0.1
+update=185 global_step=189440 SPS=526 ev=0.999 v_bias=-0.3 return=-150.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=186 global_step=190464 SPS=528 ev=0.999 v_bias=-0.5 return=-148.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=187 global_step=191488 SPS=530 ev=0.999 v_bias=-0.5
+update=188 global_step=192512 SPS=532 ev=0.999 v_bias=-0.4 return=-147.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=189 global_step=193536 SPS=533 ev=0.059 v_bias=3.9 return=-139.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=190 global_step=194560 SPS=535 ev=0.925 v_bias=2.3 return=-189.3 length=200 success_rate=0.00 collisions/ep=0.86 (n=7)
+Evaluation at update 190: return=-148.21, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 190: solved=False worst_gap=1168.30 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=191 global_step=195584 SPS=518 ev=0.978 v_bias=0.9 return=-146.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=192 global_step=196608 SPS=520 ev=0.867 v_bias=0.3
+update=193 global_step=197632 SPS=522 ev=0.998 v_bias=0.2 return=-148.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=194 global_step=198656 SPS=523 ev=0.227 v_bias=3.0 return=-151.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=195 global_step=199680 SPS=525 ev=0.284 v_bias=-0.2
+update=196 global_step=200704 SPS=527 ev=0.961 v_bias=0.1 return=-176.6 length=200 success_rate=0.00 collisions/ep=0.50 (n=8)
+update=197 global_step=201728 SPS=528 ev=0.997 v_bias=0.0 return=-150.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=198 global_step=202752 SPS=530 ev=0.993 v_bias=-0.1
+update=199 global_step=203776 SPS=532 ev=0.995 v_bias=-0.3 return=-148.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=200 global_step=204800 SPS=534 ev=0.992 v_bias=-0.4 return=-145.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 200: return=-144.77, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 200: solved=False worst_gap=1164.86 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=201 global_step=205824 SPS=518 ev=0.998 v_bias=-0.6
+update=202 global_step=206848 SPS=520 ev=0.999 v_bias=-0.5 return=-142.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=203 global_step=207872 SPS=522 ev=0.072 v_bias=3.5
+update=204 global_step=208896 SPS=523 ev=0.971 v_bias=2.5 return=-174.6 length=200 success_rate=0.00 collisions/ep=0.62 (n=8)
+update=205 global_step=209920 SPS=525 ev=0.986 v_bias=0.6 return=-146.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=206 global_step=210944 SPS=527 ev=0.925 v_bias=-0.1
+update=207 global_step=211968 SPS=529 ev=0.998 v_bias=0.3 return=-148.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=208 global_step=212992 SPS=530 ev=0.999 v_bias=0.3 return=-149.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=209 global_step=214016 SPS=532 ev=0.997 v_bias=0.4
+update=210 global_step=215040 SPS=533 ev=0.895 v_bias=0.7 return=-148.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 210: return=-149.62, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 210: solved=False worst_gap=1169.70 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=211 global_step=216064 SPS=519 ev=0.992 v_bias=0.3 return=-154.9 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=212 global_step=217088 SPS=521 ev=0.989 v_bias=0.2
+update=213 global_step=218112 SPS=522 ev=0.998 v_bias=-0.0 return=-147.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=214 global_step=219136 SPS=524 ev=0.966 v_bias=-0.3 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=215 global_step=220160 SPS=525 ev=0.999 v_bias=-0.3 return=-146.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+update=216 global_step=221184 SPS=527 ev=0.927 v_bias=0.3 return=-149.7 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=217 global_step=222208 SPS=528 ev=0.967 v_bias=-0.5
+update=218 global_step=223232 SPS=530 ev=0.999 v_bias=-0.4 return=-144.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=219 global_step=224256 SPS=531 ev=0.999 v_bias=-0.2 return=-145.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=220 global_step=225280 SPS=533 ev=0.997 v_bias=-0.2
+Evaluation at update 220: return=-145.03, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 220: solved=False worst_gap=1165.11 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=221 global_step=226304 SPS=520 ev=0.999 v_bias=-0.3 return=-144.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=222 global_step=227328 SPS=521 ev=0.999 v_bias=-0.3 return=-144.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=223 global_step=228352 SPS=523 ev=0.134 v_bias=28.0
+update=224 global_step=229376 SPS=524 ev=0.809 v_bias=5.8 return=-387.4 length=200 success_rate=0.00 collisions/ep=4.88 (n=8)
+update=225 global_step=230400 SPS=526 ev=0.428 v_bias=-4.8 return=-144.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=226 global_step=231424 SPS=528 ev=0.959 v_bias=-1.5
+update=227 global_step=232448 SPS=529 ev=0.987 v_bias=-1.5 return=-147.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=228 global_step=233472 SPS=531 ev=0.800 v_bias=-2.6
+update=229 global_step=234496 SPS=533 ev=0.996 v_bias=-1.7 return=-149.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=230 global_step=235520 SPS=534 ev=0.998 v_bias=-1.4 return=-150.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 230: return=-151.23, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 230: solved=False worst_gap=1217.33 at p_x0=2.00 p_y0=-1.00 (consecutive=0)
+update=231 global_step=236544 SPS=519 ev=0.976 v_bias=-1.4
+update=232 global_step=237568 SPS=521 ev=0.998 v_bias=-1.2 return=-150.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=233 global_step=238592 SPS=522 ev=0.999 v_bias=-1.2 return=-149.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=234 global_step=239616 SPS=524 ev=0.997 v_bias=-1.1
+update=235 global_step=240640 SPS=525 ev=0.999 v_bias=-0.9 return=-148.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=236 global_step=241664 SPS=527 ev=0.999 v_bias=-0.9 return=-148.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=237 global_step=242688 SPS=529 ev=0.999 v_bias=-0.8
+update=238 global_step=243712 SPS=530 ev=0.999 v_bias=-0.7 return=-147.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=239 global_step=244736 SPS=532 ev=0.928 v_bias=-1.0 return=-141.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=240 global_step=245760 SPS=533 ev=0.999 v_bias=-0.9 return=-147.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+Evaluation at update 240: return=-146.57, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 240: solved=False worst_gap=1212.67 at p_x0=2.00 p_y0=-1.00 (consecutive=0)
+update=241 global_step=246784 SPS=519 ev=0.999 v_bias=-0.7 return=-147.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=242 global_step=247808 SPS=521 ev=0.982 v_bias=-0.8
+update=243 global_step=248832 SPS=522 ev=0.999 v_bias=-0.8 return=-145.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=244 global_step=249856 SPS=524 ev=0.751 v_bias=1.7 return=-161.7 length=200 success_rate=0.00 collisions/ep=0.38 (n=8)
+update=245 global_step=250880 SPS=525 ev=0.932 v_bias=-0.7
+update=246 global_step=251904 SPS=526 ev=0.993 v_bias=-0.9 return=-145.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=247 global_step=252928 SPS=528 ev=0.998 v_bias=-0.4 return=-146.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=248 global_step=253952 SPS=529 ev=0.570 v_bias=0.3
+update=249 global_step=254976 SPS=531 ev=0.994 v_bias=-0.6 return=-160.8 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=250 global_step=256000 SPS=532 ev=0.997 v_bias=0.0 return=-147.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 250: return=-147.14, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 250: solved=False worst_gap=1213.24 at p_x0=2.00 p_y0=-1.00 (consecutive=0)
+update=251 global_step=257024 SPS=520 ev=0.998 v_bias=-0.5
+update=252 global_step=258048 SPS=521 ev=0.713 v_bias=1.0 return=-145.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=253 global_step=259072 SPS=523 ev=0.900 v_bias=-0.1
+update=254 global_step=260096 SPS=524 ev=0.965 v_bias=-0.8 return=-159.0 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=255 global_step=261120 SPS=525 ev=0.997 v_bias=-0.5 return=-145.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=256 global_step=262144 SPS=527 ev=0.993 v_bias=-0.3
+update=257 global_step=263168 SPS=528 ev=0.734 v_bias=1.7 return=-150.4 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=258 global_step=264192 SPS=529 ev=0.987 v_bias=-0.4 return=-156.4 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=259 global_step=265216 SPS=531 ev=0.992 v_bias=0.0
+update=260 global_step=266240 SPS=532 ev=0.998 v_bias=-0.1 return=-147.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 260: return=-146.90, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 260: solved=False worst_gap=1166.98 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=261 global_step=267264 SPS=520 ev=0.999 v_bias=-0.1 return=-146.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=262 global_step=268288 SPS=521 ev=1.000 v_bias=0.1
+update=263 global_step=269312 SPS=523 ev=0.999 v_bias=0.1 return=-146.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=264 global_step=270336 SPS=524 ev=0.955 v_bias=-0.2 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=265 global_step=271360 SPS=525 ev=0.999 v_bias=-0.4 return=-146.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+update=266 global_step=272384 SPS=526 ev=1.000 v_bias=-0.3 return=-143.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=267 global_step=273408 SPS=528 ev=0.329 v_bias=0.4
+update=268 global_step=274432 SPS=529 ev=0.999 v_bias=0.1 return=-149.4 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=269 global_step=275456 SPS=530 ev=0.977 v_bias=0.0 return=-150.0 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=270 global_step=276480 SPS=531 ev=0.991 v_bias=-0.0
+Evaluation at update 270: return=-146.35, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 270: solved=False worst_gap=1166.43 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=271 global_step=277504 SPS=519 ev=0.999 v_bias=-0.2 return=-146.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=272 global_step=278528 SPS=520 ev=0.999 v_bias=0.1 return=-146.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=273 global_step=279552 SPS=521 ev=0.999 v_bias=-0.0
+update=274 global_step=280576 SPS=523 ev=1.000 v_bias=-0.1 return=-144.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=275 global_step=281600 SPS=524 ev=0.523 v_bias=0.6 return=-150.5 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=276 global_step=282624 SPS=525 ev=0.997 v_bias=0.2
+update=277 global_step=283648 SPS=526 ev=0.999 v_bias=0.2 return=-145.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=278 global_step=284672 SPS=527 ev=0.964 v_bias=0.1
+update=279 global_step=285696 SPS=529 ev=0.999 v_bias=-0.2 return=-145.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=280 global_step=286720 SPS=530 ev=1.000 v_bias=-0.2 return=-144.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 280: return=-144.67, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 280: solved=False worst_gap=1164.75 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=281 global_step=287744 SPS=518 ev=0.994 v_bias=-0.1
+update=282 global_step=288768 SPS=520 ev=0.999 v_bias=-0.3 return=-143.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=283 global_step=289792 SPS=521 ev=0.788 v_bias=1.3 return=-155.1 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=284 global_step=290816 SPS=522 ev=0.291 v_bias=3.1
+update=285 global_step=291840 SPS=523 ev=0.968 v_bias=0.2 return=-169.0 length=200 success_rate=0.00 collisions/ep=0.50 (n=8)
+update=286 global_step=292864 SPS=524 ev=0.986 v_bias=-0.6 return=-145.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=287 global_step=293888 SPS=526 ev=0.997 v_bias=0.0
+update=288 global_step=294912 SPS=527 ev=0.999 v_bias=-0.0 return=-146.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=289 global_step=295936 SPS=528 ev=0.845 v_bias=-0.0 return=-143.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=290 global_step=296960 SPS=530 ev=0.631 v_bias=1.2 return=-147.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+Evaluation at update 290: return=-146.33, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 290: solved=False worst_gap=1362.46 at p_x0=2.00 p_y0=-1.00 (consecutive=0)
+update=291 global_step=297984 SPS=519 ev=0.558 v_bias=1.8 return=-158.6 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=292 global_step=299008 SPS=520 ev=0.393 v_bias=0.3
+update=293 global_step=300032 SPS=521 ev=0.668 v_bias=-2.1 return=-170.2 length=200 success_rate=0.00 collisions/ep=0.50 (n=8)
+update=294 global_step=301056 SPS=522 ev=0.913 v_bias=-1.2 return=-145.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=295 global_step=302080 SPS=523 ev=0.993 v_bias=-0.1
+update=296 global_step=303104 SPS=525 ev=0.991 v_bias=-0.5 return=-143.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=297 global_step=304128 SPS=526 ev=0.999 v_bias=-0.4 return=-143.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=298 global_step=305152 SPS=527 ev=0.323 v_bias=6.0
+update=299 global_step=306176 SPS=528 ev=0.905 v_bias=0.1 return=-193.3 length=200 success_rate=0.00 collisions/ep=1.00 (n=8)
+update=300 global_step=307200 SPS=529 ev=0.852 v_bias=-0.7 return=-144.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 300: return=-145.31, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 300: solved=False worst_gap=1461.45 at p_x0=2.00 p_y0=-1.00 (consecutive=0)
+update=301 global_step=308224 SPS=519 ev=0.878 v_bias=-0.3
+update=302 global_step=309248 SPS=520 ev=0.992 v_bias=-1.0 return=-151.4 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=303 global_step=310272 SPS=522 ev=0.954 v_bias=-0.5
+update=304 global_step=311296 SPS=523 ev=0.907 v_bias=-0.2 return=-143.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=305 global_step=312320 SPS=524 ev=0.998 v_bias=-0.6 return=-151.2 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=306 global_step=313344 SPS=525 ev=0.980 v_bias=-0.3
+update=307 global_step=314368 SPS=526 ev=0.997 v_bias=-0.6 return=-145.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=308 global_step=315392 SPS=527 ev=0.999 v_bias=-0.3 return=-145.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=309 global_step=316416 SPS=528 ev=0.999 v_bias=-0.3
+update=310 global_step=317440 SPS=529 ev=0.999 v_bias=-0.3 return=-144.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 310: return=-144.30, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 310: solved=False worst_gap=1360.43 at p_x0=2.00 p_y0=-1.00 (consecutive=0)
+update=311 global_step=318464 SPS=519 ev=0.998 v_bias=-0.3 return=-144.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=312 global_step=319488 SPS=520 ev=0.651 v_bias=2.9
+update=313 global_step=320512 SPS=521 ev=0.985 v_bias=-0.0 return=-168.7 length=200 success_rate=0.00 collisions/ep=0.50 (n=8)
+update=314 global_step=321536 SPS=522 ev=0.111 v_bias=1.7 return=-140.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=315 global_step=322560 SPS=524 ev=0.969 v_bias=1.1 return=-168.2 length=200 success_rate=0.00 collisions/ep=0.43 (n=7)
+update=316 global_step=323584 SPS=525 ev=0.990 v_bias=0.5 return=-146.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=317 global_step=324608 SPS=526 ev=0.710 v_bias=-0.1
+update=318 global_step=325632 SPS=527 ev=0.999 v_bias=-0.1 return=-148.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=319 global_step=326656 SPS=528 ev=0.999 v_bias=0.0 return=-147.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=320 global_step=327680 SPS=529 ev=0.997 v_bias=0.1
+Evaluation at update 320: return=-152.53, length=200.00, success_rate=0.00, collisions/ep=0.10
+Solved-check at update 320: solved=False worst_gap=1513.68 at p_x0=2.00 p_y0=-1.00 (consecutive=0)
+update=321 global_step=328704 SPS=520 ev=0.896 v_bias=0.5 return=-147.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=322 global_step=329728 SPS=521 ev=0.998 v_bias=0.1 return=-153.9 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=323 global_step=330752 SPS=522 ev=0.233 v_bias=0.8
+update=324 global_step=331776 SPS=523 ev=0.393 v_bias=1.2 return=-172.1 length=200 success_rate=0.00 collisions/ep=0.50 (n=8)
+update=325 global_step=332800 SPS=524 ev=0.443 v_bias=0.1 return=-171.8 length=200 success_rate=0.00 collisions/ep=0.50 (n=8)
+update=326 global_step=333824 SPS=525 ev=0.813 v_bias=-1.8
+update=327 global_step=334848 SPS=526 ev=0.866 v_bias=-0.4 return=-151.8 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=328 global_step=335872 SPS=527 ev=0.877 v_bias=-0.1
+update=329 global_step=336896 SPS=528 ev=0.783 v_bias=-1.8 return=-158.2 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=330 global_step=337920 SPS=529 ev=0.884 v_bias=0.0 return=-151.6 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+Evaluation at update 330: return=-145.35, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 330: solved=False worst_gap=1361.48 at p_x0=2.00 p_y0=-1.00 (consecutive=0)
+update=331 global_step=338944 SPS=519 ev=0.957 v_bias=-0.1
+update=332 global_step=339968 SPS=520 ev=0.872 v_bias=-1.0 return=-157.3 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=333 global_step=340992 SPS=522 ev=0.980 v_bias=-0.6 return=-145.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=334 global_step=342016 SPS=523 ev=0.996 v_bias=-0.2
+update=335 global_step=343040 SPS=524 ev=0.934 v_bias=0.1 return=-144.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=336 global_step=344064 SPS=525 ev=0.997 v_bias=-0.3 return=-150.2 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=337 global_step=345088 SPS=526 ev=0.998 v_bias=-0.4
+update=338 global_step=346112 SPS=527 ev=0.999 v_bias=-0.2 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=339 global_step=347136 SPS=528 ev=0.137 v_bias=0.5 return=-140.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=340 global_step=348160 SPS=529 ev=0.993 v_bias=-0.3 return=-151.3 length=200 success_rate=0.00 collisions/ep=0.14 (n=7)
+Evaluation at update 340: return=-144.57, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 340: solved=False worst_gap=1164.65 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=341 global_step=349184 SPS=520 ev=0.999 v_bias=0.0 return=-144.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=342 global_step=350208 SPS=521 ev=0.961 v_bias=-0.1
+update=343 global_step=351232 SPS=522 ev=0.999 v_bias=-0.2 return=-145.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=344 global_step=352256 SPS=523 ev=0.999 v_bias=-0.2 return=-144.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=345 global_step=353280 SPS=524 ev=0.996 v_bias=-0.1
+update=346 global_step=354304 SPS=525 ev=0.999 v_bias=-0.2 return=-144.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=347 global_step=355328 SPS=526 ev=0.911 v_bias=0.6 return=-149.5 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=348 global_step=356352 SPS=527 ev=0.997 v_bias=-0.1
+update=349 global_step=357376 SPS=528 ev=0.999 v_bias=-0.0 return=-145.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=350 global_step=358400 SPS=529 ev=0.996 v_bias=0.0 return=-144.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 350: return=-144.15, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 350: solved=False worst_gap=1164.23 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=351 global_step=359424 SPS=520 ev=0.922 v_bias=0.5
+update=352 global_step=360448 SPS=522 ev=0.999 v_bias=0.1 return=-150.8 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=353 global_step=361472 SPS=523 ev=0.851 v_bias=-0.0
+update=354 global_step=362496 SPS=523 ev=0.999 v_bias=-0.2 return=-145.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=355 global_step=363520 SPS=524 ev=1.000 v_bias=-0.2 return=-144.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=356 global_step=364544 SPS=525 ev=0.995 v_bias=-0.0
+update=357 global_step=365568 SPS=526 ev=0.999 v_bias=-0.4 return=-144.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=358 global_step=366592 SPS=527 ev=0.998 v_bias=-0.3 return=-143.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=359 global_step=367616 SPS=528 ev=0.415 v_bias=2.1
+update=360 global_step=368640 SPS=529 ev=0.984 v_bias=0.2 return=-162.7 length=200 success_rate=0.00 collisions/ep=0.38 (n=8)
+Evaluation at update 360: return=-144.14, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 360: solved=False worst_gap=1164.21 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=361 global_step=369664 SPS=520 ev=0.996 v_bias=0.0 return=-144.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=362 global_step=370688 SPS=521 ev=0.999 v_bias=-0.1
+update=363 global_step=371712 SPS=522 ev=1.000 v_bias=-0.1 return=-144.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=364 global_step=372736 SPS=523 ev=0.125 v_bias=1.4 return=-139.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=365 global_step=373760 SPS=524 ev=0.992 v_bias=0.5 return=-159.7 length=200 success_rate=0.00 collisions/ep=0.29 (n=7)
+update=366 global_step=374784 SPS=525 ev=0.997 v_bias=0.2 return=-144.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=367 global_step=375808 SPS=526 ev=0.914 v_bias=0.0
+update=368 global_step=376832 SPS=527 ev=0.999 v_bias=-0.1 return=-145.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=369 global_step=377856 SPS=528 ev=1.000 v_bias=0.0 return=-145.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=370 global_step=378880 SPS=529 ev=0.998 v_bias=0.1
+Evaluation at update 370: return=-144.64, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 370: solved=False worst_gap=1164.72 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=371 global_step=379904 SPS=521 ev=0.999 v_bias=-0.1 return=-144.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=372 global_step=380928 SPS=522 ev=1.000 v_bias=-0.1 return=-143.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=373 global_step=381952 SPS=522 ev=0.999 v_bias=-0.1
+update=374 global_step=382976 SPS=523 ev=1.000 v_bias=-0.1 return=-143.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=375 global_step=384000 SPS=524 ev=0.996 v_bias=-0.2 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=376 global_step=385024 SPS=525 ev=0.770 v_bias=1.4
+update=377 global_step=386048 SPS=526 ev=0.998 v_bias=0.0 return=-155.4 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=378 global_step=387072 SPS=527 ev=0.724 v_bias=-0.2
+update=379 global_step=388096 SPS=528 ev=0.999 v_bias=-0.1 return=-143.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=380 global_step=389120 SPS=529 ev=1.000 v_bias=-0.1 return=-145.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 380: return=-144.42, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 380: solved=False worst_gap=1164.49 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=381 global_step=390144 SPS=521 ev=0.993 v_bias=-0.1
+update=382 global_step=391168 SPS=522 ev=0.998 v_bias=-0.3 return=-143.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=383 global_step=392192 SPS=522 ev=1.000 v_bias=-0.1 return=-143.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=384 global_step=393216 SPS=523 ev=0.999 v_bias=-0.1
+update=385 global_step=394240 SPS=524 ev=1.000 v_bias=-0.2 return=-142.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=386 global_step=395264 SPS=525 ev=1.000 v_bias=-0.1 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=387 global_step=396288 SPS=526 ev=0.830 v_bias=1.4
+update=388 global_step=397312 SPS=527 ev=0.948 v_bias=0.4 return=-161.7 length=200 success_rate=0.00 collisions/ep=0.38 (n=8)
+update=389 global_step=398336 SPS=528 ev=0.080 v_bias=-0.0 return=-141.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=390 global_step=399360 SPS=529 ev=0.998 v_bias=-0.2 return=-145.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+Evaluation at update 390: return=-145.45, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 390: solved=False worst_gap=1361.59 at p_x0=2.00 p_y0=-1.00 (consecutive=0)
+update=391 global_step=400384 SPS=521 ev=0.999 v_bias=-0.1 return=-145.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=392 global_step=401408 SPS=522 ev=0.979 v_bias=0.3
+update=393 global_step=402432 SPS=523 ev=0.999 v_bias=-0.2 return=-145.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=394 global_step=403456 SPS=524 ev=1.000 v_bias=0.1 return=-146.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=395 global_step=404480 SPS=525 ev=0.998 v_bias=0.1
+update=396 global_step=405504 SPS=526 ev=0.999 v_bias=-0.1 return=-144.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=397 global_step=406528 SPS=527 ev=1.000 v_bias=0.0 return=-145.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=398 global_step=407552 SPS=528 ev=0.376 v_bias=0.9
+update=399 global_step=408576 SPS=529 ev=0.984 v_bias=-0.8 return=-164.2 length=200 success_rate=0.00 collisions/ep=0.38 (n=8)
+update=400 global_step=409600 SPS=530 ev=0.982 v_bias=-0.1 return=-144.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 400: return=-149.59, length=200.00, success_rate=0.00, collisions/ep=0.10
+Solved-check at update 400: solved=False worst_gap=1410.74 at p_x0=2.00 p_y0=-1.00 (consecutive=0)
+update=401 global_step=410624 SPS=522 ev=0.370 v_bias=1.9
+update=402 global_step=411648 SPS=523 ev=0.862 v_bias=-0.9 return=-169.1 length=200 success_rate=0.00 collisions/ep=0.50 (n=8)
+update=403 global_step=412672 SPS=524 ev=0.540 v_bias=-0.1
+update=404 global_step=413696 SPS=525 ev=0.703 v_bias=0.1 return=-156.6 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=405 global_step=414720 SPS=525 ev=0.572 v_bias=1.0 return=-161.8 length=200 success_rate=0.00 collisions/ep=0.38 (n=8)
+update=406 global_step=415744 SPS=526 ev=0.819 v_bias=0.3
+update=407 global_step=416768 SPS=527 ev=0.816 v_bias=-1.6 return=-167.9 length=200 success_rate=0.00 collisions/ep=0.50 (n=8)
+update=408 global_step=417792 SPS=528 ev=0.834 v_bias=-1.3 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=409 global_step=418816 SPS=529 ev=0.948 v_bias=-0.2
+update=410 global_step=419840 SPS=530 ev=0.793 v_bias=0.5 return=-148.7 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+Evaluation at update 410: return=-142.86, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 410: solved=False worst_gap=1309.00 at p_x0=2.00 p_y0=-1.00 (consecutive=0)
+update=411 global_step=420864 SPS=522 ev=0.417 v_bias=3.0 return=-186.4 length=200 success_rate=0.00 collisions/ep=0.88 (n=8)
+update=412 global_step=421888 SPS=523 ev=0.878 v_bias=0.5
+update=413 global_step=422912 SPS=524 ev=0.989 v_bias=0.0 return=-150.4 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=414 global_step=423936 SPS=525 ev=0.447 v_bias=-0.4 return=-140.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=415 global_step=424960 SPS=526 ev=0.994 v_bias=-0.6 return=-144.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+update=416 global_step=425984 SPS=526 ev=0.811 v_bias=0.6 return=-144.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=417 global_step=427008 SPS=527 ev=0.904 v_bias=-0.2
+update=418 global_step=428032 SPS=528 ev=0.991 v_bias=-0.4 return=-156.0 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=419 global_step=429056 SPS=529 ev=0.990 v_bias=-0.5 return=-143.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=420 global_step=430080 SPS=530 ev=0.990 v_bias=-0.0
+Evaluation at update 420: return=-143.68, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 420: solved=False worst_gap=1163.75 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=421 global_step=431104 SPS=522 ev=0.974 v_bias=-0.6 return=-143.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=422 global_step=432128 SPS=523 ev=0.999 v_bias=-0.3 return=-143.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=423 global_step=433152 SPS=523 ev=0.849 v_bias=0.6
+update=424 global_step=434176 SPS=524 ev=0.935 v_bias=0.4 return=-155.4 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=425 global_step=435200 SPS=525 ev=0.970 v_bias=-0.3 return=-143.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=426 global_step=436224 SPS=526 ev=0.998 v_bias=-0.2
+update=427 global_step=437248 SPS=527 ev=0.998 v_bias=-0.1 return=-143.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=428 global_step=438272 SPS=528 ev=0.908 v_bias=-0.1
+update=429 global_step=439296 SPS=528 ev=0.998 v_bias=-0.4 return=-144.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=430 global_step=440320 SPS=529 ev=0.999 v_bias=-0.2 return=-144.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 430: return=-143.88, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 430: solved=False worst_gap=1163.95 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=431 global_step=441344 SPS=521 ev=0.996 v_bias=-0.1
+update=432 global_step=442368 SPS=522 ev=0.995 v_bias=-0.4 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=433 global_step=443392 SPS=523 ev=0.999 v_bias=-0.1 return=-142.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=434 global_step=444416 SPS=524 ev=0.998 v_bias=-0.2
+update=435 global_step=445440 SPS=525 ev=0.999 v_bias=-0.1 return=-142.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=436 global_step=446464 SPS=525 ev=0.999 v_bias=-0.2 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=437 global_step=447488 SPS=526 ev=0.999 v_bias=-0.2
+update=438 global_step=448512 SPS=527 ev=0.928 v_bias=0.6 return=-147.8 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=439 global_step=449536 SPS=528 ev=0.866 v_bias=-0.3 return=-139.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=440 global_step=450560 SPS=529 ev=0.999 v_bias=-0.2 return=-143.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+Evaluation at update 440: return=-143.51, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 440: solved=False worst_gap=1163.58 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=441 global_step=451584 SPS=521 ev=0.999 v_bias=-0.2 return=-143.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=442 global_step=452608 SPS=522 ev=0.983 v_bias=-0.2
+update=443 global_step=453632 SPS=523 ev=0.997 v_bias=-0.4 return=-142.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=444 global_step=454656 SPS=524 ev=0.500 v_bias=4.6 return=-179.7 length=200 success_rate=0.00 collisions/ep=0.75 (n=8)
+update=445 global_step=455680 SPS=524 ev=0.719 v_bias=-0.9
+update=446 global_step=456704 SPS=525 ev=0.993 v_bias=-1.1 return=-143.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=447 global_step=457728 SPS=526 ev=0.998 v_bias=-0.4 return=-143.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=448 global_step=458752 SPS=527 ev=0.998 v_bias=-0.5
+update=449 global_step=459776 SPS=528 ev=0.998 v_bias=-0.5 return=-144.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=450 global_step=460800 SPS=529 ev=0.998 v_bias=-0.1 return=-143.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 450: return=-143.97, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 450: solved=False worst_gap=1164.04 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=451 global_step=461824 SPS=521 ev=0.999 v_bias=-0.4
+update=452 global_step=462848 SPS=522 ev=0.999 v_bias=-0.2 return=-143.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=453 global_step=463872 SPS=523 ev=0.943 v_bias=-0.2
+update=454 global_step=464896 SPS=524 ev=0.999 v_bias=-0.4 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=455 global_step=465920 SPS=524 ev=0.999 v_bias=-0.3 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=456 global_step=466944 SPS=525 ev=0.063 v_bias=5.5
+update=457 global_step=467968 SPS=526 ev=0.977 v_bias=1.2 return=-186.3 length=200 success_rate=0.00 collisions/ep=0.88 (n=8)
+update=458 global_step=468992 SPS=527 ev=0.993 v_bias=-0.1 return=-143.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=459 global_step=470016 SPS=527 ev=0.991 v_bias=-0.1
+update=460 global_step=471040 SPS=528 ev=0.999 v_bias=0.1 return=-143.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 460: return=-144.54, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 460: solved=False worst_gap=1164.62 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=461 global_step=472064 SPS=521 ev=1.000 v_bias=-0.2 return=-144.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=462 global_step=473088 SPS=522 ev=0.999 v_bias=-0.1
+update=463 global_step=474112 SPS=523 ev=0.999 v_bias=-0.2 return=-144.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=464 global_step=475136 SPS=523 ev=0.931 v_bias=-0.2 return=-140.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=465 global_step=476160 SPS=524 ev=0.999 v_bias=-0.4 return=-144.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+update=466 global_step=477184 SPS=525 ev=0.999 v_bias=-0.3 return=-143.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=467 global_step=478208 SPS=526 ev=0.986 v_bias=-0.2
+update=468 global_step=479232 SPS=526 ev=0.999 v_bias=-0.5 return=-143.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=469 global_step=480256 SPS=527 ev=1.000 v_bias=-0.2 return=-143.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=470 global_step=481280 SPS=528 ev=0.998 v_bias=-0.2
+Evaluation at update 470: return=-143.67, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 470: solved=False worst_gap=1163.74 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=471 global_step=482304 SPS=521 ev=0.999 v_bias=-0.2 return=-143.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=472 global_step=483328 SPS=522 ev=1.000 v_bias=-0.2 return=-143.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=473 global_step=484352 SPS=523 ev=1.000 v_bias=-0.1
+update=474 global_step=485376 SPS=523 ev=0.999 v_bias=-0.2 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=475 global_step=486400 SPS=524 ev=0.999 v_bias=-0.2 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=476 global_step=487424 SPS=525 ev=1.000 v_bias=-0.2
+update=477 global_step=488448 SPS=525 ev=0.825 v_bias=0.7 return=-154.8 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=478 global_step=489472 SPS=526 ev=0.634 v_bias=-0.1
+update=479 global_step=490496 SPS=527 ev=0.998 v_bias=-0.3 return=-143.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=480 global_step=491520 SPS=528 ev=0.999 v_bias=-0.1 return=-143.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 480: return=-144.52, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 480: solved=False worst_gap=1164.60 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=481 global_step=492544 SPS=521 ev=0.991 v_bias=0.1
+update=482 global_step=493568 SPS=522 ev=0.999 v_bias=-0.2 return=-143.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=483 global_step=494592 SPS=522 ev=0.999 v_bias=-0.0 return=-144.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=484 global_step=495616 SPS=523 ev=0.999 v_bias=0.0
+update=485 global_step=496640 SPS=524 ev=0.999 v_bias=-0.1 return=-143.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=486 global_step=497664 SPS=525 ev=1.000 v_bias=0.0 return=-143.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=487 global_step=498688 SPS=526 ev=1.000 v_bias=-0.0
+update=488 global_step=499712 SPS=526 ev=1.000 v_bias=-0.0 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=489 global_step=500736 SPS=527 ev=0.907 v_bias=-0.1 return=-138.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=490 global_step=501760 SPS=528 ev=0.999 v_bias=-0.3 return=-143.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+Evaluation at update 490: return=-142.86, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 490: solved=False worst_gap=1162.94 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=491 global_step=502784 SPS=520 ev=0.918 v_bias=0.4 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=492 global_step=503808 SPS=521 ev=0.944 v_bias=-0.1
+update=493 global_step=504832 SPS=522 ev=0.749 v_bias=1.1 return=-148.7 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=494 global_step=505856 SPS=522 ev=0.994 v_bias=-0.7 return=-155.5 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=495 global_step=506880 SPS=523 ev=0.976 v_bias=0.0
+update=496 global_step=507904 SPS=524 ev=0.998 v_bias=-0.3 return=-143.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=497 global_step=508928 SPS=524 ev=0.999 v_bias=-0.1 return=-143.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=498 global_step=509952 SPS=525 ev=0.843 v_bias=0.7
+update=499 global_step=510976 SPS=526 ev=0.787 v_bias=1.5 return=-150.4 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=500 global_step=512000 SPS=527 ev=0.817 v_bias=0.2 return=-157.2 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+Evaluation at update 500: return=-145.35, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 500: solved=False worst_gap=1165.43 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=501 global_step=513024 SPS=520 ev=0.994 v_bias=-0.5
+update=502 global_step=514048 SPS=521 ev=0.996 v_bias=-0.3 return=-145.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=503 global_step=515072 SPS=522 ev=0.715 v_bias=0.3
+update=504 global_step=516096 SPS=523 ev=0.997 v_bias=-0.3 return=-144.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=505 global_step=517120 SPS=523 ev=0.999 v_bias=0.0 return=-145.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=506 global_step=518144 SPS=524 ev=0.985 v_bias=0.2
+update=507 global_step=519168 SPS=525 ev=0.998 v_bias=-0.1 return=-145.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=508 global_step=520192 SPS=526 ev=0.999 v_bias=0.0 return=-144.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=509 global_step=521216 SPS=526 ev=0.999 v_bias=0.1
+update=510 global_step=522240 SPS=527 ev=1.000 v_bias=0.0 return=-144.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 510: return=-144.49, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 510: solved=False worst_gap=1210.61 at p_x0=2.00 p_y0=-1.00 (consecutive=0)
+update=511 global_step=523264 SPS=521 ev=1.000 v_bias=0.0 return=-144.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=512 global_step=524288 SPS=521 ev=1.000 v_bias=0.0
+update=513 global_step=525312 SPS=522 ev=1.000 v_bias=0.0 return=-144.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=514 global_step=526336 SPS=523 ev=0.942 v_bias=-0.1 return=-139.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=515 global_step=527360 SPS=523 ev=0.464 v_bias=1.7 return=-143.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+update=516 global_step=528384 SPS=524 ev=0.951 v_bias=-0.7 return=-161.9 length=200 success_rate=0.00 collisions/ep=0.38 (n=8)
+update=517 global_step=529408 SPS=525 ev=0.949 v_bias=0.0
+update=518 global_step=530432 SPS=525 ev=0.988 v_bias=-0.6 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=519 global_step=531456 SPS=526 ev=0.998 v_bias=-0.2 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=520 global_step=532480 SPS=527 ev=0.198 v_bias=2.4
+Evaluation at update 520: return=-142.79, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 520: solved=False worst_gap=1162.86 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=521 global_step=533504 SPS=520 ev=0.992 v_bias=0.8 return=-161.2 length=200 success_rate=0.00 collisions/ep=0.38 (n=8)
+update=522 global_step=534528 SPS=521 ev=0.991 v_bias=-0.3 return=-143.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=523 global_step=535552 SPS=522 ev=0.996 v_bias=0.1
+update=524 global_step=536576 SPS=522 ev=0.999 v_bias=0.2 return=-143.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=525 global_step=537600 SPS=523 ev=0.997 v_bias=-0.2 return=-143.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=526 global_step=538624 SPS=524 ev=0.999 v_bias=-0.0
+update=527 global_step=539648 SPS=524 ev=0.999 v_bias=-0.0 return=-143.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=528 global_step=540672 SPS=525 ev=0.963 v_bias=-0.1
+update=529 global_step=541696 SPS=526 ev=0.999 v_bias=-0.3 return=-143.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=530 global_step=542720 SPS=526 ev=0.999 v_bias=-0.3 return=-142.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 530: return=-142.96, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 530: solved=False worst_gap=1163.03 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=531 global_step=543744 SPS=520 ev=0.993 v_bias=-0.1
+update=532 global_step=544768 SPS=521 ev=0.999 v_bias=-0.4 return=-142.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=533 global_step=545792 SPS=522 ev=0.925 v_bias=0.6 return=-149.1 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=534 global_step=546816 SPS=522 ev=0.992 v_bias=-0.2
+update=535 global_step=547840 SPS=523 ev=0.999 v_bias=-0.2 return=-143.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=536 global_step=548864 SPS=524 ev=0.999 v_bias=-0.1 return=-143.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=537 global_step=549888 SPS=524 ev=0.594 v_bias=1.0
+update=538 global_step=550912 SPS=525 ev=0.981 v_bias=-1.0 return=-155.5 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=539 global_step=551936 SPS=526 ev=0.848 v_bias=-0.1 return=-140.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=540 global_step=552960 SPS=526 ev=0.993 v_bias=-0.7 return=-143.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+Evaluation at update 540: return=-142.50, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 540: solved=False worst_gap=1162.58 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=541 global_step=553984 SPS=520 ev=0.997 v_bias=-0.4 return=-142.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=542 global_step=555008 SPS=521 ev=0.082 v_bias=2.3
+update=543 global_step=556032 SPS=522 ev=0.935 v_bias=0.7 return=-161.6 length=200 success_rate=0.00 collisions/ep=0.38 (n=8)
+update=544 global_step=557056 SPS=522 ev=0.996 v_bias=-0.2 return=-149.4 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=545 global_step=558080 SPS=523 ev=0.985 v_bias=-0.2
+update=546 global_step=559104 SPS=524 ev=0.999 v_bias=-0.3 return=-143.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=547 global_step=560128 SPS=524 ev=0.999 v_bias=-0.1 return=-143.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=548 global_step=561152 SPS=525 ev=0.999 v_bias=-0.1
+update=549 global_step=562176 SPS=525 ev=0.999 v_bias=-0.1 return=-144.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=550 global_step=563200 SPS=526 ev=0.998 v_bias=-0.0 return=-143.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 550: return=-144.17, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 550: solved=False worst_gap=1164.25 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=551 global_step=564224 SPS=520 ev=0.999 v_bias=-0.2
+update=552 global_step=565248 SPS=521 ev=0.999 v_bias=-0.1 return=-144.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=553 global_step=566272 SPS=521 ev=0.886 v_bias=-0.1
+update=554 global_step=567296 SPS=522 ev=0.999 v_bias=-0.4 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=555 global_step=568320 SPS=523 ev=0.999 v_bias=-0.2 return=-143.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=556 global_step=569344 SPS=523 ev=0.996 v_bias=-0.2
+update=557 global_step=570368 SPS=524 ev=0.659 v_bias=2.1 return=-142.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=558 global_step=571392 SPS=525 ev=0.994 v_bias=-0.7 return=-161.4 length=200 success_rate=0.00 collisions/ep=0.38 (n=8)
+update=559 global_step=572416 SPS=525 ev=0.973 v_bias=0.1
+update=560 global_step=573440 SPS=526 ev=0.997 v_bias=-0.1 return=-143.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 560: return=-144.44, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 560: solved=False worst_gap=1164.51 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=561 global_step=574464 SPS=520 ev=0.998 v_bias=0.0 return=-143.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=562 global_step=575488 SPS=521 ev=0.999 v_bias=0.0
+update=563 global_step=576512 SPS=522 ev=0.999 v_bias=0.0 return=-144.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=564 global_step=577536 SPS=522 ev=0.899 v_bias=0.2 return=-140.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=565 global_step=578560 SPS=523 ev=0.999 v_bias=-0.2 return=-145.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+update=566 global_step=579584 SPS=523 ev=0.999 v_bias=-0.1 return=-144.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=567 global_step=580608 SPS=524 ev=0.979 v_bias=0.1
+update=568 global_step=581632 SPS=525 ev=0.999 v_bias=-0.2 return=-144.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=569 global_step=582656 SPS=525 ev=0.999 v_bias=-0.1 return=-144.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=570 global_step=583680 SPS=526 ev=0.998 v_bias=0.1
+Evaluation at update 570: return=-144.40, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 570: solved=False worst_gap=1164.48 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=571 global_step=584704 SPS=521 ev=0.999 v_bias=-0.1 return=-144.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=572 global_step=585728 SPS=521 ev=1.000 v_bias=-0.0 return=-144.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=573 global_step=586752 SPS=522 ev=1.000 v_bias=0.1
+update=574 global_step=587776 SPS=522 ev=1.000 v_bias=0.0 return=-144.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=575 global_step=588800 SPS=523 ev=0.998 v_bias=-0.0 return=-144.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=576 global_step=589824 SPS=524 ev=1.000 v_bias=-0.1
+update=577 global_step=590848 SPS=524 ev=1.000 v_bias=-0.1 return=-144.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=578 global_step=591872 SPS=525 ev=0.942 v_bias=-0.0
+update=579 global_step=592896 SPS=525 ev=0.999 v_bias=-0.3 return=-144.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=580 global_step=593920 SPS=526 ev=1.000 v_bias=-0.2 return=-143.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 580: return=-144.15, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 580: solved=False worst_gap=1164.22 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=581 global_step=594944 SPS=521 ev=0.995 v_bias=-0.1
+update=582 global_step=595968 SPS=521 ev=0.999 v_bias=-0.3 return=-143.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=583 global_step=596992 SPS=522 ev=1.000 v_bias=-0.1 return=-143.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=584 global_step=598016 SPS=522 ev=0.999 v_bias=-0.1
+update=585 global_step=599040 SPS=523 ev=1.000 v_bias=-0.2 return=-143.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=586 global_step=600064 SPS=524 ev=1.000 v_bias=-0.1 return=-143.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=587 global_step=601088 SPS=524 ev=1.000 v_bias=-0.2
+update=588 global_step=602112 SPS=525 ev=1.000 v_bias=-0.2 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=589 global_step=603136 SPS=525 ev=0.093 v_bias=0.6 return=-139.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=590 global_step=604160 SPS=526 ev=0.999 v_bias=-0.0 return=-150.2 length=200 success_rate=0.00 collisions/ep=0.14 (n=7)
+Evaluation at update 590: return=-143.31, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 590: solved=False worst_gap=1163.38 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=591 global_step=605184 SPS=520 ev=1.000 v_bias=-0.0 return=-143.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=592 global_step=606208 SPS=520 ev=0.970 v_bias=-0.0
+update=593 global_step=607232 SPS=521 ev=0.999 v_bias=-0.2 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=594 global_step=608256 SPS=522 ev=1.000 v_bias=-0.2 return=-143.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=595 global_step=609280 SPS=522 ev=0.999 v_bias=-0.1
+update=596 global_step=610304 SPS=523 ev=1.000 v_bias=-0.2 return=-142.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=597 global_step=611328 SPS=523 ev=0.368 v_bias=5.1 return=-185.7 length=200 success_rate=0.00 collisions/ep=0.88 (n=8)
+update=598 global_step=612352 SPS=524 ev=0.939 v_bias=-0.2
+update=599 global_step=613376 SPS=525 ev=0.997 v_bias=-0.4 return=-143.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=600 global_step=614400 SPS=525 ev=0.982 v_bias=-0.4 return=-143.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 600: return=-143.92, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 600: solved=False worst_gap=1163.99 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=601 global_step=615424 SPS=520 ev=0.999 v_bias=-0.4
+update=602 global_step=616448 SPS=521 ev=0.999 v_bias=-0.3 return=-143.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=603 global_step=617472 SPS=521 ev=0.909 v_bias=-0.0
+update=604 global_step=618496 SPS=522 ev=0.688 v_bias=0.9 return=-144.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=605 global_step=619520 SPS=522 ev=0.986 v_bias=-0.3 return=-156.4 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=606 global_step=620544 SPS=523 ev=0.979 v_bias=-0.0
+update=607 global_step=621568 SPS=524 ev=0.993 v_bias=-0.6 return=-144.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=608 global_step=622592 SPS=524 ev=0.998 v_bias=-0.2 return=-143.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=609 global_step=623616 SPS=525 ev=0.876 v_bias=0.1
+update=610 global_step=624640 SPS=525 ev=0.997 v_bias=-0.4 return=-150.1 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+Evaluation at update 610: return=-143.59, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 610: solved=False worst_gap=1163.66 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=611 global_step=625664 SPS=520 ev=1.000 v_bias=-0.1 return=-143.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=612 global_step=626688 SPS=520 ev=0.999 v_bias=-0.1
+update=613 global_step=627712 SPS=521 ev=0.328 v_bias=2.5 return=-143.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=614 global_step=628736 SPS=521 ev=0.029 v_bias=-0.1 return=-139.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=615 global_step=629760 SPS=522 ev=0.926 v_bias=-1.3 return=-172.5 length=200 success_rate=0.00 collisions/ep=0.57 (n=7)
+update=616 global_step=630784 SPS=523 ev=0.970 v_bias=-1.0 return=-142.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=617 global_step=631808 SPS=523 ev=0.958 v_bias=-0.0
+update=618 global_step=632832 SPS=524 ev=0.994 v_bias=-0.7 return=-142.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=619 global_step=633856 SPS=524 ev=0.999 v_bias=-0.3 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=620 global_step=634880 SPS=525 ev=0.998 v_bias=0.0
+Evaluation at update 620: return=-147.60, length=200.00, success_rate=0.00, collisions/ep=0.10
+Solved-check at update 620: solved=False worst_gap=1358.74 at p_x0=2.00 p_y0=-1.00 (consecutive=0)
+update=621 global_step=635904 SPS=520 ev=0.997 v_bias=-0.3 return=-142.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=622 global_step=636928 SPS=520 ev=0.350 v_bias=6.6 return=-198.2 length=200 success_rate=0.00 collisions/ep=1.12 (n=8)
+update=623 global_step=637952 SPS=521 ev=0.628 v_bias=1.4
+update=624 global_step=638976 SPS=522 ev=0.992 v_bias=-0.8 return=-161.6 length=200 success_rate=0.00 collisions/ep=0.38 (n=8)
+update=625 global_step=640000 SPS=522 ev=0.946 v_bias=-0.8 return=-143.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=626 global_step=641024 SPS=523 ev=0.918 v_bias=-0.2
+update=627 global_step=642048 SPS=523 ev=0.100 v_bias=3.9 return=-150.1 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=628 global_step=643072 SPS=524 ev=0.693 v_bias=-0.5
+update=629 global_step=644096 SPS=524 ev=0.853 v_bias=-2.6 return=-187.4 length=200 success_rate=0.00 collisions/ep=0.88 (n=8)
+update=630 global_step=645120 SPS=525 ev=0.919 v_bias=-1.1 return=-143.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 630: return=-142.79, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 630: solved=False worst_gap=1208.91 at p_x0=2.00 p_y0=-1.00 (consecutive=0)
+update=631 global_step=646144 SPS=520 ev=0.984 v_bias=-0.4
+update=632 global_step=647168 SPS=521 ev=0.970 v_bias=-1.4 return=-148.5 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=633 global_step=648192 SPS=521 ev=0.914 v_bias=0.3 return=-149.0 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=634 global_step=649216 SPS=522 ev=0.996 v_bias=-0.3
+update=635 global_step=650240 SPS=522 ev=0.994 v_bias=-0.5 return=-143.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=636 global_step=651264 SPS=523 ev=0.999 v_bias=-0.2 return=-143.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=637 global_step=652288 SPS=523 ev=0.999 v_bias=-0.2
+update=638 global_step=653312 SPS=524 ev=0.999 v_bias=-0.2 return=-143.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=639 global_step=654336 SPS=524 ev=0.830 v_bias=-0.1 return=-139.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=640 global_step=655360 SPS=525 ev=0.999 v_bias=-0.3 return=-143.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+Evaluation at update 640: return=-143.81, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 640: solved=False worst_gap=1209.93 at p_x0=2.00 p_y0=-1.00 (consecutive=0)
+update=641 global_step=656384 SPS=520 ev=0.999 v_bias=-0.2 return=-143.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=642 global_step=657408 SPS=520 ev=0.961 v_bias=-0.2
+update=643 global_step=658432 SPS=521 ev=0.998 v_bias=-0.4 return=-143.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=644 global_step=659456 SPS=521 ev=0.999 v_bias=-0.3 return=-142.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=645 global_step=660480 SPS=522 ev=0.584 v_bias=0.5
+update=646 global_step=661504 SPS=522 ev=0.997 v_bias=-0.2 return=-149.2 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=647 global_step=662528 SPS=523 ev=0.999 v_bias=-0.1 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=648 global_step=663552 SPS=524 ev=0.999 v_bias=-0.0
+update=649 global_step=664576 SPS=524 ev=0.999 v_bias=-0.1 return=-143.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=650 global_step=665600 SPS=525 ev=0.998 v_bias=-0.0 return=-143.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 650: return=-143.58, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 650: solved=False worst_gap=1163.66 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=651 global_step=666624 SPS=520 ev=0.998 v_bias=-0.3
+update=652 global_step=667648 SPS=520 ev=0.999 v_bias=-0.1 return=-143.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=653 global_step=668672 SPS=521 ev=0.956 v_bias=-0.1
+update=654 global_step=669696 SPS=521 ev=0.999 v_bias=-0.3 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=655 global_step=670720 SPS=522 ev=0.999 v_bias=-0.3 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=656 global_step=671744 SPS=522 ev=0.368 v_bias=0.7
+update=657 global_step=672768 SPS=523 ev=0.999 v_bias=-0.0 return=-148.4 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=658 global_step=673792 SPS=523 ev=0.999 v_bias=-0.0 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=659 global_step=674816 SPS=524 ev=0.999 v_bias=0.0
+update=660 global_step=675840 SPS=524 ev=0.999 v_bias=-0.0 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 660: return=-143.31, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 660: solved=False worst_gap=1163.39 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=661 global_step=676864 SPS=520 ev=1.000 v_bias=-0.0 return=-143.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=662 global_step=677888 SPS=520 ev=1.000 v_bias=-0.0
+update=663 global_step=678912 SPS=521 ev=0.999 v_bias=-0.0 return=-142.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=664 global_step=679936 SPS=521 ev=0.878 v_bias=-0.1 return=-139.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=665 global_step=680960 SPS=522 ev=0.999 v_bias=-0.3 return=-143.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+update=666 global_step=681984 SPS=522 ev=0.999 v_bias=-0.2 return=-141.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=667 global_step=683008 SPS=523 ev=0.989 v_bias=-0.1
+update=668 global_step=684032 SPS=523 ev=0.999 v_bias=-0.3 return=-142.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=669 global_step=685056 SPS=524 ev=0.931 v_bias=0.6 return=-148.1 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=670 global_step=686080 SPS=524 ev=0.329 v_bias=1.4
+Evaluation at update 670: return=-142.81, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 670: solved=False worst_gap=1162.88 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=671 global_step=687104 SPS=519 ev=0.997 v_bias=0.2 return=-155.2 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=672 global_step=688128 SPS=520 ev=0.998 v_bias=-0.3 return=-142.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=673 global_step=689152 SPS=520 ev=0.999 v_bias=-0.1
+update=674 global_step=690176 SPS=521 ev=1.000 v_bias=-0.1 return=-143.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=675 global_step=691200 SPS=522 ev=0.999 v_bias=-0.1 return=-143.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=676 global_step=692224 SPS=522 ev=0.999 v_bias=-0.3
+update=677 global_step=693248 SPS=523 ev=1.000 v_bias=-0.1 return=-143.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=678 global_step=694272 SPS=523 ev=0.938 v_bias=-0.1
+update=679 global_step=695296 SPS=524 ev=0.999 v_bias=-0.3 return=-143.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=680 global_step=696320 SPS=524 ev=1.000 v_bias=-0.2 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 680: return=-143.20, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 680: solved=False worst_gap=1163.27 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=681 global_step=697344 SPS=520 ev=0.996 v_bias=-0.1
+update=682 global_step=698368 SPS=520 ev=0.999 v_bias=-0.3 return=-143.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=683 global_step=699392 SPS=521 ev=1.000 v_bias=-0.1 return=-142.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=684 global_step=700416 SPS=521 ev=0.999 v_bias=-0.1
+update=685 global_step=701440 SPS=522 ev=1.000 v_bias=-0.2 return=-142.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=686 global_step=702464 SPS=522 ev=1.000 v_bias=-0.2 return=-142.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=687 global_step=703488 SPS=523 ev=1.000 v_bias=-0.1
+update=688 global_step=704512 SPS=523 ev=1.000 v_bias=-0.1 return=-142.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=689 global_step=705536 SPS=524 ev=0.915 v_bias=-0.1 return=-138.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=690 global_step=706560 SPS=524 ev=0.924 v_bias=0.5 return=-142.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+Evaluation at update 690: return=-142.78, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 690: solved=False worst_gap=1162.85 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=691 global_step=707584 SPS=520 ev=0.999 v_bias=-0.2 return=-148.6 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=692 global_step=708608 SPS=520 ev=0.958 v_bias=-0.2
+update=693 global_step=709632 SPS=521 ev=0.999 v_bias=-0.3 return=-142.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=694 global_step=710656 SPS=521 ev=1.000 v_bias=-0.1 return=-142.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=695 global_step=711680 SPS=522 ev=0.999 v_bias=-0.1
+update=696 global_step=712704 SPS=522 ev=0.999 v_bias=-0.2 return=-142.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=697 global_step=713728 SPS=523 ev=1.000 v_bias=-0.2 return=-142.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=698 global_step=714752 SPS=523 ev=0.389 v_bias=2.2
+update=699 global_step=715776 SPS=524 ev=0.941 v_bias=-0.3 return=-160.8 length=200 success_rate=0.00 collisions/ep=0.38 (n=8)
+update=700 global_step=716800 SPS=524 ev=0.514 v_bias=0.8 return=-148.6 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+Evaluation at update 700: return=-143.15, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 700: solved=False worst_gap=1163.23 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=701 global_step=717824 SPS=520 ev=0.991 v_bias=-0.4
+update=702 global_step=718848 SPS=520 ev=0.999 v_bias=-0.3 return=-142.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=703 global_step=719872 SPS=521 ev=0.885 v_bias=0.0
+update=704 global_step=720896 SPS=521 ev=0.998 v_bias=-0.5 return=-143.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=705 global_step=721920 SPS=522 ev=0.999 v_bias=-0.2 return=-143.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=706 global_step=722944 SPS=522 ev=0.996 v_bias=0.1
+update=707 global_step=723968 SPS=523 ev=0.999 v_bias=-0.3 return=-144.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=708 global_step=724992 SPS=523 ev=1.000 v_bias=-0.1 return=-143.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=709 global_step=726016 SPS=524 ev=1.000 v_bias=-0.0
+update=710 global_step=727040 SPS=524 ev=0.999 v_bias=-0.1 return=-143.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 710: return=-143.28, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 710: solved=False worst_gap=1163.36 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=711 global_step=728064 SPS=520 ev=1.000 v_bias=-0.1 return=-142.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=712 global_step=729088 SPS=521 ev=1.000 v_bias=-0.0
+update=713 global_step=730112 SPS=521 ev=1.000 v_bias=-0.0 return=-143.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=714 global_step=731136 SPS=522 ev=0.912 v_bias=-0.0 return=-139.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=715 global_step=732160 SPS=522 ev=0.999 v_bias=-0.3 return=-143.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+update=716 global_step=733184 SPS=523 ev=1.000 v_bias=-0.2 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=717 global_step=734208 SPS=523 ev=0.978 v_bias=-0.1
+update=718 global_step=735232 SPS=523 ev=0.999 v_bias=-0.3 return=-142.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=719 global_step=736256 SPS=524 ev=1.000 v_bias=-0.2 return=-142.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=720 global_step=737280 SPS=524 ev=0.999 v_bias=-0.0
+Evaluation at update 720: return=-142.63, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 720: solved=False worst_gap=1162.71 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=721 global_step=738304 SPS=520 ev=0.999 v_bias=-0.2 return=-142.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=722 global_step=739328 SPS=520 ev=1.000 v_bias=-0.1 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=723 global_step=740352 SPS=521 ev=1.000 v_bias=-0.0
+update=724 global_step=741376 SPS=521 ev=1.000 v_bias=-0.1 return=-142.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=725 global_step=742400 SPS=522 ev=0.186 v_bias=2.2 return=-160.7 length=200 success_rate=0.00 collisions/ep=0.38 (n=8)
+update=726 global_step=743424 SPS=522 ev=0.995 v_bias=0.0
+update=727 global_step=744448 SPS=523 ev=0.999 v_bias=-0.0 return=-142.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=728 global_step=745472 SPS=523 ev=0.763 v_bias=-0.1
+update=729 global_step=746496 SPS=524 ev=0.999 v_bias=-0.3 return=-143.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=730 global_step=747520 SPS=524 ev=1.000 v_bias=-0.2 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 730: return=-143.42, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 730: solved=False worst_gap=1163.49 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=731 global_step=748544 SPS=520 ev=0.997 v_bias=-0.0
+update=732 global_step=749568 SPS=520 ev=0.999 v_bias=-0.3 return=-143.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=733 global_step=750592 SPS=520 ev=1.000 v_bias=-0.1 return=-143.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=734 global_step=751616 SPS=521 ev=1.000 v_bias=-0.0
+update=735 global_step=752640 SPS=521 ev=1.000 v_bias=-0.1 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=736 global_step=753664 SPS=522 ev=1.000 v_bias=-0.0 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=737 global_step=754688 SPS=522 ev=0.364 v_bias=1.7
+update=738 global_step=755712 SPS=523 ev=0.967 v_bias=-1.3 return=-162.1 length=200 success_rate=0.00 collisions/ep=0.38 (n=8)
+update=739 global_step=756736 SPS=523 ev=0.714 v_bias=-0.1 return=-138.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=740 global_step=757760 SPS=524 ev=0.989 v_bias=-1.0 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+Evaluation at update 740: return=-142.32, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 740: solved=False worst_gap=1162.39 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=741 global_step=758784 SPS=519 ev=0.921 v_bias=0.2 return=-148.4 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=742 global_step=759808 SPS=520 ev=0.934 v_bias=-0.2
+update=743 global_step=760832 SPS=520 ev=0.997 v_bias=-0.5 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=744 global_step=761856 SPS=521 ev=0.999 v_bias=-0.3 return=-142.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=745 global_step=762880 SPS=521 ev=0.996 v_bias=-0.1
+update=746 global_step=763904 SPS=522 ev=0.999 v_bias=-0.3 return=-142.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=747 global_step=764928 SPS=522 ev=1.000 v_bias=-0.1 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=748 global_step=765952 SPS=523 ev=0.999 v_bias=-0.1
+update=749 global_step=766976 SPS=523 ev=1.000 v_bias=-0.1 return=-142.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=750 global_step=768000 SPS=524 ev=0.488 v_bias=0.7 return=-148.4 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+Evaluation at update 750: return=-142.87, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 750: solved=False worst_gap=1162.95 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=751 global_step=769024 SPS=519 ev=0.999 v_bias=-0.2
+update=752 global_step=770048 SPS=520 ev=0.999 v_bias=-0.1 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=753 global_step=771072 SPS=520 ev=0.857 v_bias=-0.1
+update=754 global_step=772096 SPS=521 ev=0.999 v_bias=-0.3 return=-142.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=755 global_step=773120 SPS=521 ev=1.000 v_bias=-0.2 return=-142.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=756 global_step=774144 SPS=522 ev=0.997 v_bias=-0.1
+update=757 global_step=775168 SPS=522 ev=0.304 v_bias=5.4 return=-141.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=758 global_step=776192 SPS=523 ev=0.996 v_bias=-1.0 return=-185.6 length=200 success_rate=0.00 collisions/ep=0.88 (n=8)
+update=759 global_step=777216 SPS=523 ev=0.625 v_bias=0.4
+update=760 global_step=778240 SPS=524 ev=0.996 v_bias=-1.2 return=-148.9 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+Evaluation at update 760: return=-143.27, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 760: solved=False worst_gap=1163.35 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=761 global_step=779264 SPS=520 ev=0.997 v_bias=-0.7 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=762 global_step=780288 SPS=520 ev=0.997 v_bias=-0.9
+update=763 global_step=781312 SPS=521 ev=0.999 v_bias=-0.5 return=-143.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=764 global_step=782336 SPS=521 ev=0.841 v_bias=-0.3 return=-140.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=765 global_step=783360 SPS=521 ev=0.998 v_bias=-0.6 return=-143.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+update=766 global_step=784384 SPS=522 ev=0.999 v_bias=-0.3 return=-144.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=767 global_step=785408 SPS=522 ev=0.969 v_bias=-0.2
+update=768 global_step=786432 SPS=523 ev=0.999 v_bias=-0.5 return=-143.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=769 global_step=787456 SPS=523 ev=1.000 v_bias=-0.2 return=-143.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=770 global_step=788480 SPS=524 ev=0.998 v_bias=-0.2
+Evaluation at update 770: return=-143.42, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 770: solved=False worst_gap=1163.50 at p_x0=2.00 p_y0=0.50 (consecutive=0)
+update=771 global_step=789504 SPS=520 ev=0.999 v_bias=-0.3 return=-142.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=772 global_step=790528 SPS=520 ev=1.000 v_bias=-0.2 return=-143.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=773 global_step=791552 SPS=521 ev=1.000 v_bias=-0.1
+update=774 global_step=792576 SPS=521 ev=1.000 v_bias=-0.1 return=-143.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=775 global_step=793600 SPS=521 ev=0.999 v_bias=-0.1 return=-143.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=776 global_step=794624 SPS=522 ev=1.000 v_bias=-0.2
+update=777 global_step=795648 SPS=522 ev=1.000 v_bias=-0.1 return=-142.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=778 global_step=796672 SPS=523 ev=0.923 v_bias=-0.1
+update=779 global_step=797696 SPS=523 ev=0.999 v_bias=-0.3 return=-142.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=780 global_step=798720 SPS=524 ev=1.000 v_bias=-0.2 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 780: return=-143.32, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 780: solved=False worst_gap=1163.39 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=781 global_step=799744 SPS=520 ev=0.997 v_bias=-0.1
+update=782 global_step=800768 SPS=520 ev=0.999 v_bias=-0.3 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=783 global_step=801792 SPS=521 ev=1.000 v_bias=-0.1 return=-143.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=784 global_step=802816 SPS=521 ev=0.999 v_bias=-0.1
+update=785 global_step=803840 SPS=522 ev=0.999 v_bias=-0.2 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=786 global_step=804864 SPS=522 ev=1.000 v_bias=-0.1 return=-142.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=787 global_step=805888 SPS=522 ev=1.000 v_bias=-0.1
+update=788 global_step=806912 SPS=523 ev=0.943 v_bias=0.3 return=-148.5 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=789 global_step=807936 SPS=523 ev=0.781 v_bias=-0.1 return=-138.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=790 global_step=808960 SPS=524 ev=0.999 v_bias=-0.3 return=-142.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+Evaluation at update 790: return=-143.41, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 790: solved=False worst_gap=1163.48 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=791 global_step=809984 SPS=520 ev=1.000 v_bias=-0.1 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=792 global_step=811008 SPS=520 ev=0.984 v_bias=-0.0
+update=793 global_step=812032 SPS=521 ev=0.999 v_bias=-0.3 return=-142.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=794 global_step=813056 SPS=521 ev=1.000 v_bias=-0.2 return=-142.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=795 global_step=814080 SPS=522 ev=0.998 v_bias=-0.1
+update=796 global_step=815104 SPS=522 ev=0.999 v_bias=-0.2 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=797 global_step=816128 SPS=523 ev=1.000 v_bias=-0.1 return=-142.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=798 global_step=817152 SPS=523 ev=1.000 v_bias=-0.1
+update=799 global_step=818176 SPS=524 ev=1.000 v_bias=-0.1 return=-141.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=800 global_step=819200 SPS=524 ev=0.999 v_bias=-0.1 return=-142.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 800: return=-142.74, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 800: solved=False worst_gap=1162.81 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=801 global_step=820224 SPS=520 ev=1.000 v_bias=-0.2
+update=802 global_step=821248 SPS=520 ev=0.875 v_bias=1.4 return=-148.3 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=803 global_step=822272 SPS=521 ev=-0.591 v_bias=-0.3
+update=804 global_step=823296 SPS=521 ev=0.999 v_bias=-0.4 return=-148.6 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=805 global_step=824320 SPS=522 ev=1.000 v_bias=-0.1 return=-142.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=806 global_step=825344 SPS=522 ev=0.994 v_bias=-0.1
+update=807 global_step=826368 SPS=522 ev=0.999 v_bias=-0.3 return=-142.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=808 global_step=827392 SPS=523 ev=1.000 v_bias=-0.1 return=-142.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=809 global_step=828416 SPS=523 ev=1.000 v_bias=-0.1
+update=810 global_step=829440 SPS=524 ev=0.999 v_bias=-0.2 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 810: return=-142.79, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 810: solved=False worst_gap=1162.86 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=811 global_step=830464 SPS=520 ev=1.000 v_bias=-0.0 return=-142.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=812 global_step=831488 SPS=520 ev=1.000 v_bias=-0.1
+update=813 global_step=832512 SPS=521 ev=1.000 v_bias=-0.1 return=-142.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=814 global_step=833536 SPS=521 ev=0.928 v_bias=-0.1 return=-137.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=815 global_step=834560 SPS=521 ev=0.502 v_bias=4.6 return=-149.4 length=200 success_rate=0.00 collisions/ep=0.14 (n=7)
+update=816 global_step=835584 SPS=522 ev=0.991 v_bias=0.1 return=-179.6 length=200 success_rate=0.00 collisions/ep=0.75 (n=8)
+update=817 global_step=836608 SPS=522 ev=0.107 v_bias=-0.9
+update=818 global_step=837632 SPS=523 ev=0.999 v_bias=-0.4 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=819 global_step=838656 SPS=523 ev=1.000 v_bias=-0.4 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=820 global_step=839680 SPS=524 ev=0.998 v_bias=-0.3
+Evaluation at update 820: return=-143.64, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 820: solved=False worst_gap=1163.71 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=821 global_step=840704 SPS=520 ev=0.999 v_bias=-0.4 return=-143.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=822 global_step=841728 SPS=520 ev=1.000 v_bias=-0.2 return=-143.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=823 global_step=842752 SPS=521 ev=1.000 v_bias=-0.2
+update=824 global_step=843776 SPS=521 ev=0.914 v_bias=0.5 return=-143.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=825 global_step=844800 SPS=522 ev=0.999 v_bias=-0.1 return=-149.5 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=826 global_step=845824 SPS=522 ev=0.998 v_bias=-0.6
+update=827 global_step=846848 SPS=522 ev=0.999 v_bias=-0.4 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=828 global_step=847872 SPS=523 ev=0.927 v_bias=-0.1
+update=829 global_step=848896 SPS=523 ev=0.998 v_bias=-0.5 return=-142.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=830 global_step=849920 SPS=524 ev=1.000 v_bias=-0.3 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 830: return=-142.54, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 830: solved=False worst_gap=1162.62 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=831 global_step=850944 SPS=520 ev=0.089 v_bias=1.0
+update=832 global_step=851968 SPS=520 ev=0.956 v_bias=-0.7 return=-154.7 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=833 global_step=852992 SPS=521 ev=0.999 v_bias=0.1 return=-142.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=834 global_step=854016 SPS=521 ev=0.984 v_bias=-0.5
+update=835 global_step=855040 SPS=521 ev=0.999 v_bias=-0.4 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=836 global_step=856064 SPS=522 ev=1.000 v_bias=0.0 return=-142.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=837 global_step=857088 SPS=522 ev=0.999 v_bias=-0.2
+update=838 global_step=858112 SPS=523 ev=1.000 v_bias=-0.1 return=-141.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=839 global_step=859136 SPS=523 ev=0.906 v_bias=0.0 return=-139.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=840 global_step=860160 SPS=524 ev=0.999 v_bias=-0.3 return=-143.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+Evaluation at update 840: return=-142.37, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 840: solved=False worst_gap=1162.45 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=841 global_step=861184 SPS=520 ev=1.000 v_bias=-0.2 return=-142.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=842 global_step=862208 SPS=520 ev=0.161 v_bias=0.7
+update=843 global_step=863232 SPS=521 ev=0.999 v_bias=-0.2 return=-148.5 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=844 global_step=864256 SPS=521 ev=1.000 v_bias=-0.1 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=845 global_step=865280 SPS=522 ev=0.999 v_bias=-0.1
+update=846 global_step=866304 SPS=522 ev=0.999 v_bias=-0.2 return=-142.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=847 global_step=867328 SPS=523 ev=1.000 v_bias=-0.1 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=848 global_step=868352 SPS=523 ev=1.000 v_bias=-0.0
+update=849 global_step=869376 SPS=523 ev=1.000 v_bias=-0.1 return=-142.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=850 global_step=870400 SPS=524 ev=0.999 v_bias=-0.1 return=-142.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 850: return=-142.49, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 850: solved=False worst_gap=1162.57 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=851 global_step=871424 SPS=520 ev=1.000 v_bias=-0.2
+update=852 global_step=872448 SPS=520 ev=1.000 v_bias=-0.1 return=-141.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=853 global_step=873472 SPS=521 ev=0.029 v_bias=0.6
+update=854 global_step=874496 SPS=521 ev=1.000 v_bias=-0.3 return=-148.6 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=855 global_step=875520 SPS=522 ev=1.000 v_bias=-0.1 return=-142.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=856 global_step=876544 SPS=522 ev=0.994 v_bias=-0.0
+update=857 global_step=877568 SPS=522 ev=0.999 v_bias=-0.3 return=-143.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=858 global_step=878592 SPS=523 ev=1.000 v_bias=-0.1 return=-142.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=859 global_step=879616 SPS=523 ev=0.999 v_bias=-0.1
+update=860 global_step=880640 SPS=524 ev=1.000 v_bias=-0.1 return=-142.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 860: return=-142.89, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 860: solved=False worst_gap=1162.97 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=861 global_step=881664 SPS=520 ev=1.000 v_bias=-0.1 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=862 global_step=882688 SPS=520 ev=1.000 v_bias=-0.0
+update=863 global_step=883712 SPS=521 ev=1.000 v_bias=-0.0 return=-142.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=864 global_step=884736 SPS=521 ev=0.879 v_bias=-0.0 return=-139.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=865 global_step=885760 SPS=522 ev=1.000 v_bias=-0.3 return=-142.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+update=866 global_step=886784 SPS=522 ev=1.000 v_bias=-0.1 return=-142.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=867 global_step=887808 SPS=522 ev=0.986 v_bias=-0.0
+update=868 global_step=888832 SPS=523 ev=0.999 v_bias=-0.3 return=-142.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=869 global_step=889856 SPS=523 ev=1.000 v_bias=-0.1 return=-142.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=870 global_step=890880 SPS=523 ev=0.998 v_bias=-0.1
+Evaluation at update 870: return=-142.49, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 870: solved=False worst_gap=1162.57 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=871 global_step=891904 SPS=520 ev=0.999 v_bias=-0.2 return=-141.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=872 global_step=892928 SPS=520 ev=1.000 v_bias=-0.1 return=-142.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=873 global_step=893952 SPS=521 ev=1.000 v_bias=-0.0
+update=874 global_step=894976 SPS=521 ev=1.000 v_bias=-0.1 return=-142.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=875 global_step=896000 SPS=521 ev=0.999 v_bias=-0.0 return=-142.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=876 global_step=897024 SPS=522 ev=1.000 v_bias=-0.2
+update=877 global_step=898048 SPS=522 ev=1.000 v_bias=-0.1 return=-142.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=878 global_step=899072 SPS=523 ev=0.023 v_bias=2.0
+update=879 global_step=900096 SPS=523 ev=0.998 v_bias=0.1 return=-173.1 length=200 success_rate=0.00 collisions/ep=0.62 (n=8)
+update=880 global_step=901120 SPS=523 ev=0.999 v_bias=-0.0 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 880: return=-143.05, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 880: solved=False worst_gap=1163.12 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=881 global_step=902144 SPS=520 ev=0.980 v_bias=-0.1
+update=882 global_step=903168 SPS=520 ev=1.000 v_bias=-0.2 return=-142.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=883 global_step=904192 SPS=521 ev=1.000 v_bias=-0.1 return=-143.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=884 global_step=905216 SPS=521 ev=0.999 v_bias=0.0
+update=885 global_step=906240 SPS=521 ev=0.714 v_bias=1.2 return=-143.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=886 global_step=907264 SPS=522 ev=1.000 v_bias=0.0 return=-155.6 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=887 global_step=908288 SPS=522 ev=0.992 v_bias=-0.6
+update=888 global_step=909312 SPS=523 ev=0.698 v_bias=1.1 return=-142.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=889 global_step=910336 SPS=523 ev=0.903 v_bias=0.0 return=-139.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=890 global_step=911360 SPS=523 ev=0.988 v_bias=-1.1 return=-157.2 length=200 success_rate=0.00 collisions/ep=0.29 (n=7)
+Evaluation at update 890: return=-142.90, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 890: solved=False worst_gap=1162.97 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=891 global_step=912384 SPS=520 ev=0.995 v_bias=-0.6 return=-142.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=892 global_step=913408 SPS=520 ev=0.972 v_bias=0.0
+update=893 global_step=914432 SPS=520 ev=0.698 v_bias=0.9 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=894 global_step=915456 SPS=521 ev=0.997 v_bias=-0.4 return=-154.8 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=895 global_step=916480 SPS=521 ev=0.976 v_bias=-0.2
+update=896 global_step=917504 SPS=522 ev=0.994 v_bias=-0.7 return=-142.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=897 global_step=918528 SPS=522 ev=0.999 v_bias=-0.0 return=-142.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=898 global_step=919552 SPS=522 ev=0.997 v_bias=-0.2
+update=899 global_step=920576 SPS=523 ev=0.999 v_bias=-0.1 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=900 global_step=921600 SPS=523 ev=0.998 v_bias=-0.0 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 900: return=-143.03, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 900: solved=False worst_gap=1163.11 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=901 global_step=922624 SPS=520 ev=0.999 v_bias=-0.2
+update=902 global_step=923648 SPS=520 ev=0.999 v_bias=-0.1 return=-143.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=903 global_step=924672 SPS=520 ev=0.892 v_bias=0.0
+update=904 global_step=925696 SPS=521 ev=0.999 v_bias=-0.2 return=-142.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=905 global_step=926720 SPS=521 ev=1.000 v_bias=-0.1 return=-142.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=906 global_step=927744 SPS=521 ev=0.994 v_bias=0.0
+update=907 global_step=928768 SPS=522 ev=0.999 v_bias=-0.3 return=-142.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=908 global_step=929792 SPS=522 ev=1.000 v_bias=-0.0 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=909 global_step=930816 SPS=523 ev=0.999 v_bias=-0.0
+update=910 global_step=931840 SPS=523 ev=0.999 v_bias=-0.1 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 910: return=-143.02, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 910: solved=False worst_gap=1163.09 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=911 global_step=932864 SPS=519 ev=1.000 v_bias=-0.0 return=-142.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=912 global_step=933888 SPS=520 ev=1.000 v_bias=-0.0
+update=913 global_step=934912 SPS=520 ev=1.000 v_bias=-0.0 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=914 global_step=935936 SPS=521 ev=0.869 v_bias=0.0 return=-138.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=915 global_step=936960 SPS=521 ev=0.999 v_bias=-0.2 return=-142.9 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+update=916 global_step=937984 SPS=521 ev=1.000 v_bias=-0.1 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=917 global_step=939008 SPS=522 ev=0.989 v_bias=0.0
+update=918 global_step=940032 SPS=522 ev=0.999 v_bias=-0.3 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=919 global_step=941056 SPS=522 ev=1.000 v_bias=-0.1 return=-142.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=920 global_step=942080 SPS=523 ev=0.999 v_bias=-0.0
+Evaluation at update 920: return=-142.91, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 920: solved=False worst_gap=1162.98 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=921 global_step=943104 SPS=519 ev=0.999 v_bias=-0.3 return=-142.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=922 global_step=944128 SPS=520 ev=1.000 v_bias=-0.0 return=-142.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=923 global_step=945152 SPS=520 ev=1.000 v_bias=-0.0
+update=924 global_step=946176 SPS=521 ev=1.000 v_bias=-0.1 return=-142.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=925 global_step=947200 SPS=521 ev=0.998 v_bias=0.0 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=926 global_step=948224 SPS=521 ev=0.999 v_bias=-0.2
+update=927 global_step=949248 SPS=522 ev=1.000 v_bias=-0.1 return=-142.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=928 global_step=950272 SPS=522 ev=0.953 v_bias=0.0
+update=929 global_step=951296 SPS=523 ev=0.999 v_bias=-0.3 return=-142.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=930 global_step=952320 SPS=523 ev=1.000 v_bias=-0.1 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 930: return=-142.74, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 930: solved=False worst_gap=1162.82 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=931 global_step=953344 SPS=520 ev=0.997 v_bias=-0.0
+update=932 global_step=954368 SPS=520 ev=0.999 v_bias=-0.3 return=-141.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=933 global_step=955392 SPS=520 ev=1.000 v_bias=-0.1 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=934 global_step=956416 SPS=521 ev=1.000 v_bias=0.0
+update=935 global_step=957440 SPS=521 ev=0.389 v_bias=3.8 return=-142.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=936 global_step=958464 SPS=521 ev=0.997 v_bias=-0.6 return=-173.7 length=200 success_rate=0.00 collisions/ep=0.62 (n=8)
+update=937 global_step=959488 SPS=522 ev=0.991 v_bias=-0.6
+update=938 global_step=960512 SPS=522 ev=0.997 v_bias=-0.5 return=-142.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=939 global_step=961536 SPS=522 ev=0.127 v_bias=-0.4 return=-139.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=940 global_step=962560 SPS=523 ev=0.998 v_bias=-0.8 return=-143.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+Evaluation at update 940: return=-143.16, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 940: solved=False worst_gap=1163.23 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=941 global_step=963584 SPS=520 ev=0.999 v_bias=-0.4 return=-142.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=942 global_step=964608 SPS=520 ev=0.871 v_bias=-0.3
+update=943 global_step=965632 SPS=520 ev=0.821 v_bias=0.8 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=944 global_step=966656 SPS=521 ev=0.999 v_bias=-0.4 return=-155.3 length=200 success_rate=0.00 collisions/ep=0.25 (n=8)
+update=945 global_step=967680 SPS=521 ev=0.969 v_bias=-0.5
+update=946 global_step=968704 SPS=522 ev=0.994 v_bias=-0.9 return=-143.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=947 global_step=969728 SPS=522 ev=1.000 v_bias=-0.1 return=-142.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=948 global_step=970752 SPS=522 ev=0.996 v_bias=-0.4
+update=949 global_step=971776 SPS=523 ev=0.492 v_bias=1.7 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=950 global_step=972800 SPS=523 ev=0.998 v_bias=-0.2 return=-161.6 length=200 success_rate=0.00 collisions/ep=0.38 (n=8)
+Evaluation at update 950: return=-142.87, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 950: solved=False worst_gap=1162.94 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=951 global_step=973824 SPS=520 ev=0.989 v_bias=-1.2
+update=952 global_step=974848 SPS=520 ev=0.996 v_bias=-0.8 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=953 global_step=975872 SPS=520 ev=0.931 v_bias=-0.1
+update=954 global_step=976896 SPS=521 ev=0.915 v_bias=-0.1 return=-142.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=955 global_step=977920 SPS=521 ev=0.997 v_bias=-0.5 return=-148.3 length=200 success_rate=0.00 collisions/ep=0.12 (n=8)
+update=956 global_step=978944 SPS=521 ev=0.990 v_bias=-0.1
+update=957 global_step=979968 SPS=522 ev=0.274 v_bias=4.9 return=-142.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=958 global_step=980992 SPS=522 ev=0.998 v_bias=-0.5 return=-185.9 length=200 success_rate=0.00 collisions/ep=0.88 (n=8)
+update=959 global_step=982016 SPS=522 ev=0.989 v_bias=-0.8
+update=960 global_step=983040 SPS=523 ev=0.998 v_bias=-0.6 return=-142.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 960: return=-142.78, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 960: solved=False worst_gap=1162.85 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=961 global_step=984064 SPS=520 ev=0.999 v_bias=-0.3 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=962 global_step=985088 SPS=520 ev=0.998 v_bias=-0.6
+update=963 global_step=986112 SPS=520 ev=0.999 v_bias=-0.5 return=-142.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=964 global_step=987136 SPS=521 ev=0.758 v_bias=-0.2 return=-138.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=965 global_step=988160 SPS=521 ev=0.998 v_bias=-0.6 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+update=966 global_step=989184 SPS=521 ev=0.999 v_bias=-0.3 return=-142.2 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=967 global_step=990208 SPS=522 ev=0.973 v_bias=-0.1
+update=968 global_step=991232 SPS=522 ev=0.998 v_bias=-0.5 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=969 global_step=992256 SPS=522 ev=0.999 v_bias=-0.1 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=970 global_step=993280 SPS=523 ev=0.997 v_bias=-0.1
+Evaluation at update 970: return=-142.90, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 970: solved=False worst_gap=1162.98 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=971 global_step=994304 SPS=520 ev=0.999 v_bias=-0.4 return=-142.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=972 global_step=995328 SPS=520 ev=1.000 v_bias=-0.0 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=973 global_step=996352 SPS=520 ev=0.999 v_bias=-0.1
+update=974 global_step=997376 SPS=521 ev=0.999 v_bias=-0.3 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=975 global_step=998400 SPS=521 ev=0.997 v_bias=0.1 return=-142.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=976 global_step=999424 SPS=521 ev=0.999 v_bias=-0.3
+update=977 global_step=1000448 SPS=522 ev=0.999 v_bias=-0.2 return=-142.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=978 global_step=1001472 SPS=522 ev=0.877 v_bias=0.1
+update=979 global_step=1002496 SPS=523 ev=0.999 v_bias=-0.3 return=-142.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=980 global_step=1003520 SPS=523 ev=1.000 v_bias=-0.1 return=-142.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 980: return=-142.90, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 980: solved=False worst_gap=1162.97 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=981 global_step=1004544 SPS=520 ev=0.993 v_bias=-0.0
+update=982 global_step=1005568 SPS=520 ev=0.999 v_bias=-0.3 return=-143.0 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=983 global_step=1006592 SPS=520 ev=1.000 v_bias=-0.0 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=984 global_step=1007616 SPS=521 ev=0.999 v_bias=0.0
+update=985 global_step=1008640 SPS=521 ev=0.999 v_bias=-0.2 return=-142.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=986 global_step=1009664 SPS=521 ev=1.000 v_bias=0.0 return=-142.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=987 global_step=1010688 SPS=522 ev=0.999 v_bias=-0.1
+update=988 global_step=1011712 SPS=522 ev=0.999 v_bias=-0.1 return=-142.3 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=989 global_step=1012736 SPS=522 ev=0.777 v_bias=0.1 return=-139.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=1)
+update=990 global_step=1013760 SPS=523 ev=0.999 v_bias=-0.3 return=-143.1 length=200 success_rate=0.00 collisions/ep=0.00 (n=7)
+Evaluation at update 990: return=-142.90, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 990: solved=False worst_gap=1162.98 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+update=991 global_step=1014784 SPS=520 ev=0.999 v_bias=-0.1 return=-142.8 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=992 global_step=1015808 SPS=520 ev=0.971 v_bias=0.0
+update=993 global_step=1016832 SPS=520 ev=0.999 v_bias=-0.3 return=-142.7 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=994 global_step=1017856 SPS=521 ev=1.000 v_bias=-0.1 return=-142.4 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=995 global_step=1018880 SPS=521 ev=0.998 v_bias=0.0
+update=996 global_step=1019904 SPS=521 ev=0.999 v_bias=-0.2 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=997 global_step=1020928 SPS=522 ev=1.000 v_bias=-0.0 return=-142.5 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+update=998 global_step=1021952 SPS=522 ev=0.122 v_bias=1.8
+update=999 global_step=1022976 SPS=523 ev=1.000 v_bias=-0.2 return=-161.0 length=200 success_rate=0.00 collisions/ep=0.38 (n=8)
+update=1000 global_step=1024000 SPS=523 ev=0.997 v_bias=0.0 return=-142.6 length=200 success_rate=0.00 collisions/ep=0.00 (n=8)
+Evaluation at update 1000: return=-142.92, length=200.00, success_rate=0.00, collisions/ep=0.00
+Solved-check at update 1000: solved=False worst_gap=1162.99 at p_x0=2.00 p_y0=0.00 (consecutive=0)
+Saved checkpoints to C:\Users\loren\Desktop\MASTER THESIS\5_CODE\scenarios\slalom\studies\init_sampler\ppo_sobol\runs\ppo_slalom_7_1791240691

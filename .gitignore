@@ -3,5 +3,14 @@ __pycache__/
 .pytest_cache/
 **/checkpoints/
 **/wandb/
-**/studies/
+# Experiment outputs under studies/ are tracked since 2026-10-06 -- summaries,
+# configs, metrics, logs and figures (PDF) -- but not what is heavy or
+# regenerable: model checkpoints, pickled analyses (rebuilt from the
+# checkpoints, and tied to the code that wrote them), PNG copies of the PDF
+# figures, and animations.
+**/studies/**/*.pt
+**/studies/**/*.pkl
+**/studies/**/*.png
+**/studies/**/*.gif
+**/studies/**/*.mp4
 .claude/settings.local.json

@@ -1,0 +1,62 @@
+[sweep] training 50 runs (coefs [0.02, 0.015, 0.01, 0.005, 0.0], seeds [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) at 500000 steps, 14 at a time
+[sweep] coef 0.02 seed 1 done in 12.4 min (1/50), first solve: 51k steps
+[sweep] coef 0.015 seed 1 done in 12.4 min (2/50), first solve: 61k steps
+[sweep] coef 0.02 seed 3 done in 12.4 min (3/50), first solve: 133k steps
+[sweep] coef 0.015 seed 3 done in 12.4 min (4/50), first solve: 61k steps
+[sweep] coef 0.01 seed 3 done in 12.5 min (5/50), first solve: 72k steps
+[sweep] coef 0.02 seed 2 done in 12.5 min (6/50), first solve: 61k steps
+[sweep] coef 0.01 seed 1 done in 12.6 min (7/50), first solve: 61k steps
+[sweep] coef 0.005 seed 1 done in 12.6 min (8/50), first solve: 82k steps
+[sweep] coef 0.015 seed 2 done in 12.6 min (9/50), first solve: 72k steps
+[sweep] coef 0.01 seed 2 done in 12.6 min (10/50), first solve: 61k steps
+[sweep] coef 0.005 seed 2 done in 12.7 min (11/50), first solve: 82k steps
+[sweep] coef 0.005 seed 3 done in 12.7 min (12/50), first solve: 72k steps
+[sweep] coef 0 seed 1 done in 13.5 min (13/50), first solve: 307k steps
+[sweep] coef 0 seed 2 done in 18.9 min (14/50), first solve: not within budget
+[sweep] coef 0.02 seed 4 done in 12.5 min (15/50), first solve: 72k steps
+[sweep] coef 0.015 seed 4 done in 12.4 min (16/50), first solve: 154k steps
+[sweep] coef 0.005 seed 4 done in 12.5 min (17/50), first solve: 72k steps
+[sweep] coef 0.01 seed 4 done in 12.6 min (18/50), first solve: 72k steps
+[sweep] coef 0.01 seed 5 done in 12.4 min (19/50), first solve: 82k steps
+[sweep] coef 0.015 seed 5 done in 12.5 min (20/50), first solve: 72k steps
+[sweep] coef 0.02 seed 5 done in 12.5 min (21/50), first solve: 92k steps
+[sweep] coef 0.02 seed 6 done in 12.4 min (22/50), first solve: 72k steps
+[sweep] coef 0.005 seed 5 done in 12.7 min (23/50), first solve: 123k steps
+[sweep] coef 0.015 seed 6 done in 12.5 min (24/50), first solve: 61k steps
+[sweep] coef 0 seed 4 done in 18.8 min (25/50), first solve: not within budget
+[sweep] coef 0 seed 3 done in 18.9 min (26/50), first solve: not within budget
+[sweep] coef 0.01 seed 6 done in 12.5 min (27/50), first solve: 61k steps
+[sweep] coef 0 seed 5 done in 18.9 min (28/50), first solve: not within budget
+[sweep] coef 0.005 seed 6 done in 12.5 min (29/50), first solve: 82k steps
+[sweep] coef 0.02 seed 7 done in 12.5 min (30/50), first solve: 61k steps
+[sweep] coef 0.01 seed 7 done in 12.5 min (31/50), first solve: 72k steps
+[sweep] coef 0.015 seed 7 done in 12.5 min (32/50), first solve: 72k steps
+[sweep] coef 0.005 seed 7 done in 12.5 min (33/50), first solve: 82k steps
+[sweep] coef 0.02 seed 8 done in 12.5 min (34/50), first solve: 92k steps
+[sweep] coef 0.015 seed 8 done in 12.5 min (35/50), first solve: 61k steps
+[sweep] coef 0.01 seed 8 done in 12.6 min (36/50), first solve: 92k steps
+[sweep] coef 0 seed 7 done in 17.6 min (37/50), first solve: not within budget
+[sweep] coef 0.005 seed 8 done in 12.5 min (38/50), first solve: 82k steps
+[sweep] coef 0 seed 6 done in 18.9 min (39/50), first solve: not within budget
+[sweep] coef 0.02 seed 9 done in 12.4 min (40/50), first solve: 61k steps
+[sweep] coef 0.015 seed 9 done in 12.4 min (41/50), first solve: 82k steps
+[sweep] coef 0.005 seed 9 done in 10.7 min (42/50), first solve: 72k steps
+[sweep] coef 0.01 seed 9 done in 10.8 min (43/50), first solve: 61k steps
+[sweep] coef 0.015 seed 10 done in 10.6 min (44/50), first solve: 61k steps
+[sweep] coef 0.02 seed 10 done in 10.6 min (45/50), first solve: 113k steps
+[sweep] coef 0.01 seed 10 done in 10.6 min (46/50), first solve: 102k steps
+[sweep] coef 0.005 seed 10 done in 10.5 min (47/50), first solve: 82k steps
+[sweep] coef 0 seed 8 done in 17.0 min (48/50), first solve: not within budget
+[sweep] coef 0 seed 9 done in 11.5 min (49/50), first solve: 236k steps
+[sweep] coef 0 seed 10 done in 12.8 min (50/50), first solve: not within budget
+[sweep] training finished in 51.5 min
+[sweep] oracle on the 25-point start grid
+[sweep] coef 0.02: reading curves and probing final.pt of seeds [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+[sweep] coef 0.015: reading curves and probing final.pt of seeds [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+[sweep] coef 0.01: reading curves and probing final.pt of seeds [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+[sweep] coef 0.005: reading curves and probing final.pt of seeds [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+[sweep] coef 0: reading curves and probing final.pt of seeds [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+[sweep] saved C:\Users\loren\Desktop\MASTER THESIS\5_CODE\scenarios\slalom\studies\extrinsic_sweep\analysis.pkl
+  figures/sweep_learning_curves.png
+  figures/sweep_dose_response.png
+[sweep] wrote C:\Users\loren\Desktop\MASTER THESIS\5_CODE\scenarios\slalom\studies\extrinsic_sweep\summary.md
