@@ -4,7 +4,7 @@ Living record of the alignment of this repository with the thesis specification.
 
 - **Target ("spec v1").** Problem setup, architectures and rules in the Claude project's instructions, plus the design decisions in its decision log (`claude/decision-log.md`), as of 2026-10-06.
 - **Starting point.** Tag `pre-alignment` (commit `ff50d7c`).
-- **Last updated.** 2026-10-06: steps 1 and 2 closed; next is step 3.
+- **Last updated.** 2026-10-07: steps 1–3 closed; next is step 4.
 
 Contents: [1 How to use](#1-how-to-use-this-file) · [2 Workflow](#2-workflow-and-status) · [3 Baseline](#3-baseline-step-1) · [4 Audit summary](#4-audit-summary-step-2) · [5 Open decisions](#5-open-decisions) · [6 Matrix](#6-traceability-matrix) · [7 Inventory](#7-inventory-of-the-pre-alignment-code) · [8 Old results](#8-pre-alignment-results-reference-only) · [9 Change log](#9-change-log)
 
@@ -44,10 +44,10 @@ Contents: [1 How to use](#1-how-to-use-this-file) · [2 Workflow](#2-workflow-an
 |---|---|---|---|---|---|
 | 1 | Freeze the starting point | Tag; baseline test run recorded | **Done** (2026-10-06) | tag `pre-alignment` | 470 tests passed (§3). The old results stay reachable from the tag; removing them from `main` is part of step 4 (Q14) |
 | 2 | Audit and traceability matrix | Inventory, matrix with evidence, open decisions | **Done** (2026-10-06) | `align/step-02-audit` | This file; evidence re-checked before closing |
-| 3 | Ratify implicit choices; close the decisions that block steps 4–7 | Q1–Q9 and Q14–Q16 closed in the decision log | Not started | | |
-| 4 | Minimal infrastructure | Package layout, pinned dependencies, YAML configs, seeding, logging against the sample counter, pytest and CI, DL-F1–F6 as tests, cleanup of dead code and old results | Not started | | Rows C1–C6, E8 |
-| 5 | Physics module, tests first | One pure, batched step function implementing E1–E6 on polytopic geometry; tests of rows M and E | Not started | | Q3–Q6, Q16 |
-| 6 | MDP wrapper | Observation, goal, reward with the contact penalty, termination, disturbance sampling, action map, metrics R3–R4 | Not started | | Q7–Q9 |
+| 3 | Ratify implicit choices; close the decisions that block steps 4–7 | Q1–Q9 and Q14–Q16 closed in the decision log | **Done** (2026-10-07) | `align/step-03-decisions` | Q1–Q9 and Q14–Q16 ratified as DL-D5–D15; Q10–Q13 stay open until steps 8–11 |
+| 4 | Minimal infrastructure | Package layout, pinned dependencies, YAML configs, seeding, logging against the sample counter, pytest and CI, DL-F1–F6 as tests, cleanup of dead code and old results | Not started | | Rows C1–C6, E8. First action: record the package versions of the pre-alignment environment (DL-D5) |
+| 5 | Physics module, tests first | One pure, batched step function implementing E1–E6 on polytopic geometry; tests of rows M and E | Not started | | DL-D9–D12 |
+| 6 | MDP wrapper | Observation, goal, reward with the contact penalty, termination, disturbance sampling, action map, metrics R3–R4 | Not started | | DL-D13–D15 |
 | 7 | Flat PPO on the new environment | Learns on a trivial layout; becomes the reference for logging and configs | Not started | | |
 | 8 | Common hierarchical runner, then hPPO | One Manager/Worker loop; the Worker and the target space are interchangeable components | Not started | | Q10 |
 | 9 | MPC Worker | Shared model module, $W = BD$, inter-sample constraints, no wall reaction in closed loop | Not started | | Q11 |
@@ -143,22 +143,55 @@ Q1–Q9 and Q14–Q16 are closed in step 3; the others at the start of the step 
 
 | ID | Question | Pre-alignment code | Recommendation (proposal) | Blocks step | Status |
 |---|---|---|---|---|---|
-| Q1 | Reference stack (C5) | numpy, scipy, PyTorch (own PPO), Gymnasium, cvxpy + Clarabel, gurobipy, matplotlib; global Python 3.12 interpreter on Windows; nothing pinned | Keep it, since changing libraries needs a reason; declare it and pin versions in a virtual environment. Before upgrading anything, record the versions of the pre-alignment environment (`python -m pip freeze`). Decide whether running every architecture may require a Gurobi licence (today it does, even on the tunnel) | 4 | open |
-| Q2 | Definition of a sample (X1) | Environment steps summed over the parallel envs; evaluation, oracle and MPC predictions not counted | Ratify. One sample is one call of the physical step during training. Manager decisions are logged as a secondary counter. MPC model predictions are not samples but are reported as compute time | 4 | open |
-| Q3 | Numerical parameters (M7) | $T_s = 0.1$ s, $a_{\max} = 2.5$, $v_{\max} = 1.2$, no friction | Choose $\gamma$ with $v_{\max} < a_{\max}/\gamma$ ($\gamma < 2.08\ \mathrm{s^{-1}}$ with these values), choose $\gamma_w$, and choose $\bar d$ satisfying DL-F2 if robust invariance of $V$ is wanted. The current 1× disturbance (0.005 m, 0.05 m/s) is the product of the disks of radii $T_s^2 \bar d$ and $T_s \bar d$ with $\bar d = 0.5\ \mathrm{m/s^2}$ | 5 | open |
-| Q4 | Distribution of $d_k$ in $D$ (M5) | Uniform on two independent disks for $w_p$ and $w_v$ | $d_k$ i.i.d., uniform in area on $D$; worst-case (boundary) disturbances only for stress tests | 5 | open |
-| Q5 | Geometry and layouts (M6) | Width profile; fixed slalom, tunnel as a sanity check | One geometry module (H-representation of the arena and the obstacles) shared by the env, the MPC, the oracle and the reachability code; the slalom as the fixed main layout | 5 | open |
-| Q6 | Arena boundary (M6, DL-A2) | $p_x \in [-1, L+1]$ enforced by a position clip without contact; goal at $p_x \ge L$ | A closed arena polygon whose faces are all physical walls, with the goal region strictly inside it | 5 | open |
-| Q7 | MDP elements the spec does not define (R5) | Observation = normalized $(p, v)$; success when $p_x \ge 10$; horizon 200; spawn uniform on $[0,2]\times[-1,1]$ at rest; reward −1 per step, +1000 on success (replacing the step's other terms), progress $10\,\Delta p_x$ cut at $L$, effort $-0.01\lVert u\rVert^2/a_{\max}^2$ on the delivered input | Ratify explicitly (with any changes) in the decision log, including whether the success bonus should replace or add to the other terms of its step | 6 | open |
-| Q8 | Form of the contact penalty (R2) | Flat −50 per contact step | Price the "free brake" that motivates DL-D1: a term proportional to the cancelled normal velocity, plus an optional small per-step term for sliding. Use the same function for every architecture, inside the hPPO Worker reward too | 6 | open |
-| Q9 | Action map (AM1) | Beta per axis on the box, then radial projection onto $U$ in the env | The spec text assumes a Gaussian policy. Either amend it to the Beta, a bounded-support option it already lists, or switch to a Gaussian. Keep the Beta, but replace the many-to-one box→disk projection with a bijection of the square onto the disk (e.g. $x \mapsto (\lVert x\rVert_\infty/\lVert x\rVert_2)\,x$), so that physical corrections come only from the speed limiter and the walls | 6–7 | open |
+| Q1 | Reference stack (C5) | numpy, scipy, PyTorch (own PPO), Gymnasium, cvxpy + Clarabel, gurobipy, matplotlib; global Python 3.12 interpreter on Windows; nothing pinned | Keep it, since changing libraries needs a reason; declare it and pin versions in a virtual environment. Before upgrading anything, record the versions of the pre-alignment environment (`python -m pip freeze`). Decide whether running every architecture may require a Gurobi licence (today it does, even on the tunnel) | 4 | **ratified** (DL-D5): current stack, Python 3.12 venv with pinned versions; Gurobi only for the MPC Worker |
+| Q2 | Definition of a sample (X1) | Environment steps summed over the parallel envs; evaluation, oracle and MPC predictions not counted | Ratify. One sample is one call of the physical step during training. Manager decisions are logged as a secondary counter. MPC model predictions are not samples but are reported as compute time | 4 | **ratified** (DL-D6): environment steps; early stopping off in comparisons |
+| Q3 | Numerical parameters (M7) | $T_s = 0.1$ s, $a_{\max} = 2.5$, $v_{\max} = 1.2$, no friction | Choose $\gamma$ with $v_{\max} < a_{\max}/\gamma$ ($\gamma < 2.08\ \mathrm{s^{-1}}$ with these values), choose $\gamma_w$, and choose $\bar d$ satisfying DL-F2 if robust invariance of $V$ is wanted. The current 1× disturbance (0.005 m, 0.05 m/s) is the product of the disks of radii $T_s^2 \bar d$ and $T_s \bar d$ with $\bar d = 0.5\ \mathrm{m/s^2}$ | 5 | **ratified** (DL-D9): $\gamma = 0.5$, $\gamma_w = 1.0\ \mathrm{s^{-1}}$, $\bar d \in \{0, 0.5, 1.0\}\ \mathrm{m/s^2}$; $T_s$, $a_{\max}$, $v_{\max}$ unchanged |
+| Q4 | Distribution of $d_k$ in $D$ (M5) | Uniform on two independent disks for $w_p$ and $w_v$ | $d_k$ i.i.d., uniform in area on $D$; worst-case (boundary) disturbances only for stress tests | 5 | **ratified** (DL-D10): i.i.d. uniform on $D$; worst cases only in stress tests |
+| Q5 | Geometry and layouts (M6) | Width profile; fixed slalom, tunnel as a sanity check | One geometry module (H-representation of the arena and the obstacles) shared by the env, the MPC, the oracle and the reachability code; the slalom as the fixed main layout | 5 | **ratified** (DL-D11): polytopic geometry module; fixed slalom with 4 rectangular obstacles |
+| Q6 | Arena boundary (M6, DL-A2) | $p_x \in [-1, L+1]$ enforced by a position clip without contact; goal at $p_x \ge L$ | A closed arena polygon whose faces are all physical walls, with the goal region strictly inside it | 5 | **ratified** (DL-D11): arena $[-1, 11] \times [-2, 2]$, all faces walls; goal region $p_x \ge 10$ |
+| Q7 | MDP elements the spec does not define (R5) | Observation = normalized $(p, v)$; success when $p_x \ge 10$; horizon 200; spawn uniform on $[0,2]\times[-1,1]$ at rest; reward −1 per step, +1000 on success (replacing the step's other terms), progress $10\,\Delta p_x$ cut at $L$, effort $-0.01\lVert u\rVert^2/a_{\max}^2$ on the delivered input | Ratify explicitly (with any changes) in the decision log, including whether the success bonus should replace or add to the other terms of its step | 6 | **ratified** (DL-D13): as now, with the success bonus added and exact potential-based shaping |
+| Q8 | Form of the contact penalty (R2) | Flat −50 per contact step | Price the "free brake" that motivates DL-D1: a term proportional to the cancelled normal velocity, plus an optional small per-step term for sliding. Use the same function for every architecture, inside the hPPO Worker reward too | 6 | **ratified** (DL-D14): $-c_n \lVert \Delta v^{\mathrm{w}} \rVert_2 - c_s \mathbb{1}[\text{contact}]$, $c_n = 50$, $c_s = 1$ to calibrate |
+| Q9 | Action map (AM1) | Beta per axis on the box, then radial projection onto $U$ in the env | The spec text assumes a Gaussian policy. Either amend it to the Beta, a bounded-support option it already lists, or switch to a Gaussian. Keep the Beta, but replace the many-to-one box→disk projection with a bijection of the square onto the disk (e.g. $x \mapsto (\lVert x\rVert_\infty/\lVert x\rVert_2)\,x$), so that physical corrections come only from the speed limiter and the walls | 6–7 | **ratified** (DL-D15): per-axis Beta + bijection of the square onto $U$; spec text to update |
 | Q10 | Manager/Worker interface (AR5) | $H = 10$; targets: hPPO ±10 m box, PPO_MPC ±1.8 m box, reach arm 4-D; Worker reward = progress + 0.02 × env reward; no Worker termination | One target space (relative position, sized to the $H$-step reach) shared by AR2–AR4 and restricted only in AR4; the common contact penalty in the Worker reward | 8 | open |
 | Q11 | MPC formulation (AR3) | Tube MPC, big-M MIQP + Clarabel, $W$ on $(p, v)$, no inter-sample constraints | Keep the tube MPC but have it read the shared model module. Use $W = BD$, or a declared outer bound $W' \supseteq BD$. Exclude corner cutting (one face per segment, or inflated obstacles). Decide whether to tighten $V$ or rely on DL-F3 | 9 | open |
 | Q12 | Reachability (AR4) | Disabled and stale | Use the robust $H$-step reachable set of target positions under the tube MPC's tightened constraints. Check the inner approximation against DL-F5/F6 in the obstacle-free case. Define "reached" as being within the tube cross-section around the target | 10 | open |
 | Q13 | Experimental protocol (X2–X7) | Unequal budgets and seeds; no tuning protocol; median/IQR; Mann–Whitney with unsolved seeds ranked $+\infty$; solved-check against the undisturbed oracle | Equal budget and seed list per comparison. A declared tuning protocol on held-out seeds. The sample-efficiency metric fixed in advance: first-solve time with censoring handled by survival analysis, or the area under the curve. Means with bootstrap CIs and a correction for multiple comparisons. A disturbed reference for disturbed runs | 11 | open |
-| Q14 | Old results tracked under `studies/` | About 2 350 tracked files from the old dynamics | Remove them from `main` in step 4 (they stay in the tag) so they cannot be mixed with new results; keep the index in §8 | 4 | open |
-| Q15 | `docs/stato-ppo-mpc.md` | Untracked, Italian, partly stale | Move what is still valid (tube-MPC deviations, reachability options, questions for the supervisors) into an English doc or the decision log, then drop the file | 3 | open |
-| Q16 | Tunnel scenario | A full code copy of the slalom | Keep it only as a layout/config of the single environment, or drop it | 5 | open |
+| Q14 | Old results tracked under `studies/` | About 2 350 tracked files from the old dynamics | Remove them from `main` in step 4 (they stay in the tag) so they cannot be mixed with new results; keep the index in §8 | 4 | **ratified** (DL-D7); carried out in step 4 |
+| Q15 | `docs/stato-ppo-mpc.md` | Untracked, Italian, partly stale | Move what is still valid (tube-MPC deviations, reachability options, questions for the supervisors) into an English doc or the decision log, then drop the file | 3 | **ratified** (DL-D8): content carried over (notes below; supervisor questions in the decision log); the author moves the memo out of the repository |
+| Q16 | Tunnel scenario | A full code copy of the slalom | Keep it only as a layout/config of the single environment, or drop it | 5 | **ratified** (DL-D12): kept as a layout of the single environment |
+
+### Notes on open decisions
+
+From the memo `docs/stato-ppo-mpc.md` of 2026-09-29 (DL-D8). Its numbers refer to the pre-alignment dynamics.
+
+**Q11, MPC formulation.** The tube MPC deviates deliberately from the reference note (*Robust Tube-Based Model Predictive Control for Linear Systems with Non-Convex State Constraints*). The deviations are documented in the module docstring of `algorithms/tube_mpc.py`:
+
+| Deviation | Consequence |
+|---|---|
+| "Safe stop" terminal set (at rest in free space) instead of a terminal set around the target | Recursive feasibility (Thm 4.1 of the note) survives changes of target; convergence (Thm 4.2) is lost |
+| Margin $\rho$ also on the walls | — |
+| Binaries fixed for obstacles that cannot be reached in the horizon | Exact |
+| No inter-sample constraints | To be reversed (row AR3c) |
+| Planned speed tightened to $v_{\max}$ minus the tube's speed margin | The env's speed limiter never acts |
+
+A fixed-binary scheme (remark 4.5 of the note) would solve the mixed-integer problem only when the Manager replans and a QP in the other steps. It would keep the guarantees and should cut the compute cost.
+
+**Q12, reachability options.** The memo predates the disk limits and describes the sets per axis. With Euclidean limits the obstacle-free reachable set of positions is a disk (DL-F6). The options:
+
+| Option | Target set | For | Against |
+|---|---|---|---|
+| A. Reachable at rest | Positions the nominal system can reach and stop at within one segment, under the tube-tightened constraints. Closed form, depends on $v_0$ | Consistent with the safe-stop terminal set; every target is reachable; no extra solver | Targets at rest may slow cruising (seen with hPPO and small goal boxes) |
+| B. Reachable in passing | Positions reachable at the end of the segment with any velocity, as in the old reach arm | Continuity with the earlier study; does not brake | The target is not an equilibrium reachable within the horizon |
+| C. Reachable and obstacle-free | A or B intersected with the free space: projection onto the nearest reachable free point, with a small mixed-integer problem at each replanning | The Manager can no longer ask for a target inside a wall | Non-convex set; one more solve every $H$ steps |
+| D. Backward reachability (liveness) | Targets leading to states from which the goal can no longer be reached (dead ends in front of the gates) are discarded | Addresses the local minima the MPC Worker gets stuck in | More ambitious; needs a careful theoretical definition |
+
+Earlier finding, on the old dynamics (`docs/reachability-regime-study.md`): restricting the targets helped only when the agility ratio $v_{\max}/(a_{\max} H T_s)$ was above about 0.8. The tube raises the nominal system's effective ratio (about 0.87 at the 2× disturbance, in the memo's estimate), so reachability may matter under disturbance.
+
+The memo's plan:
+1. Implement A and B as a switch on the target map.
+2. Expect no effect without disturbance and a benefit at 2×.
+3. Run a regime check at agility ratios 0.8 and 1.2.
+4. Use C and D only if A and B fail.
 
 ## 6. Traceability matrix
 
@@ -172,9 +205,9 @@ Sources: "Instr." is a section of the project instructions; "DL-" is a decision-
 | M2 | Isotropic viscous friction $\gamma>0$ | DL-A1 | Absent: the velocity block of $A$ is the identity (`slalom_env.py:79-84`, `tube_mpc.py:635-638`, `mpc_worker.py:81-92`) | CONFLICT | S | rewrite | model test: matrices vs recursion | 5 |
 | M3 | Semi-implicit Euler: $v^+=(1-\gamma T_s)v+T_s(u+d)$, $p^+=p+T_s v^+$ | DL-D4 | Exact ZOH of the frictionless double integrator, $B=[\tfrac12 T_s^2 I;\ T_s I]$ (`slalom_env.py:86-91`, `vec_slalom_env.py:57-69`, `tube_mpc.py:639-642`; the oracle reads `env.A`, `env.B` at `optimal_solver.py:305-306`) | CONFLICT | S | rewrite: one model module for env, MPC, oracle and reachability | DL check "M" (compact form) | 5 |
 | M4 | $U$, $V$, $D$ are Euclidean balls | DL-A5 | $U$ and $V$ are disks (`actuation.py:85-108`); the action space is the box $[-a_{\max},a_{\max}]^2$ (`slalom_env.py:75`); $D$ is not an acceleration ball (M5) | PARTIAL | S | refactor | — | 5 |
-| M5 | Disturbance at acceleration level, $w=Bd$, $d\in D$ | DL-D2 | $w=(w_p,w_v)$ uniform on two independent disks (`actuation.py:111-126`, `config.py:19-40`); the tube MPC uses the same product set (`tube_mpc.py:664`) | CONFLICT | S | rewrite (env), refactor (MPC) | disturbance enters only through $B$; DL-F3 | 5, 9 |
-| M6 | Arena polytope with polytopic obstacles; every face is a physical wall | Instr. Setup, DL-A2 | Piecewise-constant width profile (`width_profile.py`); $p_x$ confined to $[-1,L+1]$ by a position clip without contact (`slalom_env.py:65-66, 189`); the tube MPC turns the profile into 4 rectangles (`tube_mpc.py:534-568`) | PARTIAL | S | rewrite the geometry as polytopes | non-penetration on random polygons | 5 |
-| M7 | $v_{\max}<a_{\max}/\gamma$ (DL-F1); robust invariance of $V$ (DL-F2) | DL-F1, DL-F2 | No $\gamma$; $T_s=0.1$, $a_{\max}=2.5$, $v_{\max}=1.2$ (`config.py:11-18`); these conditions are not validated | MISSING | S | decide (Q3); validate in the config | config validation test | 3, 5 |
+| M5 | Disturbance at acceleration level, $w=Bd$, $d\in D$ | DL-D2 | $w=(w_p,w_v)$ uniform on two independent disks (`actuation.py:111-126`, `config.py:19-40`); the tube MPC uses the same product set (`tube_mpc.py:664`) | CONFLICT | S | rewrite (env, DL-D10), refactor (MPC) | disturbance enters only through $B$; DL-F3 | 5, 9 |
+| M6 | Arena polytope with polytopic obstacles; every face is a physical wall | Instr. Setup, DL-A2 | Piecewise-constant width profile (`width_profile.py`); $p_x$ confined to $[-1,L+1]$ by a position clip without contact (`slalom_env.py:65-66, 189`); the tube MPC turns the profile into 4 rectangles (`tube_mpc.py:534-568`) | PARTIAL | S | rewrite the geometry as polytopes (DL-D11) | non-penetration on random polygons | 5 |
+| M7 | $v_{\max}<a_{\max}/\gamma$ (DL-F1); robust invariance of $V$ (DL-F2) | DL-F1, DL-F2 | No $\gamma$; $T_s=0.1$, $a_{\max}=2.5$, $v_{\max}=1.2$ (`config.py:11-18`); these conditions are not validated | MISSING | S | implement DL-D9 and validate F1/F2 in the config | config validation test | 5 |
 
 ### Environment step (E)
 
@@ -194,16 +227,16 @@ Sources: "Instr." is a section of the project instructions; "DL-" is a decision-
 | ID | Requirement | Source | Pre-alignment code (evidence) | Status | Class | Action | Verified by (planned) | Step |
 |---|---|---|---|---|---|---|---|---|
 | R1 | Contact allowed and non-terminal | DL-D1 | The episode continues after a contact (`slalom_env.py:202-249`) | OK | — | keep | — | 6 |
-| R2 | Same contact penalty for every architecture, also in the hPPO Worker reward | DL-D1 | Flat −50 per contact step (`config.py:78`). PPO and the Managers see it through the env reward. The hPPO Worker sees 0.02 × it through the extrinsic mix (`hppo_train.py:1123-1124`), and `--worker-extrinsic-coef 0` removes it. A `--contact-penalty` flag exists in hPPO and PPO_MPC (`hppo_train.py:94`, `ppo_mpc_train.py:106`) but not in flat PPO | PARTIAL | S | refactor (Q8): penalty defined once, with a fixed weight in the Worker reward | same penalty across arms (config test) | 6, 8 |
+| R2 | Same contact penalty for every architecture, also in the hPPO Worker reward | DL-D1 | Flat −50 per contact step (`config.py:78`). PPO and the Managers see it through the env reward. The hPPO Worker sees 0.02 × it through the extrinsic mix (`hppo_train.py:1123-1124`), and `--worker-extrinsic-coef 0` removes it. A `--contact-penalty` flag exists in hPPO and PPO_MPC (`hppo_train.py:94`, `ppo_mpc_train.py:106`) but not in flat PPO | PARTIAL | S | refactor: the penalty of DL-D14, defined once; its weight in the Worker reward set with Q10 | same penalty across arms (config test) | 6, 8 |
 | R3 | Contact metrics: number, duration, cancelled normal velocity | Instr. Metrics | `collision_count` counts contact steps, and `collision_impacts` stores the constant penalty (`vec_slalom_env.py:206-208`); no normal velocity | PARTIAL | F | rewrite (env info: events, duration, $\Delta v_n$) | metric unit tests | 6 |
 | R4 | Frequency and magnitude of the physical corrections of the commanded action | Instr. Metrics | Not logged; `delivered_action` appears only in the scalar env's info (`slalom_env.py:284`), not in the vector env's (`vec_slalom_env.py:227-234`) | MISSING | F | implement | metric unit tests | 6 |
-| R5 | MDP elements the spec does not define | — | Observation = normalized $(p,v)$ (`common.py:61`); success when $p_x\ge L$ (`slalom_env.py:254`); horizon 200 (`config.py:53`); spawn box, uniform, at rest (`spawn_sampler.py:96-101`); reward terms (`config.py:55-118`); fixed layout (`width_profile.py:139-196`) | IMPLICIT | S | ratify (Q7) | — | 3 |
+| R5 | MDP elements the spec does not define | — | Observation = normalized $(p,v)$ (`common.py:61`); success when $p_x\ge L$ (`slalom_env.py:254`); horizon 200 (`config.py:53`); spawn box, uniform, at rest (`spawn_sampler.py:96-101`); reward terms (`config.py:55-118`); fixed layout (`width_profile.py:139-196`) | PARTIAL | S | ratified as DL-D13; implement its two corrections | reward unit tests | 6 |
 
 ### Action map (AM)
 
 | ID | Requirement | Source | Pre-alignment code (evidence) | Status | Class | Action | Verified by (planned) | Step |
 |---|---|---|---|---|---|---|---|---|
-| AM1 | Map from policy output to $U$ identical for PPO and the hPPO Worker; its distortion known and monitored | Instr. RL action space | Beta per axis on the box (`common.py:191-224`, `ppo/ppo.py:217`, `hppo/hppo.py:654`), then radial projection onto $U$ in the env; the two arms share the map (`hppo/tests/test_hppo.py:592`); the spec text assumes a Gaussian | PARTIAL | S | decide (Q9) and document | correction-rate metric | 3, 6 |
+| AM1 | Map from policy output to $U$ identical for PPO and the hPPO Worker; its distortion known and monitored | Instr. RL action space | Beta per axis on the box (`common.py:191-224`, `ppo/ppo.py:217`, `hppo/hppo.py:654`), then radial projection onto $U$ in the env; the two arms share the map (`hppo/tests/test_hppo.py:592`); the spec text assumes a Gaussian | PARTIAL | S | implement DL-D15 (Beta + square-to-disk bijection) | bijection and correction-rate tests | 6 |
 
 ### Architectures (AR)
 
@@ -228,13 +261,13 @@ Sources: "Instr." is a section of the project instructions; "DL-" is a decision-
 
 | ID | Requirement | Source | Pre-alignment code (evidence) | Status | Class | Action | Verified by (planned) | Step |
 |---|---|---|---|---|---|---|---|---|
-| X1 | One definition of "sample" for all architectures | Instr. Fair comparison | Environment steps everywhere (`ppo/ppo_train.py:391`, `hppo/hppo_train.py:1067`, `ppo_mpc/ppo_mpc_train.py:543`), but not declared | PARTIAL | Y | declare (Q2) | — | 3–4 |
+| X1 | One definition of "sample" for all architectures | Instr. Fair comparison | Environment steps everywhere (`ppo/ppo_train.py:391`, `hppo/hppo_train.py:1067`, `ppo_mpc/ppo_mpc_train.py:543`), but not declared | PARTIAL | Y | declared in DL-D6; implement the counters | — | 4 |
 | X2 | Same interaction budget | Instr. Fair comparison | Defaults are equal (`study.py:111`), but the reported slalom comparison runs PPO and hPPO for 1 024 000 steps and PPO_MPC for 204 800 (`study_ppo_mpc.py:17-19`); early stop on solve is on by default (`ppo/ppo_train.py:111`) | CONFLICT | S | enforce in the comparison tooling | comparison refuses unequal budgets | 11 |
 | X3 | Same seeds, at least 5 per configuration | Instr. Fair comparison | Same integer seeds; 20 for PPO and hPPO (`study.py:191`) vs 10 for PPO_MPC (`study_ppo_mpc.py:6`) | PARTIAL | S | one seed list per comparison | — | 11 |
 | X4 | Comparable tuning effort | Instr. Fair comparison | No protocol; only hPPO's Worker coefficient was swept (`sweep_extrinsic_coef.py:161`); PPO_MPC "has not been re-swept" (`ppo_mpc/ppo_mpc_train.py:176`) | MISSING | S | define (Q13) | — | 11 |
 | X5 | Same physics, contact penalty and action map | Instr. Fair comparison | Every arm uses the same env classes and map (`script_ppo_mpc.py:29-37` vs `script_ppo.py:20-31`); hPPO and PPO_MPC can override the penalty from the command line, flat PPO cannot | PARTIAL | S | single config source | config test | 6 |
 | X6 | Metrics: sample efficiency (defined operationally), success rate, contacts, corrections, final return, compute time | Instr. Metrics | First solve = the second consecutive solved-check within 5 of the oracle at the 25 grid starts, checked every 10 240 steps (`ppo/ppo_train.py:118-130`, `solved_check.py:98`). Success rate is loaded but not plotted (`study.py:464`). MPC solve time is logged only in training | PARTIAL | S | define (Q13) | — | 11 |
-| X7 | Mean with confidence intervals; appropriate tests | Instr. Code | Median + IQR (`study_plots.py:161`); Mann–Whitney with unsolved seeds = $+\infty$ (`study_plots.py:210-216`); no CIs in the comparison tooling (a bootstrap interval only in the one-off `study_init_sampler.py:331`); no correction for multiple comparisons | PARTIAL | S | rewrite the analysis | analysis unit tests | 11 |
+| X7 | Mean with confidence intervals; appropriate tests | Instr. Code | Median + IQR (`study_plots.py:161`); Mann–Whitney with unsolved seeds = $+\infty$ (`study_plots.py:210-216`); no CIs in the comparison tooling (a bootstrap interval only in the one-off `study_init_sampler.py:330`); no correction for multiple comparisons | PARTIAL | S | rewrite the analysis | analysis unit tests | 11 |
 
 ### Code (C)
 
@@ -327,4 +360,6 @@ Every arm solves every seed: PPO_MPC 10/10, hPPO 20/20, PPO 20/20.
 | 2026-10-06 | 1 | The author creates tag `pre-alignment` on `ff50d7c`. |
 | 2026-10-06 | 2 | Audit of the pre-alignment code; this file created. |
 | 2026-10-06 | 1 | Baseline test run by the author: 470 passed, 2 harmless warnings (§3). Step 1 closed. |
-| 2026-10-06 | 2 | Evidence re-checked; two rows corrected (R2, X5: the `--contact-penalty` flag also exists in PPO_MPC) and X7 made precise. Step 2 closed; this file committed on `align/step-02-audit`. |
+| 2026-10-06 | 2 | Evidence re-checked; two rows corrected (R2, X5: the `--contact-penalty` flag also exists in PPO_MPC) and X7 made precise. Step 2 closed; this file committed on `align/step-02-audit` and merged into `main` (PR #1). |
+| 2026-10-06 | 3 | Q1, Q2, Q14, Q15 ratified (DL-D5–D8). Notes from the memo of 2026-09-29 added under §5 for Q11 and Q12. |
+| 2026-10-07 | 3 | Q3–Q9 and Q16 ratified (DL-D9–D15); matrix actions updated (M5, M6, M7, R2, R5, AM1, X1). Step 3 closed. |
