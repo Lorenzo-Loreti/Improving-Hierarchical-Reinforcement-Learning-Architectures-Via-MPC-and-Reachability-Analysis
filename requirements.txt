@@ -1,0 +1,19 @@
+# Exact versions of the reference stack (decision log D5), equal to those of
+# the pre-alignment environment (requirements-pre-alignment.txt). Install into
+# a Python 3.12 virtual environment with
+#     python -m pip install -r requirements.txt
+# The last line installs this repository's package (src/hrlmpc) in editable mode.
+numpy==2.1.1
+scipy==1.15.2
+PyYAML==6.0.2
+torch==2.11.0
+gymnasium==1.2.3
+cvxpy==1.9.2
+clarabel==0.11.1
+gurobipy==13.0.3
+matplotlib==3.9.2
+pytest==9.0.3
+# Imported by the legacy training loops (algorithms/*/*_train.py); drop it
+# once they are replaced.
+wandb==0.28.1
+-e .
