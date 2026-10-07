@@ -4,7 +4,7 @@ Living record of the alignment of this repository with the thesis specification.
 
 - **Target ("spec v1").** Problem setup, architectures and rules in the Claude project's instructions, plus the design decisions in its decision log (`claude/decision-log.md`), as of 2026-10-06.
 - **Starting point.** Tag `pre-alignment` (commit `ff50d7c`).
-- **Last updated.** 2026-10-07: steps 1–3 closed; next is step 4.
+- **Last updated.** 2026-10-07: steps 1–3 closed; step 4 in review on branch `align/step-04-infrastructure`.
 
 Contents: [1 How to use](#1-how-to-use-this-file) · [2 Workflow](#2-workflow-and-status) · [3 Baseline](#3-baseline-step-1) · [4 Audit summary](#4-audit-summary-step-2) · [5 Open decisions](#5-open-decisions) · [6 Matrix](#6-traceability-matrix) · [7 Inventory](#7-inventory-of-the-pre-alignment-code) · [8 Old results](#8-pre-alignment-results-reference-only) · [9 Change log](#9-change-log)
 
@@ -45,7 +45,7 @@ Contents: [1 How to use](#1-how-to-use-this-file) · [2 Workflow](#2-workflow-an
 | 1 | Freeze the starting point | Tag; baseline test run recorded | **Done** (2026-10-06) | tag `pre-alignment` | 470 tests passed (§3). The old results stay reachable from the tag; removing them from `main` is part of step 4 (Q14) |
 | 2 | Audit and traceability matrix | Inventory, matrix with evidence, open decisions | **Done** (2026-10-06) | `align/step-02-audit` | This file; evidence re-checked before closing |
 | 3 | Ratify implicit choices; close the decisions that block steps 4–7 | Q1–Q9 and Q14–Q16 closed in the decision log | **Done** (2026-10-07) | `align/step-03-decisions` | Q1–Q9 and Q14–Q16 ratified as DL-D5–D15; Q10–Q13 stay open until steps 8–11 |
-| 4 | Minimal infrastructure | Package layout, pinned dependencies, YAML configs, seeding, logging against the sample counter, pytest and CI, DL-F1–F6 as tests, cleanup of dead code and old results | Not started | | Rows C1–C6, E8. First action: record the package versions of the pre-alignment environment (DL-D5) |
+| 4 | Minimal infrastructure | Package layout, pinned dependencies, YAML configs, seeding, logging against the sample counter, pytest and CI, DL-F1–F6 as tests, cleanup of dead code and old results | **In review** | `align/step-04-infrastructure` | Package `src/hrlmpc` with YAML configs, seeding, run logging and the DL-F1–F6 tests; CI for `tests/`; old results untracked; dead code removed. Done when the full suite passes in the new virtual environment and CI is green |
 | 5 | Physics module, tests first | One pure, batched step function implementing E1–E6 on polytopic geometry; tests of rows M and E | Not started | | DL-D9–D12 |
 | 6 | MDP wrapper | Observation, goal, reward with the contact penalty, termination, disturbance sampling, action map, metrics R3–R4 | Not started | | DL-D13–D15 |
 | 7 | Flat PPO on the new environment | Learns on a trivial layout; becomes the reference for logging and configs | Not started | | |
@@ -65,7 +65,8 @@ Contents: [1 How to use](#1-how-to-use-this-file) · [2 Workflow](#2-workflow-an
   - about 2 350 are study outputs under `scenarios/*/studies/` (logs, metrics, configs, PDF figures);
   - checkpoints (`*.pt`, `scripts/checkpoints/`) are ignored.
 - **Untracked file.** `docs/stato-ppo-mpc.md` is in the working tree: an Italian memo for the supervisors dated 2026-09-29, partly stale (see Q15).
-- **Dependencies are not declared** (no `requirements.txt`, no `pyproject.toml`). What the code imports:
+- **Pre-alignment environment.** The package versions of the global Python 3.12 environment are recorded in `requirements-pre-alignment.txt` (pip freeze of 2026-10-06, committed in step 4). The reference stack is now pinned in `requirements.txt` (DL-D5).
+- **Dependencies were not declared** at the tag (no `requirements.txt`, no `pyproject.toml`). What the code imports:
   - numpy, scipy, torch, gymnasium, matplotlib, pytest;
   - cvxpy with Clarabel;
   - gurobipy, which needs a licence and is required even for the tunnel;
@@ -220,7 +221,7 @@ Sources: "Instr." is a section of the project instructions; "DL-" is a decision-
 | E5 | Wall friction $\gamma_w$ on the sliding velocity | Instr. step 5, DL-A3 | Absent | MISSING | S | implement | sliding decay factor; $\gamma_w=0$ leaves ambient friction only | 5 |
 | E6 | $p_{k+1}=p_k+T_s v_{k+1}$ | Instr. step 6 | $p^+=p+T_s v+\tfrac12 T_s^2 u$ (`slalom_env.py:183`) | CONFLICT | S | rewrite | as M3 | 5 |
 | E7 | One module implements the physical step for all architectures | Instr. Code | Four implementations (`slalom_env.py`, `vec_slalom_env.py`, `tunnel_env.py`, `vec_tunnel_env.py`) and two `actuation.py`; the plant is re-implemented in `stress_disturbed.py:168`; $A$, $B$ are hard-coded in `tube_mpc.py:635-642` and `mpc_worker.py:81-92` | CONFLICT | S | rewrite: one batched step function, the scalar env being a batch of one | single import site; scalar = batched | 5 |
-| E8 | Tests on non-penetration, speed limit, contact at corners, wall friction | Instr. Code | Tests cover radial saturation, the speed limit, gate faces and a corner hit (`envs/tests/test_slalom_env.py:80-704`); none cover friction, penetration between samples or DL-F1–F6 | PARTIAL | F | extend | — | 4–5 |
+| E8 | Tests on non-penetration, speed limit, contact at corners, wall friction | Instr. Code | Legacy tests cover radial saturation, the speed limit, gate faces and a corner hit (`envs/tests/test_slalom_env.py:80-704`); none cover friction or penetration between samples. DL-F1–F6 are tested since step 4 (`tests/test_model_facts.py`) | PARTIAL | F | physics tests with the new module | — | 5 |
 
 ### Contact, reward and metrics (R)
 
@@ -261,7 +262,7 @@ Sources: "Instr." is a section of the project instructions; "DL-" is a decision-
 
 | ID | Requirement | Source | Pre-alignment code (evidence) | Status | Class | Action | Verified by (planned) | Step |
 |---|---|---|---|---|---|---|---|---|
-| X1 | One definition of "sample" for all architectures | Instr. Fair comparison | Environment steps everywhere (`ppo/ppo_train.py:391`, `hppo/hppo_train.py:1067`, `ppo_mpc/ppo_mpc_train.py:543`), but not declared | PARTIAL | Y | declared in DL-D6; implement the counters | — | 4 |
+| X1 | One definition of "sample" for all architectures | Instr. Fair comparison | Environment steps everywhere (`ppo/ppo_train.py:391`, `hppo/hppo_train.py:1067`, `ppo_mpc/ppo_mpc_train.py:543`); declared in DL-D6; counters `SampleCounter` and records keyed by `env_steps` in `src/hrlmpc/utils/runlog.py` (step 4) | PARTIAL | Y | use the counters in every new training loop | `tests/test_runlog.py` | 7–9 |
 | X2 | Same interaction budget | Instr. Fair comparison | Defaults are equal (`study.py:111`), but the reported slalom comparison runs PPO and hPPO for 1 024 000 steps and PPO_MPC for 204 800 (`study_ppo_mpc.py:17-19`); early stop on solve is on by default (`ppo/ppo_train.py:111`) | CONFLICT | S | enforce in the comparison tooling | comparison refuses unequal budgets | 11 |
 | X3 | Same seeds, at least 5 per configuration | Instr. Fair comparison | Same integer seeds; 20 for PPO and hPPO (`study.py:191`) vs 10 for PPO_MPC (`study_ppo_mpc.py:6`) | PARTIAL | S | one seed list per comparison | — | 11 |
 | X4 | Comparable tuning effort | Instr. Fair comparison | No protocol; only hPPO's Worker coefficient was swept (`sweep_extrinsic_coef.py:161`); PPO_MPC "has not been re-swept" (`ppo_mpc/ppo_mpc_train.py:176`) | MISSING | S | define (Q13) | — | 11 |
@@ -273,12 +274,12 @@ Sources: "Instr." is a section of the project instructions; "DL-" is a decision-
 
 | ID | Requirement | Source | Pre-alignment code (evidence) | Status | Class | Action | Verified by (planned) | Step |
 |---|---|---|---|---|---|---|---|---|
-| C1 | Modular, typed Python; English docstrings, comments, identifiers | Instr. Code | No type hints in the RL code; partial docstrings; English throughout except the untracked Italian memo; monolithic training loops (`hppo/hppo_train.py`: 1 485 lines) | PARTIAL | Y | refactor each file when touched | type checker in CI | all |
-| C2 | External configuration files (YAML or similar) | Instr. Code | argparse defaults and dataclasses; `config.json` per run, without the environment parameters (`metrics_log.py:35-37`) | MISSING | Y | YAML configs | config round-trip test | 4 |
-| C3 | Fixed seeds, reproducible experiments | Instr. Code | RNGs seeded (`ppo/ppo_train.py:271-274`); `--cuda` on by default (`:89`) with no deterministic algorithms; neither the git hash nor package versions recorded | PARTIAL | Y | refactor | rerun determinism test | 4 |
-| C4 | Learning-curve logging | Instr. Code | `metrics.jsonl` keyed by `global_step` (`metrics_log.py:40-47`); W&B optional; the reach script logs only to W&B | OK | — | keep | — | 4 |
-| C5 | Reference stack declared | Instr. Code | No requirements file and no `pyproject.toml`; the stack can only be inferred from the imports (§3) | MISSING | Y | declare and pin (Q1) | CI install | 4 |
-| C6 | Model facts DL-F1–F6 checked automatically | DL | Only in `claude/verify_setup.py`, in the Claude project | MISSING | F | port into the tests | — | 4 |
+| C1 | Modular, typed Python; English docstrings, comments, identifiers | Instr. Code | Legacy: no type hints in the RL code, partial docstrings, monolithic training loops (`hppo/hppo_train.py`: 1 485 lines). New code in `src/hrlmpc` is typed, with English docstrings | PARTIAL | Y | write new code this way; legacy replaced in steps 5–9 | type checker in CI (to add) | all |
+| C2 | External configuration files (YAML or similar) | Instr. Code | `configs/env/slalom.yaml`, `tunnel.yaml` with a strict typed loader (`src/hrlmpc/config.py`), step 4. Legacy entry points still use argparse defaults and dataclasses | PARTIAL | Y | every new entry point reads YAML | `tests/test_config.py` | 4–11 |
+| C3 | Fixed seeds, reproducible experiments | Instr. Code | Legacy: RNGs seeded (`ppo/ppo_train.py:271-274`), `--cuda` on by default (`:89`), no deterministic algorithms. New: `seed_everything` with deterministic PyTorch (`src/hrlmpc/utils/seeding.py`); `meta.json` records seed, git commit and package versions (`runlog.py`), step 4 | PARTIAL | Y | new entry points use them, on CPU by default | `tests/test_seeding.py`, `tests/test_runlog.py` | 4–11 |
+| C4 | Learning-curve logging | Instr. Code | Legacy `metrics.jsonl` keyed by `global_step` (`metrics_log.py:40-47`). New `RunLogger` writes `config.yaml`, `meta.json` and `metrics.jsonl` keyed by `env_steps` and `manager_decisions` (`src/hrlmpc/utils/runlog.py`), step 4 | OK | — | keep | `tests/test_runlog.py` | 4 |
+| C5 | Reference stack declared | Instr. Code | `pyproject.toml` (package `hrlmpc`, extras `rl`, `mpc`, `plots`, `test`); `requirements.txt` locks all 56 third-party packages at their pre-alignment versions (DL-D5, `requirements-pre-alignment.txt`), step 4 | OK | — | keep | CI install; `pip check` and the full suite in the locked virtual environment | 4 |
+| C6 | Model facts DL-F1–F6 checked automatically | DL | `tests/test_model_facts.py` checks M and F1–F6 on `src/hrlmpc/model.py`, and CI runs it (step 4) | OK | — | keep | CI | 4 |
 
 ## 7. Inventory of the pre-alignment code
 
@@ -296,18 +297,18 @@ Planned fates are proposals, to be confirmed in step 3. Deleted or archived file
 | `algorithms/ppo/` | Flat PPO | refactor | 7 | |
 | `algorithms/hppo/` | hPPO | refactor | 8 | Onto the common runner |
 | `algorithms/ppo_mpc/` | PPO_MPC | refactor | 8–9 | Its loop is a fork of hPPO's; move it onto the common runner |
-| `algorithms/ppo_mpc_reach/`, `scenarios/*/scripts/script_ppo_mpc_reach.py` | Reach arm, disabled and stale | delete | 4 | Rebuilt in step 10 |
+| `algorithms/ppo_mpc_reach/`, `scenarios/*/scripts/script_ppo_mpc_reach.py` | Reach arm, disabled and stale | **deleted** (step 4) | 4 | Rebuilt in step 10 |
 | `algorithms/tube_mpc.py` | Tube MPC Worker | refactor | 9 | Model module, $W=BD$, inter-sample constraints |
-| `algorithms/mpc_worker.py` and its test | Old QP worker, dead code | delete | 4 | |
+| `algorithms/mpc_worker.py` and its test | Old QP worker, dead code | **deleted** (step 4) | 4 | |
 | `algorithms/optimal_solver.py` | Min-time oracle | refactor | 9–11 | Model module, inter-sample constraints |
 | `algorithms/study.py`, `study_plots.py`, `solved_check.py`, `metrics_log.py` | Protocol and analysis | refactor | 11 | |
 | `algorithms/spawn_coverage.py` | Spawn diagnostic | keep or delete | 6 | Decide together with the spawn sampler |
-| `scenarios/slalom/scripts/{stress_disturbed,study_init_sampler,probe_start_variance,sweep_extrinsic_coef}.py` | One-off investigations | delete from `main` | 4 | |
-| `scenarios/*/scripts/script_optimal.py` | Prints the oracle's metrics | delete | 4 | Superseded by the study tooling |
+| `scenarios/slalom/scripts/{stress_disturbed,study_init_sampler,probe_start_variance,sweep_extrinsic_coef}.py` | One-off investigations | **deleted** from `main` (step 4) | 4 | |
+| `scenarios/*/scripts/script_optimal.py` | Prints the oracle's metrics | **deleted** (step 4) | 4 | Superseded by the study tooling |
 | `scenarios/*/scripts/script_*.py`, `study_*.py`, `compare_disturbed.py` | Entry points | refactor | 4, 11 | One CLI driven by configs |
-| `docs/*.md` | Investigation reports on the old dynamics | archive | 4 | Index in §8 |
-| `docs/stato-ppo-mpc.md` (untracked) | Memo for the supervisors | merge and drop | 3 | Q15 |
-| `scenarios/*/studies/**` | Old results | remove from `main` | 4 | Q14 |
+| `docs/*.md` | Investigation reports on the old dynamics | **deleted** from `main` (step 4, DL-D7) | 4 | Index in §8; still at tag `pre-alignment` |
+| `docs/stato-ppo-mpc.md` (untracked) | Memo for the supervisors | **merged and moved out** (step 3, DL-D8) | 3 | |
+| `scenarios/*/studies/**` | Old results | **untracked** (step 4, DL-D7) | 4 | Still on the author's disk, ignored by git; tracked copies at tag `pre-alignment` |
 | `scenarios/*/ENVIRONMENT.md` | Environment description | rewrite | 6 | |
 | `pytest.ini` | Test configuration | keep | — | |
 
@@ -363,3 +364,6 @@ Every arm solves every seed: PPO_MPC 10/10, hPPO 20/20, PPO 20/20.
 | 2026-10-06 | 2 | Evidence re-checked; two rows corrected (R2, X5: the `--contact-penalty` flag also exists in PPO_MPC) and X7 made precise. Step 2 closed; this file committed on `align/step-02-audit` and merged into `main` (PR #1). |
 | 2026-10-06 | 3 | Q1, Q2, Q14, Q15 ratified (DL-D5–D8). Notes from the memo of 2026-09-29 added under §5 for Q11 and Q12. |
 | 2026-10-07 | 3 | Q3–Q9 and Q16 ratified (DL-D9–D15); matrix actions updated (M5, M6, M7, R2, R5, AM1, X1). Step 3 closed. |
+| 2026-10-07 | 4 | New package `src/hrlmpc` (model, config, seeding, run logging) with YAML configs and tests (M, F1–F6, config, logging, seeding); `pyproject.toml`, pinned `requirements.txt`, `requirements-pre-alignment.txt`; CI on `tests/`; `.gitattributes`. Old results untracked (kept on disk); old docs, dead code and one-off scripts deleted from `main`. Rows C1–C6, E8, X1 updated. In review. |
+| 2026-10-07 | 4 | The author adds the CI workflow (`.github/workflows/tests.yml`). Full suite in the new virtual environment: 443 passed, 1 failed. The legacy test `test_render_rgb_array_returns_frame` (tunnel) failed because matplotlib picked its Tk backend and the virtual environment has no usable Tcl/Tk (`tk.tcl` not found); tests now render with the Agg backend (root `conftest.py`). The comment in `pytest.ini` no longer lists the deleted `ppo_mpc_reach` tests. |
+| 2026-10-07 | 4 | Full suite after the Agg fix: 444 passed, 16 warnings (2 in step 1). The 14 new ones come from pyparsing 3.3.3, whose deprecated names matplotlib 3.9.2 still calls. Cause: `requirements.txt` pinned only the direct dependencies, so the virtual environment got newer versions of 32 of the 45 transitive packages than the pre-alignment environment. `requirements.txt` now locks all 56 third-party packages at their pre-alignment versions; C5 updated. |

@@ -1,0 +1,3 @@
+# Store text files with LF line endings in the repository, on every platform.
+# Git recognises binary files (PDF figures, checkpoints) by itself.
+* text=auto

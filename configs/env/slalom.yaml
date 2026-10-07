@@ -1,0 +1,33 @@
+# Slalom: the main layout of the comparison.
+# Values from the thesis decision log: D9 (physics), D11 (geometry),
+# D13 (task and reward) and D14 (contact penalty).
+
+physics:
+  dt: 0.1          # sampling time T_s [s]
+  a_max: 2.5       # radius of the input set U [m/s^2]
+  v_max: 1.2       # radius of the velocity set V [m/s]
+  gamma: 0.5       # viscous friction [1/s]
+  gamma_w: 1.0     # wall friction on the sliding velocity [1/s]
+  d_bar: 0.0       # radius of the disturbance set D [m/s^2]; levels used: 0, 0.5, 1.0
+
+geometry:
+  arena: {x: [-1.0, 11.0], y: [-2.0, 2.0]}
+  obstacles:                              # every face is a wall
+    - {x: [4.0, 5.0], y: [-2.0, 0.25]}    # gate 1, lower block
+    - {x: [4.0, 5.0], y: [1.75, 2.0]}     # gate 1, upper block
+    - {x: [7.0, 8.0], y: [-2.0, -1.75]}   # gate 2, lower block
+    - {x: [7.0, 8.0], y: [-0.25, 2.0]}    # gate 2, upper block
+  goal_x: 10.0     # goal region: p_x >= goal_x
+
+task:
+  spawn: {x: [0.0, 2.0], y: [-1.0, 1.0]}  # initial position uniform on this box, at rest
+  horizon: 200     # truncation after this many steps
+
+reward:            # all coefficients non-negative; signs in hrlmpc.config.RewardConfig
+  time_penalty: 1.0
+  success_bonus: 1000.0
+  progress_coef: 10.0          # Phi(p) = -progress_coef * max(goal_x - p_x, 0)
+  shaping_discount: 0.99       # learners' per-step discount, in the potential-based shaping
+  effort_coef: 0.01            # times ||u||^2 / a_max^2
+  contact_impulse_coef: 50.0   # c_n [s/m], times the wall's velocity correction
+  contact_step_coef: 1.0       # c_s, per step in contact

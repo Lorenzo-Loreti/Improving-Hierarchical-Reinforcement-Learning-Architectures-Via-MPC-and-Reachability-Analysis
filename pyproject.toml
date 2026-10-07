@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hrlmpc"
+version = "0.1.0"
+description = "Hierarchical RL with MPC and reachability analysis: environment, agents and experiments of a master thesis."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "numpy~=2.1.1",
+    "scipy~=1.15.2",
+    "PyYAML~=6.0.2",
+]
+
+[project.optional-dependencies]
+rl = ["torch~=2.11.0", "gymnasium~=1.2.3"]
+mpc = ["cvxpy~=1.9.2", "clarabel~=0.11.1", "gurobipy~=13.0.3"]
+plots = ["matplotlib~=3.9.2"]
+test = ["pytest~=9.0.3"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

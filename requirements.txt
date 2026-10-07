@@ -1,0 +1,73 @@
+# Locked reference environment (decision log D5): every third-party package
+# has the version it had in the pre-alignment environment
+# (requirements-pre-alignment.txt). Install into a Python 3.12 virtual
+# environment with
+#     python -m pip install -r requirements.txt
+# The lock was taken on Windows (CPython 3.12, win_amd64). On other platforms
+# pip may add platform-specific dependencies that are not pinned here, such as
+# the CUDA wheels of torch on Linux.
+# The last line installs this repository's package (src/hrlmpc) in editable mode.
+
+# Direct dependencies (compatible ranges in pyproject.toml).
+numpy==2.1.1
+scipy==1.15.2
+PyYAML==6.0.2
+torch==2.11.0
+gymnasium==1.2.3
+cvxpy==1.9.2
+clarabel==0.11.1
+gurobipy==13.0.3
+matplotlib==3.9.2
+pytest==9.0.3
+# Imported by the legacy training loops (algorithms/*/*_train.py); drop it
+# once they are replaced.
+wandb==0.28.1
+
+# Their dependencies.
+annotated-types==0.8.0
+certifi==2024.8.30
+cffi==1.17.1
+charset-normalizer==3.3.2
+click==8.4.2
+cloudpickle==3.1.2
+colorama==0.4.6 ; sys_platform == "win32"
+contourpy==1.3.0
+cycler==0.12.1
+Farama-Notifications==0.0.4
+filelock==3.28.0
+fonttools==4.54.1
+fsspec==2026.3.0
+highspy==1.15.1
+idna==3.10
+iniconfig==2.3.0
+Jinja2==3.1.4
+joblib==1.5.3
+kiwisolver==1.4.7
+MarkupSafe==2.1.5
+mpmath==1.3.0
+networkx==3.5
+osqp==1.1.3
+packaging==24.1
+pillow==10.4.0
+platformdirs==4.3.6
+pluggy==1.6.0
+protobuf==5.29.4
+pycparser==2.22
+pydantic==2.13.4
+pydantic_core==2.46.4
+Pygments==2.18.0
+pyparsing==3.1.4
+python-dateutil==2.9.0.post0
+qdldl==0.1.9.post1
+requests==2.32.3
+scs==3.2.11
+sentry-sdk==2.66.1
+setuptools==75.1.0
+six==1.16.0
+sparsediffpy==0.3.0
+sympy==1.14.0
+typing_extensions==4.16.0
+typing-inspection==0.4.2
+urllib3==2.2.3
+
+-e .
