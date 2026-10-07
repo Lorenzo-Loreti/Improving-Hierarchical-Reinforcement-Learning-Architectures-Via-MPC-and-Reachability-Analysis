@@ -169,9 +169,17 @@ def _norm(x: FloatArray) -> FloatArray:
 
 
 def _project_disk(x: FloatArray, radius: float) -> FloatArray:
-    """Radial projection of each row onto the disk of radius ``radius``."""
-    scale = np.minimum(1.0, radius / np.maximum(_norm(x), _TINY))
-    result: FloatArray = x * scale[:, None]
+    """Radial projection of each row onto the disk of radius ``radius``.
+
+    Rows inside the disk are returned unchanged. The direction is computed from
+    ``x`` scaled by its largest entry, so even rows whose norm overflows are
+    projected correctly.
+    """
+    largest = np.max(np.abs(x), axis=1, keepdims=True)
+    direction = x / np.maximum(largest, _TINY)  # entries in [-1, 1]
+    length = np.hypot(direction[:, :1], direction[:, 1:])  # in [1, sqrt(2)] unless x = 0
+    outside = largest > radius / np.maximum(length, _TINY)  # ||x|| > radius, without overflow
+    result: FloatArray = np.where(outside, radius * direction / np.maximum(length, _TINY), x)
     return result
 
 
