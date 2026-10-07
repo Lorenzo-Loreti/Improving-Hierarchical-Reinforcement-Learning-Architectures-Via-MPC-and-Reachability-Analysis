@@ -8,14 +8,14 @@ keys are errors, so a typo cannot silently fall back to a default.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from hrlmpc.model import PhysicsParams
+from hrlmpc.utils.strict_yaml import load_yaml
 
 
 @dataclass(frozen=True)
@@ -113,6 +113,13 @@ class RewardConfig:
     with ``Phi(p) = -progress_coef * max(goal_x - p_x, 0)``. Every
     coefficient is non-negative; the signs are in the formula.
 
+    With ``shaping_discount`` equal to the learners' discount the progress
+    term is exact potential-based shaping (Ng, Harada and Russell, ICML
+    1999), which leaves the optimal policy unchanged but gives partial
+    progress no lasting value. The configurations use 1 (D22): the
+    undiscounted progress reward of the pre-alignment code, which keeps
+    rewarding the agent for being closer to the goal.
+
     Raises:
         ValueError: If a coefficient is negative or the shaping discount is
             outside ``(0, 1]``.
@@ -183,9 +190,11 @@ def _section(data: Mapping[str, Any], keys: tuple[str, ...], where: str) -> dict
 
 
 def _float(value: Any, where: str) -> float:
-    """Convert a YAML scalar to float, rejecting booleans and non-numbers."""
+    """Convert a YAML scalar to a finite float, rejecting booleans, non-numbers, infinities and NaN."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{where} must be a number, got {value!r}")
+    if not math.isfinite(value):
+        raise ValueError(f"{where} must be finite, got {value!r}")
     return float(value)
 
 
@@ -277,8 +286,6 @@ def load_env_config(path: str | Path) -> EnvConfig:
         The validated configuration.
 
     Raises:
-        ValueError: If the file does not describe a valid configuration.
+        ValueError: If the file repeats a key or does not describe a valid configuration.
     """
-    with Path(path).open(encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    return env_config_from_dict(data)
+    return env_config_from_dict(load_yaml(path))
