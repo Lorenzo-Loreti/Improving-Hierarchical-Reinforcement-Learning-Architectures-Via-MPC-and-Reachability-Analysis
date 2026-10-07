@@ -8,14 +8,14 @@ keys are errors, so a typo cannot silently fall back to a default.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from hrlmpc.model import PhysicsParams
+from hrlmpc.utils.strict_yaml import load_yaml
 
 
 @dataclass(frozen=True)
@@ -183,9 +183,11 @@ def _section(data: Mapping[str, Any], keys: tuple[str, ...], where: str) -> dict
 
 
 def _float(value: Any, where: str) -> float:
-    """Convert a YAML scalar to float, rejecting booleans and non-numbers."""
+    """Convert a YAML scalar to a finite float, rejecting booleans, non-numbers, infinities and NaN."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{where} must be a number, got {value!r}")
+    if not math.isfinite(value):
+        raise ValueError(f"{where} must be finite, got {value!r}")
     return float(value)
 
 
@@ -277,8 +279,6 @@ def load_env_config(path: str | Path) -> EnvConfig:
         The validated configuration.
 
     Raises:
-        ValueError: If the file does not describe a valid configuration.
+        ValueError: If the file repeats a key or does not describe a valid configuration.
     """
-    with Path(path).open(encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    return env_config_from_dict(data)
+    return env_config_from_dict(load_yaml(path))

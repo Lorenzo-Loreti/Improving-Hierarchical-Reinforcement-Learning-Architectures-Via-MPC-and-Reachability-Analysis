@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import math
 from pathlib import Path
 from typing import Any
 
@@ -129,3 +130,22 @@ def test_degenerate_box_is_rejected() -> None:
     data["geometry"]["arena"] = {"x": [1.0, 1.0], "y": [-2.0, 2.0]}
     with pytest.raises(ValueError, match="lo < hi"):
         env_config_from_dict(data)
+
+
+@pytest.mark.parametrize(("section", "key"), [("physics", "dt"), ("reward", "time_penalty"), ("geometry", "goal_x")])
+@pytest.mark.parametrize("value", [math.inf, math.nan])
+def test_non_finite_values_are_rejected(section: str, key: str, value: float) -> None:
+    data = _slalom_dict()
+    data[section][key] = value
+    with pytest.raises(ValueError, match="finite"):
+        env_config_from_dict(data)
+
+
+def test_a_repeated_key_is_rejected(tmp_path: Path) -> None:
+    """YAML parsers keep the last of two equal keys; the configuration loader refuses the file instead."""
+    text = (CONFIG_DIR / "slalom.yaml").read_text(encoding="utf-8")
+    path = tmp_path / "twice.yaml"
+    path.write_text(text.replace("physics:\n", "physics:\n  dt: 0.2\n", 1), encoding="utf-8")
+    with pytest.raises(ValueError, match="duplicate key 'dt'"):
+        load_env_config(path)
+
