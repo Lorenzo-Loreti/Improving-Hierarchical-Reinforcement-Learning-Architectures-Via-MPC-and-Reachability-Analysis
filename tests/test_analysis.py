@@ -103,6 +103,12 @@ def test_runs_are_found_below_a_directory_once(tmp_path: Path, three_runs: list[
         find_runs([tmp_path / "not-a-run"])
 
 
+def test_group_labels_name_the_layout_on_any_platform(tmp_path: Path) -> None:
+    run = load_run(_make_run(tmp_path, 1, [_eval(1.0, 0.01, 0.0, 900.0)]))
+    run.config["env_file"] = "configs\\env\\slalom.yaml"  # written on Windows
+    assert list(group_runs([run])) == ["ppo slalom"]
+
+
 def test_runs_are_grouped_by_their_configuration(tmp_path: Path) -> None:
     record = [_eval(1.0, 0.01, 0.0, 900.0)]
     for seed in (1, 2):

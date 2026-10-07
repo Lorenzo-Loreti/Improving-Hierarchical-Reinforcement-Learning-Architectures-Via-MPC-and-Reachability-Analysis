@@ -26,7 +26,7 @@ import json
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 import numpy as np
@@ -118,7 +118,8 @@ def group_runs(runs: Sequence[Run]) -> dict[str, list[Run]]:
     for fingerprint, members in by_print.items():
         config = members[0].config
         env_file = config.get("env_file")
-        labels[fingerprint] = f"{config.get('algorithm', 'run')} {Path(env_file).stem if env_file else 'env'}"
+        layout = PureWindowsPath(env_file).stem if env_file else "env"  # accepts both / and \ separators
+        labels[fingerprint] = f"{config.get('algorithm', 'run')} {layout}"
     groups: dict[str, list[Run]] = {}
     for fingerprint, members in by_print.items():
         label = labels[fingerprint]

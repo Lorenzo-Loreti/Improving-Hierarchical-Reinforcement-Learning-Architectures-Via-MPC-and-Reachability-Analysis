@@ -22,7 +22,7 @@ reward:
   time_penalty: 1.0
   success_bonus: 1000.0
   progress_coef: 10.0
-  shaping_discount: 0.99
+  shaping_discount: 1.0
   effort_coef: 0.01
   contact_impulse_coef: 50.0
   contact_step_coef: 1.0

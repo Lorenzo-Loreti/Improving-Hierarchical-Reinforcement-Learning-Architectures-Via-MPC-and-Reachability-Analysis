@@ -32,6 +32,7 @@ from hrlmpc.rollout import collect_rollout, compute_gae  # noqa: E402
 REPO = Path(__file__).resolve().parents[1]
 NETWORK = NetworkConfig(hidden_sizes=(64, 64))
 _UPDATE = UpdateConfig(
+    discount=0.99,
     epochs=10,
     minibatches=4,
     learning_rate=3e-4,

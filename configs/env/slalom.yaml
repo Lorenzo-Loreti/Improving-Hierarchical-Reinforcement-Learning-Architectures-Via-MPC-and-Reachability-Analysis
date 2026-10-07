@@ -27,7 +27,7 @@ reward:            # all coefficients non-negative; signs in hrlmpc.config.Rewar
   time_penalty: 1.0
   success_bonus: 1000.0
   progress_coef: 10.0          # Phi(p) = -progress_coef * max(goal_x - p_x, 0)
-  shaping_discount: 0.99       # learners' per-step discount, in the potential-based shaping
+  shaping_discount: 1.0        # 1: undiscounted progress, Phi(p+) - Phi(p) (D22); the learners' discount is in configs/agent
   effort_coef: 0.01            # times ||u||^2 / a_max^2
   contact_impulse_coef: 50.0   # c_n [s/m], times the wall's velocity correction
   contact_step_coef: 1.0       # c_s, per step in contact

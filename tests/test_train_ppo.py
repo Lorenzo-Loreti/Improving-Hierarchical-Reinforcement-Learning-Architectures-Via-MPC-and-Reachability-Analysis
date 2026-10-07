@@ -62,6 +62,7 @@ def test_a_short_run_writes_its_directory(tmp_path: Path) -> None:
     assert updates[-1]["rollout/episodes"] >= 1  # the horizon of 10 ends episodes inside the rollouts
     config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
     assert (config["algorithm"], config["budget"], config["seed"], config["discount"]) == ("ppo", 32, 1, 0.99)
+    assert config["env"]["reward"]["shaping_discount"] == 1.0  # D22
     assert env_config_from_dict(config["env"]) == _env()
     assert ppo_config_from_dict(config["agent"]) == _ppo()
     details = [json.loads(line) for line in (run_dir / "evaluations.jsonl").read_text(encoding="utf-8").splitlines()]
@@ -97,8 +98,8 @@ def test_the_budget_must_end_on_an_update_and_an_evaluation(tmp_path: Path, budg
     assert not (tmp_path / "run").exists()
 
 
-def test_the_discount_is_the_environments_shaping_discount(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """D13: the shaping is exact only with the learner's discount, so the loop reads it from the environment."""
+def test_the_discount_is_the_agents_own(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """D22: GAE uses the agent configuration's discount, whatever the environment's shaping discount."""
     import hrlmpc.train_ppo as module
 
     seen: list[Any] = []
@@ -109,9 +110,11 @@ def test_the_discount_is_the_environments_shaping_discount(tmp_path: Path, monke
         return original(*args, **kwargs)
 
     monkeypatch.setattr(module, "compute_gae", spy)
-    run_dir = train(_env(reward={"shaping_discount": 0.9}), _ppo(), budget=32, seed=0, run_dir=tmp_path / "run")
+    env = _env(reward={"shaping_discount": 0.95})
+    run_dir = train(env, _ppo(update={"discount": 0.9}), budget=32, seed=0, run_dir=tmp_path / "run")
     assert seen == [(0.9, 0.95), (0.9, 0.95)]
-    assert yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))["discount"] == 0.9
+    config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    assert config["discount"] == 0.9 and config["env"]["reward"]["shaping_discount"] == 0.95
 
 
 def test_the_final_checkpoint_reproduces_the_last_evaluation(tmp_path: Path) -> None:

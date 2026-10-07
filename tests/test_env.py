@@ -151,27 +151,29 @@ def test_seeding_is_reproducible_and_independent_of_the_batch() -> None:
     assert not np.array_equal(other.reset(), NavigationEnv(config, num_envs=1, seed=3).reset())
 
 
-def test_reward_of_a_head_on_impact() -> None:
-    """D13, D14: r = -1 - c_n ||dv_wall|| - c_s + (0.99 Phi(p+) - Phi(p)) - effort, with p_x unchanged."""
-    config = _config(physics={"d_bar": 0.0})
+@pytest.mark.parametrize("s", [1.0, 0.99])
+def test_reward_of_a_head_on_impact(s: float) -> None:
+    """D13, D14, D22: r = -1 - c_n ||dv_wall|| - c_s + (s Phi(p+) - Phi(p)) - effort, with p_x unchanged."""
+    config = _config(physics={"d_bar": 0.0}, reward={"shaping_discount": s})
     env = NavigationEnv(config, num_envs=1, seed=SEED)
     env.reset(positions=[[2.0, -1.95]], velocities=[[0.0, -1.2]])
     out = env.step([[0.0, 0.0]])
     np.testing.assert_allclose(out.info.impulse, [0.64], atol=1e-12)
-    shaping = 0.99 * -80.0 + 80.0
+    shaping = s * -80.0 + 80.0
     np.testing.assert_allclose(out.reward, [-1.0 - 50.0 * 0.64 - 1.0 + shaping], atol=1e-10)
     np.testing.assert_allclose(out.info.reward_unshaped, [-1.0 - 50.0 * 0.64 - 1.0], atol=1e-10)
     assert out.info.contact.all()
 
 
-def test_reward_of_free_motion_with_full_thrust() -> None:
-    """D13: effort -0.01 ||u||^2 / a_max^2 on the saturated input, progress shaping on p_x."""
-    config = _config(physics={"d_bar": 0.0})
+@pytest.mark.parametrize("s", [1.0, 0.99])
+def test_reward_of_free_motion_with_full_thrust(s: float) -> None:
+    """D13, D22: effort -0.01 ||u||^2 / a_max^2 on the saturated input, progress shaping on p_x."""
+    config = _config(physics={"d_bar": 0.0}, reward={"shaping_discount": s})
     env = NavigationEnv(config, num_envs=1, seed=SEED)
     env.reset(positions=[[2.0, 0.0]], velocities=[[0.0, 0.0]])
     out = env.step([[1.0, 0.0]])
     x_next = 2.0 + 0.1 * 0.25  # v+ = 0.1 * 2.5, p+ = p + 0.1 v+
-    shaping = 0.99 * _phi(np.array(x_next), config) - _phi(np.array(2.0), config)
+    shaping = s * _phi(np.array(x_next), config) - _phi(np.array(2.0), config)
     np.testing.assert_allclose(out.reward, [-1.0 - 0.01 + shaping], atol=1e-10)
     np.testing.assert_allclose(out.info.reward_unshaped, [-1.0 - 0.01], atol=1e-10)
     assert not out.info.contact.any()
@@ -193,7 +195,7 @@ def test_success_terminates_and_adds_the_bonus_to_the_other_terms() -> None:
     env.reset(positions=[[9.95, 0.0]], velocities=[[1.0, 0.0]])
     out = env.step([[0.0, 0.0]])
     assert out.terminated.tolist() == [True] and out.truncated.tolist() == [False]
-    np.testing.assert_allclose(out.reward, [-1.0 + 1000.0 + 0.5], atol=1e-10)  # shaping 0.99 * 0 - (-0.5)
+    np.testing.assert_allclose(out.reward, [-1.0 + 1000.0 + 0.5], atol=1e-10)  # shaping s * 0 - (-0.5), any s
     np.testing.assert_allclose(out.final_obs[0, 0], (10.045 + 1.0) / 6.0 - 1.0, atol=1e-12)
     (episode,) = out.episodes
     assert episode.success and episode.length == 1 and episode.env == 0
@@ -215,7 +217,7 @@ def test_truncation_after_the_horizon() -> None:
 
 
 def test_shaping_telescopes_without_discount() -> None:
-    """D13 correction 2: with shaping discount 1 the shaping terms of an episode sum to Phi(p_T) - Phi(p_0)."""
+    """D22: with shaping discount 1 the progress terms of an episode sum to Phi(p_T) - Phi(p_0)."""
     config = _config(reward={"shaping_discount": 1.0}, task={"horizon": 60})
     env = NavigationEnv(config, num_envs=4, seed=SEED)
     env.reset()
@@ -301,10 +303,22 @@ def test_reset_with_given_states_is_validated() -> None:
 
 @pytest.mark.parametrize("name", ["slalom", "tunnel"])
 def test_shipped_configs_meet_the_criterion_of_the_contact_penalty(name: str) -> None:
-    """D18: c_n >= (c_t + (1 - gamma_RL) B + c_e) / (a_max dt), so braking against a wall does not pay off."""
+    """D18, D22: braking against a wall does not pay off.
+
+    One saved step is worth at most c_t + (1 - gamma_RL) B + c_e, plus, when
+    the shaping discount s exceeds gamma_RL, the step's share (s - gamma_RL)
+    c_p d of the progress reward, with d at most the arena's length to the
+    goal line; c_n must exceed that worth divided by a_max dt.
+    """
     config = _config(name)
     r, p = config.reward, config.physics
-    threshold = (r.time_penalty + (1.0 - r.shaping_discount) * r.success_bonus + r.effort_coef) / (p.a_max * p.dt)
+    agent = yaml.safe_load((CONFIG_DIR.parent / "agent" / "ppo.yaml").read_text(encoding="utf-8"))
+    gamma = agent["update"]["discount"]
+    d_max = config.geometry.goal_x - config.geometry.arena.x[0]
+    step = r.time_penalty + (1.0 - gamma) * r.success_bonus + r.effort_coef
+    step += max(r.shaping_discount - gamma, 0.0) * r.progress_coef * d_max
+    threshold = step / (p.a_max * p.dt)
+    assert threshold == pytest.approx(48.44)  # 44.04 with exact shaping (D18)
     assert r.contact_impulse_coef >= threshold
     assert r.contact_step_coef > 0.0
 
@@ -375,8 +389,8 @@ def test_episode_statistics_are_the_sums_of_the_step_quantities() -> None:
 
 
 def test_discounted_shaping_telescopes() -> None:
-    """D13: the discounted shaping terms of an episode sum to gamma^T Phi(p_T) - Phi(p_0)."""
-    config = _config(physics={"d_bar": 1.0}, task={"horizon": 30})
+    """D13: with a shaping discount gamma the discounted terms of an episode sum to gamma^T Phi(p_T) - Phi(p_0)."""
+    config = _config(physics={"d_bar": 1.0}, task={"horizon": 30}, reward={"shaping_discount": 0.99})
     gamma = config.reward.shaping_discount
     env = NavigationEnv(config, num_envs=4, seed=SEED)
     env.reset()

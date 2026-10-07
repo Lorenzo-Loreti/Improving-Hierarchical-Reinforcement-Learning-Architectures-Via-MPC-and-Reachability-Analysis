@@ -10,10 +10,11 @@ each step, for every agent:
 4. the reward of D13 is computed, with the contact penalty of D14:
 
        r_k = -c_t - c_n ||dv_wall_k|| - c_s 1[contact at k] + B 1[p_(k+1) in G]
-             + gamma Phi(p_(k+1)) - Phi(p_k) - c_e ||u_k||^2 / a_max^2,
+             + s Phi(p_(k+1)) - Phi(p_k) - c_e ||u_k||^2 / a_max^2,
 
-   ``Phi(p) = -c_p max(goal_x - p_x, 0)``, ``u_k`` the input after the
-   saturation onto ``U``; the unshaped reward omits the shaping term;
+   ``Phi(p) = -c_p max(goal_x - p_x, 0)``, ``s`` the shaping discount (1 by
+   D22), ``u_k`` the input after the saturation onto ``U``; the unshaped
+   reward omits the shaping term;
 5. an episode terminates when ``p_(k+1)`` lies in the goal region and is
    truncated at the horizon. A finished episode restarts at rest, uniformly in
    the spawn box, unless automatic resets are disabled.

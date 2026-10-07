@@ -43,7 +43,7 @@ def test_slalom_config_matches_the_decision_log() -> None:
         r.effort_coef,
         r.contact_impulse_coef,
         r.contact_step_coef,
-    ) == (1.0, 1000.0, 10.0, 0.99, 0.01, 50.0, 1.0)
+    ) == (1.0, 1000.0, 10.0, 1.0, 0.01, 50.0, 1.0)  # shaping discount 1: D22
 
 
 def test_tunnel_config_is_the_slalom_without_obstacles() -> None:

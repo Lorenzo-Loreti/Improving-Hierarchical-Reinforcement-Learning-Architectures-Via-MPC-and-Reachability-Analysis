@@ -113,6 +113,13 @@ class RewardConfig:
     with ``Phi(p) = -progress_coef * max(goal_x - p_x, 0)``. Every
     coefficient is non-negative; the signs are in the formula.
 
+    With ``shaping_discount`` equal to the learners' discount the progress
+    term is exact potential-based shaping (Ng, Harada and Russell, ICML
+    1999), which leaves the optimal policy unchanged but gives partial
+    progress no lasting value. The configurations use 1 (D22): the
+    undiscounted progress reward of the pre-alignment code, which keeps
+    rewarding the agent for being closer to the goal.
+
     Raises:
         ValueError: If a coefficient is negative or the shaping discount is
             outside ``(0, 1]``.

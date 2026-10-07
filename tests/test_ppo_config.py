@@ -33,6 +33,7 @@ def test_the_shipped_configuration_is_the_pre_alignment_tuning() -> None:
     assert (config.rollout.num_envs, config.rollout.num_steps) == (8, 128)
     assert config.batch_size == 1024 and config.minibatch_size == 256
     u = config.update
+    assert u.discount == 0.99  # gamma_RL of D13, set here since D22
     assert (u.epochs, u.minibatches, u.learning_rate, u.anneal_learning_rate) == (10, 4, 3e-4, True)
     assert (u.critic_lr_mult, u.adam_eps, u.gae_lambda, u.clip_coef) == (3.0, 1e-5, 0.95, 0.2)
     assert (u.entropy_coef, u.max_grad_norm, u.value_norm_horizon) == (0.01, 0.5, 10)
@@ -66,6 +67,8 @@ def test_unknown_and_missing_keys_are_rejected() -> None:
         ("network", "hidden_sizes", [64.0], "integer"),
         ("rollout", "num_envs", 0, "num_envs"),
         ("rollout", "num_steps", True, "integer"),
+        ("update", "discount", 0.0, "discount"),
+        ("update", "discount", 1.5, "discount"),
         ("update", "epochs", 0, "epochs"),
         ("update", "minibatches", 2048, "minibatches"),
         ("update", "learning_rate", 0.0, "learning_rate"),

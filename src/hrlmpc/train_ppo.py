@@ -16,9 +16,9 @@ Each seed writes the run directory ``<runs-dir>/<layout>/ppo/seed<seed>-<UTC tim
 The budget counts samples: calls of the physical step during training, summed
 over the parallel agents (D6). It must be a whole number of updates and of
 evaluation intervals, so the last evaluation scores the final policy. The
-discount is the environment's ``reward.shaping_discount``, which keeps the
-potential-based shaping exact (D13). Evaluations run in an environment of
-their own, draw no random number of the training and are not samples (D20).
+discount is the agent configuration's ``update.discount`` (``gamma_RL``,
+D13, D22). Evaluations run in an environment of their own, draw no random
+number of the training and are not samples (D20).
 """
 
 from __future__ import annotations
@@ -148,7 +148,7 @@ def _train(
     per_update, every = ppo_config.batch_size, ppo_config.evaluation.every
     seed_everything(seed)
     torch.set_num_threads(ppo_config.runtime.torch_threads)
-    gamma = env_config.reward.shaping_discount
+    gamma = ppo_config.update.discount
     settings = ppo_config.update
     env = NavigationEnv(env_config, ppo_config.rollout.num_envs, seed=seed)
     agent = PPOAgent(

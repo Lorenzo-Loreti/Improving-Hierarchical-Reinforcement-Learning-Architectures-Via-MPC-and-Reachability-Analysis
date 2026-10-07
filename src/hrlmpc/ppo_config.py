@@ -1,11 +1,11 @@
 """Typed configuration of the in-house PPO, loaded from YAML (code rule C2, decision log D19, D20).
 
 A file under ``configs/agent/`` holds the hyperparameters of one learner:
-the networks, the rollout, the PPO update, the evaluation protocol and the
-runtime. The discount is deliberately absent: the training loops read it from
-the environment's ``reward.shaping_discount``, so that the potential-based
-shaping stays exact (D13). Loading validates every value; unknown or missing
-keys are errors. This module does not import PyTorch.
+the networks, the rollout, the PPO update with the learners' discount, the
+evaluation protocol and the runtime. The discount is independent of the
+environment's ``reward.shaping_discount`` (D22). Loading validates every
+value; unknown, missing or repeated keys are errors. This module does not
+import PyTorch.
 """
 
 from __future__ import annotations
@@ -49,6 +49,7 @@ class UpdateConfig:
     """Hyperparameters of the PPO update (D19).
 
     Attributes:
+        discount: The learners' per-step discount ``gamma_RL`` (D13, D22).
         epochs: Passes over the batch per update.
         minibatches: Minibatches per epoch.
         learning_rate: Adam learning rate of the actor.
@@ -63,6 +64,7 @@ class UpdateConfig:
             critic's regression targets are averaged.
     """
 
+    discount: float
     epochs: int
     minibatches: int
     learning_rate: float
@@ -80,6 +82,8 @@ class UpdateConfig:
         for name in (*positive, "max_grad_norm", "value_norm_horizon"):
             if not getattr(self, name) > 0:
                 raise ValueError(f"{name} must be positive, got {getattr(self, name)}")
+        if not 0.0 < self.discount <= 1.0:
+            raise ValueError(f"discount must lie in (0, 1], got {self.discount}")
         if not 0.0 <= self.gae_lambda <= 1.0:
             raise ValueError(f"gae_lambda must lie in [0, 1], got {self.gae_lambda}")
         if self.entropy_coef < 0.0:
@@ -163,6 +167,7 @@ _SECTIONS: dict[str, tuple[str, ...]] = {
     "network": ("hidden_sizes",),
     "rollout": ("num_envs", "num_steps"),
     "update": (
+        "discount",
         "epochs",
         "minibatches",
         "learning_rate",
