@@ -503,8 +503,10 @@ def test_no_wall_friction_when_leaving_a_face_at_its_vertex() -> None:
 
 def test_huge_commands_are_saturated_without_overflow() -> None:
     """E1: any finite command, however large, is saturated onto the boundary of U."""
-    out = _step(_layout("tunnel"), [[2.0, 0.0]] * 2, np.zeros((2, 2)), [[1e155, 0.0], [-1e300, 1e300]])
-    np.testing.assert_allclose(out.u, [[2.5, 0.0], [-2.5 / np.sqrt(2.0), 2.5 / np.sqrt(2.0)]], atol=1e-12)
+    commands = [[1e155, 0.0], [-1e300, 1e300], [1.7e308, 1.7e308]]  # the last norm overflows
+    out = _step(_layout("tunnel"), [[2.0, 0.0]] * 3, np.zeros((3, 2)), commands)
+    r = 2.5 / np.sqrt(2.0)
+    np.testing.assert_allclose(out.u, [[2.5, 0.0], [-r, r], [r, r]], atol=1e-12)
 
 
 def test_batch_equals_single_agents_bit_for_bit() -> None:
