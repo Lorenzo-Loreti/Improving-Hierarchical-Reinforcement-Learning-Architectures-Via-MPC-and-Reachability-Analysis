@@ -10,6 +10,10 @@ Everything goes to scenarios/slalom/studies/disturbed_<p>_<v>/, which git
 ignores: one <algorithm>/ directory per arm (its runs/ and logs/), plus
 summary.md.
 
+Since step 8 of the code alignment (ALIGNMENT.md) only the PPO+MPC arm trains:
+the training scripts of hPPO and flat PPO are gone, and their old runs can only
+be summarized (`summary --algos ppo_mpc,hppo,ppo`).
+
 The question
 ------------
 Every result in this repo before 2026-09-28 is on the deterministic slalom.
@@ -189,8 +193,10 @@ def parse_args():
     parser.add_argument("phase", nargs="?", default="all", choices=("all", "train", "summary"),
         help="train: run every (algorithm, seed), skipping finished ones; summary: the table; "
              "all (default): both")
-    parser.add_argument("--algos", type=str, default=",".join(ALGOS),
-        help="comma-separated algorithms, from " + ", ".join(ALGOS))
+    parser.add_argument("--algos", type=str, default="ppo_mpc",
+        help="comma-separated algorithms, from " + ", ".join(ALGOS) + ". The training "
+             "scripts of hppo and ppo were removed in step 8 of the code alignment "
+             "(ALIGNMENT.md): their old runs can still be summarized, not trained")
     parser.add_argument("--seeds", type=str, default="1-10",
         help="seeds per algorithm, e.g. '1-10' or '1,2,5'")
     parser.add_argument("--noise-bound-p", type=float, default=0.005)
@@ -210,6 +216,9 @@ def parse_args():
     unknown = set(args.algo_list) - set(ALGOS)
     if unknown:
         parser.error(f"unknown algorithms: {sorted(unknown)}")
+    removed = [a for a in args.algo_list if not os.path.exists(os.path.join(HERE, ALGOS[a][0]))]
+    if removed and args.phase in ("all", "train"):
+        parser.error(f"the training scripts of {removed} were removed; only the summary of their old runs works")
     seeds = []
     for part in args.seeds.split(","):
         lo, _, hi = part.partition("-")

@@ -1,8 +1,9 @@
 """Tests of the in-house PPO (decision log D5, D15, D19); they need PyTorch.
 
-The strongest check is the comparison with the pre-alignment implementation
-(``algorithms/ppo/ppo.py``, kept until step 8 for this purpose, D21): given the
-same weights, batch and seed, the update must end on bit-identical weights.
+The strongest check is the comparison with the pre-alignment implementation,
+of which ``tests/reference/pre_alignment_ppo.py`` keeps a frozen copy since the
+pre-alignment code was removed (D21, D29): given the same weights, batch and
+seed, the update must end on bit-identical weights.
 """
 
 from __future__ import annotations
@@ -11,7 +12,6 @@ import copy
 import dataclasses
 import importlib.util
 import math
-import sys
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -30,6 +30,7 @@ from hrlmpc.ppo_config import NetworkConfig, UpdateConfig  # noqa: E402
 from hrlmpc.rollout import collect_rollout, compute_gae  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
+REFERENCE = Path(__file__).resolve().parent / "reference" / "pre_alignment_ppo.py"
 NETWORK = NetworkConfig(hidden_sizes=(64, 64))
 _UPDATE = UpdateConfig(
     discount=0.99,
@@ -61,19 +62,11 @@ def _obs(n: int, seed: int = 0) -> np.ndarray:
 
 
 def _legacy() -> ModuleType:
-    """The pre-alignment flat PPO, loaded from its file with ``algorithms/`` on the path for its ``common`` module."""
-    algorithms = REPO / "algorithms"
-    source = algorithms / "ppo" / "ppo.py"
-    if not source.exists():
-        pytest.skip("the pre-alignment PPO is no longer in the repository")
-    sys.path.insert(0, str(algorithms))
-    try:
-        spec = importlib.util.spec_from_file_location("pre_alignment_ppo", source)
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-    finally:
-        sys.path.remove(str(algorithms))
+    """The frozen copy of the pre-alignment flat PPO (D29)."""
+    spec = importlib.util.spec_from_file_location("pre_alignment_ppo", REFERENCE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
     return module
 
 

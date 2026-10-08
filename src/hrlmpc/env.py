@@ -20,7 +20,8 @@ each step, for every agent:
    the spawn box, unless automatic resets are disabled.
 
 Contact is never terminal (D1). Observations are ``(p, v)`` mapped to
-``[-1, 1]`` with the arena's bounding box and ``v_max`` (D13).
+``[-1, 1]`` with the arena's bounding box and ``v_max`` (D13); the map is
+fixed and invertible (:class:`ObservationMap`).
 
 Random numbers. Each agent owns two generators spawned from the seed: one for
 its initial positions and one for its disturbances. An agent's trajectory
@@ -58,6 +59,54 @@ tolerance.
 
 ACTION_TOL = 1e-12
 """Slack accepted beyond the square ``[-1, 1]^2`` for an action; such actions are clipped onto it."""
+
+
+@dataclass(frozen=True, eq=False)
+class ObservationMap:
+    """The fixed map between states and observations (D13), and its inverse.
+
+    Positions are mapped to ``[-1, 1]`` with the bounding box of the arena,
+    velocities by ``v_max``. Every state of the environment lies inside these
+    bounds, so the map is invertible there; observations are clipped to
+    ``[-1, 1]`` only against rounding.
+
+    Attributes:
+        low: ``(2,)`` lower corner of the arena's bounding box.
+        span: ``(2,)`` side lengths of the bounding box.
+        v_max: Speed limit.
+    """
+
+    low: FloatArray
+    span: FloatArray
+    v_max: float
+
+    @classmethod
+    def from_layout(cls, layout: Layout, v_max: float) -> ObservationMap:
+        """The map of a layout and a speed limit."""
+        lo, hi = layout.arena.vertices.min(axis=0), layout.arena.vertices.max(axis=0)
+        return cls(low=lo.astype(np.float64), span=(hi - lo).astype(np.float64), v_max=float(v_max))
+
+    @classmethod
+    def from_config(cls, config: EnvConfig) -> ObservationMap:
+        """The map of an environment configuration."""
+        return cls.from_layout(Layout.from_config(config.geometry), config.physics.v_max)
+
+    def observe(self, p: ArrayLike, v: ArrayLike) -> FloatArray:
+        """Observations ``(..., 4)`` of positions and velocities ``(..., 2)``."""
+        p_arr, v_arr = np.asarray(p, dtype=np.float64), np.asarray(v, dtype=np.float64)
+        obs = np.concatenate([2.0 * (p_arr - self.low) / self.span - 1.0, v_arr / self.v_max], axis=-1)
+        result: FloatArray = np.clip(obs, -1.0, 1.0)
+        return result
+
+    def positions(self, obs: ArrayLike) -> FloatArray:
+        """Positions ``(..., 2)`` of observations ``(..., 4)``."""
+        result: FloatArray = self.low + 0.5 * (np.asarray(obs, dtype=np.float64)[..., :2] + 1.0) * self.span
+        return result
+
+    def velocities(self, obs: ArrayLike) -> FloatArray:
+        """Velocities ``(..., 2)`` of observations ``(..., 4)``."""
+        result: FloatArray = self.v_max * np.asarray(obs, dtype=np.float64)[..., 2:4]
+        return result
 
 
 @dataclass(frozen=True, eq=False)
@@ -179,8 +228,7 @@ class NavigationEnv:
         streams = [child.spawn(2) for child in np.random.SeedSequence(seed).spawn(num_envs)]
         self._spawn_rngs = [np.random.default_rng(spawn) for spawn, _ in streams]
         self._disturbance_rngs = [np.random.default_rng(disturbance) for _, disturbance in streams]
-        lo, hi = self.layout.arena.vertices.min(axis=0), self.layout.arena.vertices.max(axis=0)
-        self._obs_lo, self._obs_span = lo, hi - lo
+        self.obs_map = ObservationMap.from_layout(self.layout, self.params.v_max)
         spawn = config.task.spawn
         self._spawn_lo, self._spawn_hi = np.array([spawn.x[0], spawn.y[0]]), np.array([spawn.x[1], spawn.y[1]])
         self._p = np.zeros((num_envs, 2))
@@ -205,11 +253,8 @@ class NavigationEnv:
         return self._steps.copy()
 
     def observe(self, p: ArrayLike, v: ArrayLike) -> FloatArray:
-        """Observations of states ``(p, v)``: both mapped to ``[-1, 1]`` (D13)."""
-        p_arr, v_arr = np.asarray(p, dtype=np.float64), np.asarray(v, dtype=np.float64)
-        obs = np.concatenate([2.0 * (p_arr - self._obs_lo) / self._obs_span - 1.0, v_arr / self.params.v_max], axis=-1)
-        result: FloatArray = np.clip(obs, -1.0, 1.0)
-        return result
+        """Observations of states ``(p, v)``: both mapped to ``[-1, 1]`` (D13, :class:`ObservationMap`)."""
+        return self.obs_map.observe(p, v)
 
     def reset(
         self, positions: ArrayLike | None = None, velocities: ArrayLike | None = None, mask: ArrayLike | None = None

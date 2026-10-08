@@ -37,39 +37,13 @@ import torch
 import yaml
 
 from hrlmpc.config import EnvConfig, env_config_to_dict, load_env_config
-from hrlmpc.env import EpisodeStats, NavigationEnv
+from hrlmpc.env import NavigationEnv
 from hrlmpc.evaluation import evaluate, spawn_grid
 from hrlmpc.ppo import PPOAgent, make_batch
 from hrlmpc.ppo_config import PPOConfig, load_ppo_config, ppo_config_from_dict, ppo_config_to_dict
-from hrlmpc.rollout import collect_rollout, compute_gae
+from hrlmpc.rollout import collect_rollout, compute_gae, episode_metrics
 from hrlmpc.utils.runlog import RunLogger
 from hrlmpc.utils.seeding import seed_everything
-
-_EPISODE_MEANS = (
-    "length",
-    "episode_return",
-    "unshaped_return",
-    "contact_steps",
-    "contact_events",
-    "impulse",
-    "wall_steps",
-    "limiter_steps",
-    "limiter_total",
-    "saturation_steps",
-    "saturation_total",
-)
-
-
-def episode_metrics(episodes: Sequence[EpisodeStats], prefix: str = "rollout/") -> dict[str, float]:
-    """Means over the training episodes that ended in a rollout (rows R3-R4); only the count if none did."""
-    result: dict[str, float] = {prefix + "episodes": float(len(episodes))}
-    if episodes:
-        result[prefix + "success_rate"] = float(np.mean([ep.success for ep in episodes]))
-        result[prefix + "contact_fraction"] = float(np.mean([ep.contact_steps > 0 for ep in episodes]))
-        for name in _EPISODE_MEANS:
-            key = "return" if name == "episode_return" else name
-            result[prefix + key] = float(np.mean([getattr(ep, name) for ep in episodes]))
-    return result
 
 
 def _format_gap(value: float) -> str:
@@ -254,6 +228,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(f"every seed may appear once, got {args.seeds}")
     env_config = load_env_config(args.env)
     ppo_config = load_ppo_config(args.agent)
+    bad = [seed for seed in args.seeds if seed < 0 or seed == ppo_config.evaluation.seed]
+    if bad:  # checked before the first run, not when its turn comes
+        parser.error(f"training seeds must be non-negative and differ from the evaluation seed, got {bad}")
     for seed in args.seeds:
         stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
         run_dir = args.runs_dir / args.env.stem / "ppo" / f"seed{seed}-{stamp}"

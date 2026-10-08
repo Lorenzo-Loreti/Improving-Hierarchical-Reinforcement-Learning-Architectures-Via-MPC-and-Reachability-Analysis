@@ -99,6 +99,15 @@ def test_invalid_values_are_rejected(section: str, key: str, value: Any, message
         ppo_config_from_dict(_with(section, key, value))
 
 
+def test_an_update_needs_two_samples() -> None:
+    data = _with("rollout", "num_envs", 1)
+    data["rollout"]["num_steps"], data["update"]["minibatches"] = 1, 1
+    with pytest.raises(ValueError, match="at least 2 samples"):
+        ppo_config_from_dict(data)
+    data["rollout"]["num_steps"] = 2
+    assert ppo_config_from_dict(data).batch_size == 2
+
+
 def test_the_batch_sizes_follow_from_the_rollout() -> None:
     data = _with("rollout", "num_envs", 4)
     data["evaluation"]["every"] = 4 * 128 * 3

@@ -13,10 +13,6 @@ sys.path.insert(0, os.path.abspath(HERE))
 # modules ppo_mpc imports.
 sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..", "..")))
 
-# algorithms/hppo, appended rather than prepended: only the tests that hold
-# PPO+MPC's manager to hPPO's import it, and it must not shadow anything.
-sys.path.append(os.path.abspath(os.path.join(HERE, "..", "..", "hppo")))
-
 # The tunnel's `envs`, for the end-to-end and controller tests. Its constant
 # corridor has no obstacles, so its MIQP has no binaries and stays within the
 # size-limited Gurobi licence even with the disturbance's tube on.
