@@ -48,7 +48,14 @@ FloatArray = NDArray[np.float64]
 IntArray = NDArray[np.int64]
 
 Controller = Callable[[FloatArray], ArrayLike]
-"""Maps ``(B, 4)`` observations to ``(B, 2)`` actions in ``[-1, 1]^2``, row by row and without memory."""
+"""Maps ``(B, 4)`` observations to ``(B, 2)`` commands: actions in ``[-1, 1]^2``, or accelerations.
+
+It is called once per step for all the agents together, from their first
+step on. A controller with memory (:class:`hrlmpc.hierarchy.HierarchicalController`)
+has a ``reset(num_agents)`` method, which :func:`evaluate` calls before the
+first step, and may declare with an ``inputs`` attribute that its commands are
+accelerations.
+"""
 
 PATH_MARGIN = 1e-6
 """Length [m] taken off a bent shortest path, so that rounding and the tolerance ``TOL`` cannot invalidate the bound."""
@@ -274,38 +281,54 @@ class Evaluation:
         return result
 
 
-def evaluate(controller: Controller, config: EnvConfig, starts: ArrayLike, *, seed: int) -> Evaluation:
+def evaluate(
+    controller: Controller, config: EnvConfig, starts: ArrayLike, *, seed: int, inputs: bool | None = None
+) -> Evaluation:
     """Run one episode of ``controller`` from each start, at rest.
 
     The episodes run in a fresh :class:`~hrlmpc.env.NavigationEnv` with one
     agent per start, so they do not count as training samples (D6). The
     disturbances of an agent depend only on ``seed`` and its start index.
 
-    The controller must act row by row and without memory: agents that have
-    finished keep being stepped (in new episodes, ignored) until the last one
-    finishes. Stateful controllers and the MPC Worker's accelerations need an
-    extension (steps 8-9).
+    All the agents start together, and agents that have finished keep being
+    stepped (in new episodes, ignored) until the last one finishes. A
+    controller with memory is reset first, so it sees the episodes it is
+    evaluated on from their first step, in step with each other (D29).
 
     Args:
-        controller: Deterministic map from observations to actions.
+        controller: Deterministic map from observations to commands.
         config: Layout to evaluate on.
         starts: ``(N, 2)`` initial positions in the free space, outside the goal region.
         seed: Seed of the evaluation environment.
+        inputs: Whether the commands are accelerations, as from an MPC Worker
+            (:meth:`~hrlmpc.env.NavigationEnv.step_input`), instead of actions
+            in the square mapped by D15; by default the controller's ``inputs``
+            attribute, if it has one, and ``False`` otherwise.
 
     Returns:
         The episodes and the bounds of F7 for each start.
 
     Raises:
-        ValueError: If ``starts`` is not ``(N, 2)`` or a start is not admissible.
+        ValueError: If ``starts`` is not ``(N, 2)`` or a start is not
+            admissible, or ``inputs`` contradicts the controller's ``inputs`` attribute.
     """
     points = np.asarray(starts, dtype=np.float64)
     if points.ndim != 2 or points.shape[1] != 2 or len(points) == 0:
         raise ValueError(f"starts must have shape (N, 2) with N >= 1, got {points.shape}")
+    declared = getattr(controller, "inputs", None)
+    if inputs is None:
+        inputs = bool(declared)
+    elif declared is not None and bool(declared) != inputs:
+        raise ValueError(f"inputs={inputs} contradicts the controller's inputs={declared}")
     env = NavigationEnv(config, num_envs=len(points), seed=seed, autoreset=True)
     obs = env.reset(positions=points)
+    reset = getattr(controller, "reset", None)
+    if callable(reset):
+        reset(len(points))
     first: dict[int, EpisodeStats] = {}
     while len(first) < len(points):
-        out = env.step(controller(obs))
+        commands = controller(obs)
+        out = env.step_input(commands) if inputs else env.step(commands)
         for episode in out.episodes:
             first.setdefault(episode.env, episode)
         obs = out.obs

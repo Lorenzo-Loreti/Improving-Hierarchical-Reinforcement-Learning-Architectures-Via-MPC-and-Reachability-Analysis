@@ -1,11 +1,11 @@
 """Regression tests for PPO+MPC's agent (algorithms/ppo_mpc/ppo_mpc.py).
 
-The agent is hPPO's manager, and the central test holds it there: given the
-same weights, rollout and seed, PPOMPCAgent.update_manager and
-HPPOAgent.update_manager end on identical weights and metrics. The rest pin
-what the agent adds or keeps on its own: the goal scale, the derived
-discount, the self-describing checkpoint (now including the worker's
-settings), and the defaults the training script relies on.
+The agent is hPPO's manager. The test that held it there, update for update,
+went with the pre-alignment hPPO in step 8 of the code alignment (decision
+log D29); PPO+MPC itself is replaced in step 9. The tests left pin what the
+agent adds or keeps on its own: the goal scale, the derived discount, the
+self-describing checkpoint (now including the worker's settings), and the
+defaults the training script relies on.
 """
 
 import sys
@@ -14,7 +14,6 @@ import numpy as np
 import pytest
 import torch
 
-import hppo
 from ppo_mpc import PPOMPCAgent, ManagerVecRolloutBuffer
 from test_vec_rollout import fill_ragged
 
@@ -27,34 +26,6 @@ def _agent(**kwargs):
     kwargs.setdefault("obs_low", OBS_LOW)
     kwargs.setdefault("obs_high", OBS_HIGH)
     return PPOMPCAgent(OBS_DIM, GOAL_DIM, device="cpu", **kwargs)
-
-
-def test_the_manager_update_is_hppos_manager_update():
-    """Same initial weights, same ragged rollout, same seed: identical weights
-    and metrics afterwards. This is what "hPPO's manager, update for update"
-    means, and it pins the two copies of the update together."""
-    torch.manual_seed(0)
-    ours = _agent()
-    theirs = hppo.HPPOAgent(OBS_DIM, GOAL_DIM, 2, obs_low=OBS_LOW, obs_high=OBS_HIGH, device="cpu")
-    theirs.manager_actor.load_state_dict(ours.manager_actor.state_dict())
-    theirs.manager_critic.load_state_dict(ours.manager_critic.state_dict())
-
-    lengths = [7, 3, 6, 5]
-    our_buf = fill_ragged(ManagerVecRolloutBuffer(8, 4, OBS_DIM, GOAL_DIM, "cpu"), lengths, seed=1)
-    their_buf = fill_ragged(hppo.ManagerVecRolloutBuffer(8, 4, OBS_DIM, GOAL_DIM, "cpu"), lengths, seed=1)
-    next_value = torch.tensor([5.0, -1.0, 2.0, 0.0])
-    ours.compute_manager_returns_and_advantage(our_buf, next_value)
-    theirs.compute_manager_returns_and_advantage(their_buf, next_value)
-
-    torch.manual_seed(2)
-    our_metrics = ours.update_manager(our_buf, 4, 3)
-    torch.manual_seed(2)
-    their_metrics = theirs.update_manager(their_buf, 4, 3)
-
-    for a, b in zip(list(ours.manager_actor.parameters()) + list(ours.manager_critic.parameters()),
-                    list(theirs.manager_actor.parameters()) + list(theirs.manager_critic.parameters())):
-        assert torch.equal(a, b)
-    assert our_metrics == their_metrics
 
 
 def test_an_empty_batch_skips_the_update_with_the_same_metric_keys():

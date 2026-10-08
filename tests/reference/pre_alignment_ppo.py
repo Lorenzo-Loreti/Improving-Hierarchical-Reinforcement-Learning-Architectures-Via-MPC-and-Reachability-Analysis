@@ -1,11 +1,156 @@
+"""Frozen copy of the pre-alignment flat PPO, the reference of the bit-identity test of D19 (tests/test_ppo.py).
+
+The pre-alignment flat PPO was removed from the package in step 8 (decision log
+D21, D29). This file keeps, unchanged, ``algorithms/ppo/ppo.py`` and the four
+definitions it imported from ``algorithms/common.py`` (``layer_init``,
+``normalize_obs``, ``ScaledBeta``, ``RunningMeanStd``), both as at tag
+``pre-alignment`` (commit ff50d7c). Only this docstring, the import lines and
+the order of the definitions are new. Do not edit the code below: it is the
+reference, not part of the package.
+"""
+# ruff: noqa
+# mypy: ignore-errors
+
+import math
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
 
-from common import layer_init, normalize_obs, ScaledBeta, RunningMeanStd
+from torch.distributions import Beta
 
+
+# ---- from algorithms/common.py at tag pre-alignment ----
+
+
+def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
+    torch.nn.init.orthogonal_(layer.weight, std)
+    torch.nn.init.constant_(layer.bias, bias_const)
+    return layer
+
+
+def normalize_obs(obs, low, high):
+    """Map physical [low, high] observation bounds to [-1, 1].
+
+    The environment's observation bounds are fixed and hard-enforced by the
+    env, so there is nothing to estimate: this is exact, exactly invertible,
+    and needs no running statistics to keep in sync between training and
+    evaluation. Physical observation dimensions can differ from each other by
+    several times in raw dynamic range (e.g. a position axis spanning several
+    metres against a velocity axis spanning a couple of m/s); left unmapped,
+    that disparity feeds directly into the first linear layer of every actor
+    and critic network below.
+
+    Canonical definition. Each agent class stores the bounds it was built
+    with and exposes this as a method, so a reloaded checkpoint carries its
+    own observation map instead of depending on the caller to reproduce it.
+    """
+    return 2.0 * (obs - low) / (high - low) - 1.0
+
+
+class ScaledBeta:
+    """A `Beta(alpha, beta)` distribution affinely rescaled from its native
+    [0, 1] support to `[low, high]`, so a bounded actor output has genuine
+    bounded support (unlike a clipped/squashed Gaussian, which always has
+    some density outside the action limits)."""
+
+    def __init__(self, alpha, beta, low=-1.0, high=1.0):
+        self.dist = Beta(alpha, beta)
+        self.low = low
+        self.scale = high - low
+
+    def sample(self):
+        return self.dist.sample() * self.scale + self.low
+
+    # No `rsample`: every agent in this tree is a policy-gradient method
+    # whose actor loss is a likelihood-ratio surrogate, so none of them ever
+    # differentiates through the sampled action. `torch.distributions.Beta`
+    # still supports it if a pathwise-gradient agent is ever added here.
+
+    def deterministic_sample(self):
+        # Mean of Beta distribution is alpha / (alpha + beta)
+        mean = self.dist.concentration1 / (self.dist.concentration1 + self.dist.concentration0)
+        return mean * self.scale + self.low
+
+    def log_prob(self, action):
+        # Unscale action back to [0, 1]
+        unscaled_action = (action - self.low) / self.scale
+        unscaled_action = torch.clamp(unscaled_action, 1e-5, 1.0 - 1e-5)
+        # Apply log determinant of Jacobian correction
+        return self.dist.log_prob(unscaled_action) - torch.log(self.scale)
+
+    def entropy(self):
+        # Apply entropy shift correction
+        return self.dist.entropy() + torch.log(self.scale)
+
+
+class RunningMeanStd:
+    """Chan et al. parallel running mean/variance, used to normalize a
+    critic's regression targets (and, as `adv_rms`, to floor the advantage-
+    normalization denominator -- see `floor_normalize`).
+
+    Regressing a freshly initialized critic (outputs ~0, moved by at most
+    `lr` per Adam step) directly on raw returns takes far more gradient
+    steps than a run provides whenever those returns are large -- e.g. a
+    terminal reward barely discounted over a long horizon lands the critic
+    correlated with the true value but persistently biased by hundreds of
+    units. Regressing on standardized targets instead removes that climb
+    entirely. Each call site's own comment covers *why* its particular
+    target has (or doesn't have) this problem -- the raw scale varies widely
+    across algorithms and, in hPPO, across the manager/worker heads of the
+    same algorithm.
+    """
+
+    def __init__(self, epsilon=1e-4, horizon=10):
+        self.mean = 0.0
+        self.var = 1.0
+        self.count = epsilon
+        # Cap the effective sample count at `horizon` batches so the statistics
+        # track the *current* return distribution. With an unbounded count the
+        # early-training transient permanently inflates the variance, and late
+        # targets get squeezed into a narrow band -- a milder rerun of the
+        # scale problem this class exists to prevent.
+        self.horizon = horizon
+
+    def update(self, x, precomputed=None):
+        """`precomputed`, when given, is this batch's own `(mean, var)` (biased
+        variance, matching `x.var(unbiased=False)`) already computed by the
+        caller -- e.g. `floor_normalize`, which needs the same pair for
+        advantage normalization and would otherwise force a second reduction
+        pass over `x` here. `x` is still required in that case, for its
+        `numel()`."""
+        if precomputed is None:
+            batch_mean = float(x.mean())
+            batch_var = float(x.var(unbiased=False))
+        else:
+            batch_mean, batch_var = precomputed
+        batch_count = x.numel()
+
+        delta = batch_mean - self.mean
+        tot_count = self.count + batch_count
+
+        self.mean += delta * batch_count / tot_count
+        m_a = self.var * self.count
+        m_b = batch_var * batch_count
+        self.var = (m_a + m_b + delta**2 * self.count * batch_count / tot_count) / tot_count
+        self.count = min(tot_count, self.horizon * batch_count)
+
+    @property
+    def std(self):
+        return math.sqrt(self.var) + 1e-8
+
+    def state_dict(self):
+        return {"mean": self.mean, "var": self.var, "count": self.count}
+
+    def load_state_dict(self, state):
+        self.mean = state["mean"]
+        self.var = state["var"]
+        self.count = state["count"]
+
+
+# ---- algorithms/ppo/ppo.py at tag pre-alignment, without its import of common ----
 
 class ActorNetwork(nn.Module):
     def __init__(self, obs_dim, act_dim):

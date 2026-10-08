@@ -1,10 +1,11 @@
 """In-house PPO, the one implementation shared by every learner (decision log D5, D15, D19).
 
-Flat PPO uses it now; the hPPO Worker and the Managers will (steps 8-10). It
-is a faithful port of the pre-alignment flat PPO (``algorithms/ppo/ppo.py`` at
-tag ``pre-alignment``): the same networks, initialization, losses and update
-schedule, so that given the same weights, batch and seed the update ends on
-bit-identical weights (``tests/test_ppo.py``).
+Flat PPO and both levels of hPPO use it (steps 7-8); the Managers of the MPC
+architectures will (steps 9-10). It is a faithful port of the pre-alignment
+flat PPO (``algorithms/ppo/ppo.py`` at tag ``pre-alignment``): the same
+networks, initialization, losses and update schedule, so that given the same
+weights, batch and seed the update ends on bit-identical weights
+(``tests/test_ppo.py``, against the frozen copy in ``tests/reference/``).
 
 Policy (D15). One Beta distribution per action axis on ``y`` in ``[0, 1]``,
 with concentrations ``softplus(.) + 1 >= 1``, mapped to the action

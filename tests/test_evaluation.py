@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 import yaml
 
+from hrlmpc.action_map import square_to_disk
 from hrlmpc.config import Box, EnvConfig, env_config_from_dict
 from hrlmpc.env import EpisodeStats, NavigationEnv
 from hrlmpc.evaluation import (
@@ -180,6 +181,18 @@ def test_the_evaluation_rejects_bad_starts() -> None:
         evaluate(_full_thrust, config, [[4.5, -1.0]], seed=0)
     with pytest.raises(ValueError, match="shape"):
         evaluate(_full_thrust, config, [1.0, 0.0], seed=0)
+
+
+def test_commanded_accelerations_can_be_evaluated() -> None:
+    """With ``inputs=True`` the commands are accelerations, the MPC Worker's interface (D29, step 9)."""
+    config = _config("slalom", physics={"d_bar": 0.5})
+    starts = spawn_grid(config.task.spawn, (2, 3))
+    u = square_to_disk(np.array([[1.0, 0.25]]), config.physics.a_max)
+    by_actions = evaluate(lambda obs: np.tile([1.0, 0.25], (len(obs), 1)), config, starts, seed=4)
+    by_inputs = evaluate(lambda obs: np.tile(u[0], (len(obs), 1)), config, starts, seed=4, inputs=True)
+    assert by_actions.details() == by_inputs.details()
+    too_strong = evaluate(lambda obs: np.tile([5.0, 0.0], (len(obs), 1)), config, starts, seed=4, inputs=True)
+    assert all(ep.saturation_steps > 0 for ep in too_strong.episodes)  # the commands were not mapped by D15
 
 
 def test_the_evaluation_stops_at_the_horizon() -> None:

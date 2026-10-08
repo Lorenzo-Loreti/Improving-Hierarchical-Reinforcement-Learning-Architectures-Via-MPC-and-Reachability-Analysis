@@ -133,8 +133,9 @@ class PPOConfig:
     """Complete configuration of a flat PPO learner.
 
     Raises:
-        ValueError: If there are more minibatches than samples per update, or
-            the evaluation interval is not a multiple of the samples per update.
+        ValueError: If an update would have fewer than two samples or fewer
+            samples than minibatches, or the evaluation interval is not a
+            multiple of the samples per update.
     """
 
     network: NetworkConfig
@@ -144,8 +145,11 @@ class PPOConfig:
     runtime: RuntimeConfig
 
     def __post_init__(self) -> None:
-        if self.update.minibatches > self.batch_size:
-            raise ValueError(f"minibatches={self.update.minibatches} exceeds the {self.batch_size} samples per update")
+        if self.batch_size < max(2, self.update.minibatches):
+            raise ValueError(
+                f"an update needs at least 2 samples and minibatches={self.update.minibatches}; "
+                f"the rollout gives {self.batch_size}"
+            )
         if self.evaluation.every % self.batch_size:
             raise ValueError(
                 f"evaluation.every={self.evaluation.every} must be a multiple of the "
@@ -223,6 +227,31 @@ def _value(key: str, value: Any, where: str) -> Any:
     return float(value)
 
 
+def check_keys(data: Any, keys: tuple[str, ...], where: str) -> dict[str, Any]:
+    """``data`` as a dict, after checking that it is a mapping with exactly ``keys``.
+
+    Raises:
+        ValueError: If ``data`` is not a mapping, or a key is missing or unknown.
+    """
+    return _section(data, keys, where)
+
+
+def parse_section(data: Any, name: str, where: str | None = None) -> dict[str, Any]:
+    """The values of section ``name`` (``network``, ``rollout``, ``update``, ``evaluation`` or ``runtime``), checked.
+
+    Shared with the configurations of the hierarchical learners, whose levels
+    hold a ``network`` and an ``update`` section each. ``where`` names the
+    section in error messages (default ``name``).
+
+    Raises:
+        ValueError: If a key is missing or unknown, or a value has the wrong type.
+    """
+    label = name if where is None else where
+    keys = _SECTIONS[name]
+    raw = _section(data, keys, label)
+    return {k: _value(k, raw[k], f"{label}.{k}") for k in keys}
+
+
 def ppo_config_from_dict(data: Mapping[str, Any]) -> PPOConfig:
     """Build and validate a :class:`PPOConfig` from a nested mapping, as in ``configs/agent/ppo.yaml``.
 
@@ -230,10 +259,7 @@ def ppo_config_from_dict(data: Mapping[str, Any]) -> PPOConfig:
         ValueError: If a key is missing or unknown, or a value is invalid.
     """
     top = _section(data, tuple(_SECTIONS), "config")
-    parsed: dict[str, dict[str, Any]] = {}
-    for name, keys in _SECTIONS.items():
-        raw = _section(top[name], keys, name)
-        parsed[name] = {k: _value(k, raw[k], f"{name}.{k}") for k in keys}
+    parsed = {name: parse_section(top[name], name) for name in _SECTIONS}
     return PPOConfig(
         network=NetworkConfig(**parsed["network"]),
         rollout=RolloutConfig(**parsed["rollout"]),

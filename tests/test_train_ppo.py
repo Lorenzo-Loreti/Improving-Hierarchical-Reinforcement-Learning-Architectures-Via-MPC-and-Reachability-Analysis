@@ -150,6 +150,8 @@ def test_evaluations_do_not_change_the_training(tmp_path: Path) -> None:
         return [r for r in _without_time(_records(run_dir)) if "train/policy_loss" in r]
 
     assert len(training(often)) == 4 and training(often) == training(rarely)
+    evaluated = [r["env_steps"] for r in _records(rarely) if "eval/success_rate" in r]
+    assert evaluated == [0, 32, 64]
     weights = [torch.load(run / "final.pt", weights_only=True) for run in (often, rarely)]
     for network in ("actor", "critic"):
         for key, value in weights[0][network].items():

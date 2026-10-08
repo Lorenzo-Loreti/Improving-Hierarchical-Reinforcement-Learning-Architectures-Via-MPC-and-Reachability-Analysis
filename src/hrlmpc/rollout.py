@@ -19,7 +19,7 @@ Manager's transition spanning ``tau`` steps can be discounted by
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -35,6 +35,33 @@ PolicyFn = Callable[[FloatArray], tuple[ArrayLike, ArrayLike]]
 
 ValueFn = Callable[[FloatArray], ArrayLike]
 """Maps ``(k, n)`` observations to ``(k,)`` value estimates."""
+
+
+_EPISODE_MEANS = (
+    "length",
+    "episode_return",
+    "unshaped_return",
+    "contact_steps",
+    "contact_events",
+    "impulse",
+    "wall_steps",
+    "limiter_steps",
+    "limiter_total",
+    "saturation_steps",
+    "saturation_total",
+)
+
+
+def episode_metrics(episodes: Sequence[EpisodeStats], prefix: str = "rollout/") -> dict[str, float]:
+    """Means over the training episodes that ended in a rollout (rows R3-R4); only the count if none did."""
+    result: dict[str, float] = {prefix + "episodes": float(len(episodes))}
+    if episodes:
+        result[prefix + "success_rate"] = float(np.mean([ep.success for ep in episodes]))
+        result[prefix + "contact_fraction"] = float(np.mean([ep.contact_steps > 0 for ep in episodes]))
+        for name in _EPISODE_MEANS:
+            key = "return" if name == "episode_return" else name
+            result[prefix + key] = float(np.mean([getattr(ep, name) for ep in episodes]))
+    return result
 
 
 def compute_gae(
