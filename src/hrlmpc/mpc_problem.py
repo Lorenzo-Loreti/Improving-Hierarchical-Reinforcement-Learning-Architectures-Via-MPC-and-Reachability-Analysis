@@ -1,9 +1,10 @@
-"""Data of the MPC Worker's problem, without the solvers (decision log D31-D34).
+"""Data of the MPC Worker's problem, without the solvers (decision log D31-D34, D37).
 
-The Worker of PPO_MPC (architecture 3) solves at every step the robust tube-MPC
-problem of the tube-MPC note, specialised to this plant and its polygonal map:
+The Worker of PPO_MPC and PPO_MPC_reachability (architectures 3 and 4) solves
+at every step the robust tube-MPC problem of the tube-MPC note, specialised to
+this plant and its polygonal map, with the cost of the waypoint Worker (D37):
 
-    min  sum_{k<N} (z_k - x_r)' Q (z_k - x_r) + v_k' R v_k + (z_N - x_r)' P (z_N - x_r)
+    min  q_g ||z_{k*,p} - g||^2 + r_e sum_{k<k*} ||v_k||^2,   k* the steps left in the segment
     s.t. z_{k+1} = A z_k + B v_k,                       k = 0, ..., N-1
          x - z_0 in Z                                   (the tube, D31)
          ||z_{k,v}|| <= v_bar,                           k = 1, ..., N-1   (D33)
@@ -14,10 +15,15 @@ problem of the tube-MPC note, specialised to this plant and its polygonal map:
          n_j' z_{k+1,p} >= c_j + r_p + rho - M_j (1 - delta_{k,j}),
          sum_j delta_{k,j} >= 1,                         every obstacle, k = 0, ..., N-1   (D32)
 
-with ``x`` the measured state, ``x_r = (g, 0)`` the rest state at the target
-``g`` and the input ``u = v_0 + K (x - z_0)``. ``A``, ``B`` are the matrices of
-:mod:`hrlmpc.model`; ``K`` and ``P`` the LQR gain and cost of ``Q``, ``R``;
-``r_p`` the position radius of ``Z`` and ``rho`` a margin. The tightenings:
+with ``x`` the measured state, ``g`` the target, the position at which the agent
+should be when the segment ends, ``k* = H - j`` at step ``j`` of a segment of
+``H`` steps, and the input ``u = v_0 + K (x - z_0)``. A reachable target is met
+up to the trade-off with the effort; an unreachable one leaves the plan at the
+reachable point nearest to it. After stage ``k*`` the plan only has to come to
+rest by stage ``N``, so ``N >= H + n_b`` lets it pass the target at full speed
+(:meth:`MPCProblem.check_segments`). ``A``, ``B`` are the matrices of
+:mod:`hrlmpc.model`; ``K`` the LQR gain of ``Q = diag(q_pos, q_pos, q_vel, q_vel)``,
+``R = r I`` (D31); ``r_p`` the position radius of ``Z`` and ``rho`` a margin. The tightenings:
 
 - ``v_bar = v_max - h_{A_K Z}(e_v)``: at the real state the input is nominally
   coherent, ``||(A x + B u)_v|| <= v_max``, so by F3 an action of the speed
@@ -36,6 +42,10 @@ with ``x`` the measured state, ``x_r = (g, 0)`` the rest state at the target
 Every rest state is an equilibrium, so the shifted plan (drop the first step,
 hold the last state at rest) is feasible at the next step whenever the
 disturbance was in ``D``: theorem 4.1 of the note, under this terminal set.
+Within a segment ``k*`` drops by one per step, so the shifted plan meets the
+target at the same instant and costs its predecessor's cost minus the effort
+``r_e ||v_0||^2`` of its first nominal input: nominally the optimal cost does
+not grow within a segment.
 
 This module holds what does not need a solver: the matrices, the tube, the
 tightened sets, the obstacles and their big-M constants, the binaries that the
@@ -72,13 +82,17 @@ FEAS_TOL = 1e-6
 
 @dataclass(frozen=True)
 class MPCSettings:
-    """Settings of the MPC Worker (D34; provisional until Q13).
+    """Settings of the MPC Worker (D34, D37; provisional until Q13).
 
     Attributes:
-        horizon: ``N``, the prediction horizon, fixed and receding.
-        q_pos: Weight of each position error.
-        q_vel: Weight of each velocity (the target is at rest).
-        r: Weight of each nominal input.
+        horizon: ``N``, the prediction horizon, fixed and receding; at least the
+            segment's length plus the steps to stop (:meth:`MPCProblem.check_segments`).
+        q_pos: Weight of each position error in the LQR of the ancillary gain ``K`` (D31).
+        q_vel: Weight of each velocity in that LQR.
+        r: Weight of each input in that LQR. ``K`` sets the tube, hence the
+            tightened sets and the steps to stop, so the plan's effort has its own weight.
+        target_weight: ``q_g``, weight of the squared distance from the target at the waypoint (D37).
+        effort_weight: ``r_e``, weight of each nominal input until the waypoint (D37).
         rho: Safety margin [m] on the walls and the obstacles; it must exceed what
             a mixed-integer plan may violate a face by (checked by :class:`MPCProblem`).
         tail_tolerance: Bound on the tail of ``Z`` along the axes (D31) [m, m/s].
@@ -89,10 +103,12 @@ class MPCSettings:
         ValueError: If a setting is out of range.
     """
 
-    horizon: int = 10
+    horizon: int = 15
     q_pos: float = 10.0
     q_vel: float = 1.0
     r: float = 0.1
+    target_weight: float = 1e4
+    effort_weight: float = 0.1
     rho: float = 1e-3
     tail_tolerance: float = TAIL_TOLERANCE
     mip_gap: float = 1e-4
@@ -102,7 +118,7 @@ class MPCSettings:
         if isinstance(self.horizon, bool) or not isinstance(self.horizon, int) or self.horizon < 1:
             raise ValueError(f"horizon must be a positive integer, got {self.horizon!r}")
         Weights(self.q_pos, self.q_vel, self.r)  # validates the weights
-        for name in ("rho", "tail_tolerance", "mip_gap"):
+        for name in ("target_weight", "effort_weight", "rho", "tail_tolerance", "mip_gap"):
             value = getattr(self, name)
             if not (np.isfinite(value) and value > 0.0):
                 raise ValueError(f"{name} must be positive and finite, got {value!r}")
@@ -113,7 +129,7 @@ class MPCSettings:
 
     @property
     def weights(self) -> Weights:
-        """The stage weights."""
+        """The weights of the LQR that gives the ancillary gain."""
         return Weights(self.q_pos, self.q_vel, self.r)
 
 
@@ -173,7 +189,7 @@ class MPCProblem:
         self.A, self.B = system_matrices(params.dt, params.gamma)
         weights = self.settings.weights
         self.Q, self.R = weights.Q, weights.R
-        self.K, self.P = lqr(self.A, self.B, self.Q, self.R)
+        self.K, _ = lqr(self.A, self.B, self.Q, self.R)  # the ancillary gain (D31); the LQR's cost is not used (D37)
         self.tube: Tube = design_tube(self.A, self.B, self.K, params.d_bar, tolerance=self.settings.tail_tolerance)
         self._check_rotation_symmetry()
 
@@ -227,37 +243,59 @@ class MPCProblem:
         return Obstacle(normals.copy(), offsets.copy(), bounds, big_m)
 
     # ---------------------------------------------------------------- helpers
-    @staticmethod
-    def rest_state(target: ArrayLike) -> FloatArray:
-        """``x_r = (g, 0)``: at rest at the target ``g``."""
-        g = np.asarray(target, dtype=np.float64).reshape(2)
-        return np.array([g[0], g[1], 0.0, 0.0])
+    def waypoint_stage(self, steps_left: int) -> int:
+        """The stage ``k*`` of the plan at which the segment ends: ``steps_left``, checked to lie in ``1, ..., N``.
 
-    def cost(self, z: ArrayLike, v: ArrayLike, x_r: ArrayLike) -> float:
-        """The cost ``J_N`` of a plan ``(z, v)``, shapes ``(N+1, 4)`` and ``(N, 2)``."""
-        dz = np.asarray(z, dtype=np.float64) - np.asarray(x_r, dtype=np.float64)
-        v_arr = np.asarray(v, dtype=np.float64)
-        return float(
-            np.einsum("ki,ij,kj->", dz[:-1], self.Q, dz[:-1])
-            + np.einsum("ki,ij,kj->", v_arr, self.R, v_arr)
-            + dz[-1] @ self.P @ dz[-1]
-        )
+        Raises:
+            ValueError: If ``steps_left`` is not an integer between 1 and ``N``.
+        """
+        if isinstance(steps_left, (bool, np.bool_)) or not isinstance(steps_left, (int, np.integer)):
+            raise ValueError(f"steps_left must be an integer, got {steps_left!r}")
+        if not 1 <= steps_left <= self.N:
+            raise ValueError(f"steps_left must lie between 1 and the horizon N = {self.N}, got {steps_left}")
+        return int(steps_left)
+
+    def cost(self, z: ArrayLike, v: ArrayLike, target: ArrayLike, steps_left: int) -> float:
+        """The cost of D37 of a plan ``(z, v)``, shapes ``(N+1, 4)`` and ``(N, 2)``.
+
+        ``q_g ||z_{k*,p} - g||^2 + r_e sum_{k<k*} ||v_k||^2``, with ``k* = steps_left``.
+        """
+        k = self.waypoint_stage(steps_left)
+        error = np.asarray(z, dtype=np.float64)[k, :2] - np.asarray(target, dtype=np.float64).reshape(2)
+        effort = np.asarray(v, dtype=np.float64)[:k]
+        return float(self.settings.target_weight * error @ error + self.settings.effort_weight * np.sum(effort**2))
+
+    def stage_speed_bounds(self) -> FloatArray:
+        """``(N,)`` bounds on the nominal speed at stages ``1, ..., N`` that every plan meets.
+
+        ``min(v_bar, w_(N-k))`` at stage ``k``, where ``w_n`` is the largest
+        speed from which the nominal plan can rest after ``n`` steps: each step
+        lowers the speed by at most ``(1 - beta) s + dt u_bar`` with
+        ``beta = 1 - gamma dt``, so ``s_(k+n) >= beta^n s_k - dt u_bar (1 - beta^n) / (1 - beta)``
+        and the terminal set requires ``s_N = 0``. Full braking along the
+        velocity attains the bound, which is therefore exact.
+        """
+        beta = 1.0 - self.params.gamma * self.dt
+        n = self.N - np.arange(1, self.N + 1)  # steps left to stop, from stage k = 1, ..., N
+        stoppable = self.dt * self.u_bar * (1.0 - beta**n) / ((1.0 - beta) * beta**n)
+        result: FloatArray = np.minimum(self.v_bar, stoppable)
+        return result
 
     def reach_boxes(self, x: ArrayLike) -> tuple[FloatArray, FloatArray]:
         """Bounds on the nominal positions of every plan from the measured state ``x``.
 
         ``z_0`` lies in ``x (+) (-Z)``, so its position within ``r_p`` of ``x``'s.
-        Afterwards ``p_{k+1} = p_k + dt v_{k+1}`` with ``||v_{k+1}|| <= v_bar``
-        for ``k + 1 <= N - 1`` and ``v_N = 0``, so stage ``k`` lies within
-        ``r_p + min(k, N - 1) dt v_bar`` of ``x``'s position on each axis. The
-        boxes are also clipped to the tightened arena's bounding box.
+        Afterwards ``p_{k+1} = p_k + dt v_{k+1}`` with the speed of stage ``k + 1``
+        at most its bound of :meth:`stage_speed_bounds`, so stage ``k`` lies
+        within ``r_p + dt (s_1 + ... + s_k)`` of ``x``'s position on each axis.
+        The boxes are also clipped to the tightened arena's bounding box.
 
         Returns:
             ``(lo, hi)``, each ``(N + 1, 2)``.
         """
         p = np.asarray(x, dtype=np.float64)[:2]
-        steps = np.minimum(np.arange(self.N + 1), self.N - 1)[:, None]
-        reach = self.tube.position_radius + steps * self.dt * self.v_bar
+        travel = np.concatenate([[0.0], np.cumsum(self.dt * self.stage_speed_bounds())])[:, None]
+        reach = self.tube.position_radius + travel
         lo = np.maximum(p - reach, self.position_low)
         hi = np.minimum(p + reach, self.position_high)
         return lo, np.maximum(hi, lo)
@@ -366,8 +404,8 @@ class MPCProblem:
         return result
 
     def summary(self) -> str:
-        """A one-paragraph description of the tube and the tightened sets."""
-        t = self.tube
+        """A one-paragraph description of the tube, the tightened sets and the cost."""
+        t, s = self.tube, self.settings
         free = sum(o.num_faces for o in self.obstacles) * self.N
         return (
             f"tube MPC: d_bar {t.d_bar}, s = {t.num_terms} terms, tail {t.tail_radius:.1e}; "
@@ -376,7 +414,8 @@ class MPCProblem:
             f"  planned speed <= {self.v_bar:.3f} m/s (D33), planned thrust <= {self.u_bar:.3f} m/s^2, "
             f"position margin {self.margin:.4f} m; K = {np.round(self.K[0, [0, 2]], 3)} per axis\n"
             f"  {len(self.obstacles)} obstacles, {free} binaries before fixing; horizon N = {self.N}, "
-            f"stopping time {self.stopping_steps()} steps"
+            f"stopping time {self.stopping_steps()} steps; waypoint cost (D37): q_g = {s.target_weight:g}, "
+            f"r_e = {s.effort_weight:g}"
         )
 
     def stopping_steps(self) -> int:
@@ -387,6 +426,23 @@ class MPCProblem:
             speed = factor * speed - self.dt * self.u_bar
             steps += 1
         return steps
+
+    def check_segments(self, segment_steps: int) -> None:
+        """Refuse a horizon too short for the waypoints of segments of ``H = segment_steps`` steps (D37).
+
+        At a decision the waypoint lies at stage ``H``; a plan that passes it at
+        the planned speed ``v_bar`` still needs :meth:`stopping_steps` steps to
+        rest, so ``N >= H + n_b``.
+
+        Raises:
+            ValueError: If ``N < H + n_b``.
+        """
+        needed = segment_steps + self.stopping_steps()
+        if self.N < needed:
+            raise ValueError(
+                f"the horizon N = {self.N} leaves no room to stop after a segment of {segment_steps} steps: "
+                f"a plan needs {self.stopping_steps()} steps to stop from {self.v_bar:.3f} m/s, so N >= {needed} (D37)"
+            )
 
 
 def project_disk(u: ArrayLike, radius: float) -> FloatArray:

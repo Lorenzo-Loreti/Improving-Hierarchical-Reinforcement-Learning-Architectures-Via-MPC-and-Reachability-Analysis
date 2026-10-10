@@ -1,4 +1,4 @@
-"""Tests of the PPO_MPC training loop and its command line (decision log D6, D24-D35); they need PyTorch.
+"""Tests of the PPO_MPC training loop and its command line (decision log D6, D24-D35, D37); they need PyTorch.
 
 The Worker is a NumPy stand-in with the interface of :class:`hrlmpc.mpc_worker.MPCWorker`
 (a PD law toward the target), so the loop is tested without the solvers;
@@ -35,7 +35,8 @@ class PDWorker:
     comes with every fallback and a solver error with every brake. The tube
     ratio is NaN on slot 0 and ``slot (t + 1) / 100`` on the others, ``t`` the
     slot's steps since its last reset. ``steps`` records ``(slot, outcome, ratio)``
-    of every call, so that tests can recompute the statistics.
+    of every call, so that tests can recompute the statistics, and ``left`` the
+    steps left in the segment that each call was given (D37).
     """
 
     instances: list[PDWorker] = []
@@ -46,6 +47,7 @@ class PDWorker:
         self.num_slots = num_slots
         self.resets: list[int | None] = []
         self.steps: list[tuple[int, int, float]] = []
+        self.left: list[int] = []
         self.counts = [0] * num_slots
         self.closed = False
         PDWorker.instances.append(self)
@@ -53,7 +55,9 @@ class PDWorker:
     def input(self, x: np.ndarray, target: np.ndarray) -> np.ndarray:
         return project_disk(2.0 * (target - x[:2]) - 2.0 * x[2:], self.problem.params.a_max)
 
-    def act(self, x: Any, target: Any, slot: int = 0) -> tuple[np.ndarray, WorkerStep]:
+    def act(self, x: Any, target: Any, steps_left: int, slot: int = 0) -> tuple[np.ndarray, WorkerStep]:
+        self.problem.waypoint_stage(steps_left)  # the real Worker's check
+        self.left.append(steps_left)
         u = self.input(np.asarray(x, dtype=np.float64), np.asarray(target, dtype=np.float64))
         outcome = self.CYCLE[len(self.steps) % len(self.CYCLE)]
         self.counts[slot] += 1
@@ -158,7 +162,7 @@ def test_a_short_run_writes_its_directory(tmp_path: Path) -> None:
         assert record["mpc/steps"] == 40.0  # every sample of the rollout, one Worker step each
         assert not any(k.startswith("worker/") and not k.startswith("worker/reward") for k in record)  # no learning
     config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
-    assert config["algorithm"] == "ppo_mpc" and config["agent"]["mpc"]["horizon"] == 10
+    assert config["algorithm"] == "ppo_mpc" and config["agent"]["mpc"]["horizon"] == 15
     assert rollout_worker.num_slots == 2 and eval_worker.num_slots == 4
     assert rollout_worker.closed and eval_worker.closed
     assert any(slot is not None for slot in rollout_worker.resets)  # episodes ended and their slots were reset
@@ -188,7 +192,8 @@ def test_the_evaluation_counts_only_the_steps_of_the_evaluated_episodes(tmp_path
 def test_a_run_is_repeatable_and_depends_on_its_seed(tmp_path: Path) -> None:
     env = _env(physics={"d_bar": 0.5})
     runs = [
-        train(env, _config(), budget=80, seed=s, run_dir=tmp_path / name, worker_factory=PDWorker, echo=None)
+        train(env, _config(mpc__horizon=16), budget=80, seed=s, run_dir=tmp_path / name, worker_factory=PDWorker,
+              echo=None)
         for s, name in ((3, "a"), (3, "b"), (4, "c"))
     ]
     a, b, c = (_without_time(_records(r)) for r in runs)
@@ -206,6 +211,32 @@ def test_the_budget_must_end_on_an_update_and_an_evaluation(tmp_path: Path, budg
         train(_env(), _config(evaluation__every=80), budget=budget, seed=1, run_dir=tmp_path / "run",
               worker_factory=PDWorker, echo=None)
     assert not (tmp_path / "run").exists()
+
+
+def test_a_horizon_without_room_to_stop_after_a_segment_is_refused(tmp_path: Path) -> None:
+    """D37: N >= H + the steps to stop from the planned speed, 15 at d_bar = 0 and 16 at 0.5; checked before
+    any Worker is built or anything is written."""
+    PDWorker.instances.clear()
+    with pytest.raises(ValueError, match="N >= 15"):
+        train(_env(), _config(mpc__horizon=14), budget=40, seed=1, run_dir=tmp_path / "a", worker_factory=PDWorker,
+              echo=None)
+    with pytest.raises(ValueError, match="N >= 16"):
+        train(_env(physics={"d_bar": 0.5}), _config(), budget=40, seed=1, run_dir=tmp_path / "b",
+              worker_factory=PDWorker, echo=None)
+    assert not (tmp_path / "a").exists() and not (tmp_path / "b").exists() and not PDWorker.instances
+
+
+def test_the_worker_gets_the_steps_left_in_each_segment(tmp_path: Path) -> None:
+    """D37: in training and in the evaluations, H - j at step j of a segment; the evaluated agents start together."""
+    PDWorker.instances.clear()
+    train(_env(), _config(), budget=40, seed=1, run_dir=tmp_path / "run", worker_factory=PDWorker, echo=None)
+    rollout_worker, eval_worker = PDWorker.instances
+    assert set(rollout_worker.left) == set(range(1, 11))
+    first = np.array(rollout_worker.left[:20]).reshape(10, 2)  # both agents decide at the start: 10, 9, ..., 1
+    np.testing.assert_array_equal(first, np.repeat(np.arange(10, 0, -1)[:, None], 2, axis=1))
+    calls = np.array(eval_worker.left).reshape(-1, 4)  # 4 agents per call
+    assert np.all(calls == calls[:, :1]) and len(calls) % 15 == 0  # two evaluations of episodes of 15 steps
+    np.testing.assert_array_equal(calls[:15, 0], [10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 10, 9, 8, 7, 6])
 
 
 def test_inconsistent_settings_are_refused_before_anything_is_written(tmp_path: Path) -> None:
@@ -262,9 +293,10 @@ def test_every_worker_is_closed_even_if_one_fails_to(tmp_path: Path) -> None:
 
 def test_the_saved_manager_reproduces_the_last_evaluation(tmp_path: Path) -> None:
     env = _env(physics={"d_bar": 0.5})
-    run_dir = train(env, _config(), budget=80, seed=5, run_dir=tmp_path / "run", worker_factory=PDWorker, echo=None)
+    run_dir = train(env, _config(mpc__horizon=16), budget=80, seed=5, run_dir=tmp_path / "run",
+                    worker_factory=PDWorker, echo=None)
     manager, hierarchy, problem = load_manager(run_dir)
-    assert hierarchy.segment_steps == 10 and problem.N == 10 and problem.tube.d_bar == 0.5
+    assert hierarchy.segment_steps == 10 and problem.N == 16 and problem.tube.d_bar == 0.5
     from hrlmpc.env import ObservationMap
     from hrlmpc.evaluation import evaluate, spawn_grid
     from hrlmpc.hierarchy import HierarchicalController
@@ -321,7 +353,7 @@ def test_the_manager_is_updated_on_its_segments_at_its_own_discount(tmp_path: Pa
     monkeypatch.setattr(train_ppo_mpc, "collect_hierarchical_rollout", spy_collect)
     monkeypatch.setattr(ppo_module.PPOAgent, "update", spy_update)
     monkeypatch.setattr(train_hppo, "segment_gae", spy_gae)
-    config = _config(manager__update__discount=0.9, manager__update__gae_lambda=0.7)
+    config = _config(manager__update__discount=0.9, manager__update__gae_lambda=0.7, mpc__horizon=16)
     train(_env(physics={"d_bar": 0.5}), config, budget=80, seed=0, run_dir=tmp_path / "run",
           worker_factory=PDWorker, echo=None)
     assert len(rollouts) == len(batches) == 2 and lambdas == [0.7, 0.7]
@@ -343,9 +375,10 @@ def test_the_manager_is_updated_on_its_segments_at_its_own_discount(tmp_path: Pa
 def test_evaluations_do_not_change_the_training(tmp_path: Path) -> None:
     """D6, D20: with evaluations every 40 or every 80 samples, training follows the same trajectory."""
     env = _env(physics={"d_bar": 0.5})
-    often = train(env, _config(), budget=160, seed=5, run_dir=tmp_path / "often", worker_factory=PDWorker, echo=None)
-    rarely = train(env, _config(evaluation__every=80), budget=160, seed=5, run_dir=tmp_path / "rarely",
-                   worker_factory=PDWorker, echo=None)
+    often = train(env, _config(mpc__horizon=16), budget=160, seed=5, run_dir=tmp_path / "often",
+                  worker_factory=PDWorker, echo=None)
+    rarely = train(env, _config(evaluation__every=80, mpc__horizon=16), budget=160, seed=5,
+                   run_dir=tmp_path / "rarely", worker_factory=PDWorker, echo=None)
 
     def training(run_dir: Path) -> list[dict[str, Any]]:
         return [r for r in _without_time(_records(run_dir)) if "train/updates" in r]

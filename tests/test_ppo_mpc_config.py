@@ -1,4 +1,4 @@
-"""Tests of the PPO_MPC configuration (code rule C2, decision log D24, D27, D28, D34)."""
+"""Tests of the PPO_MPC configuration (code rule C2, decision log D24, D27, D28, D34, D37)."""
 
 from __future__ import annotations
 
@@ -35,8 +35,12 @@ def test_the_shipped_configuration_is_the_decided_one() -> None:
     assert config.rollout == hppo.rollout
     assert config.evaluation == hppo.evaluation
     assert config.runtime == hppo.runtime
-    # the Worker's settings of D34
-    assert config.mpc == MPCSettings(horizon=10, q_pos=10.0, q_vel=1.0, r=0.1, rho=1e-3, mip_gap=1e-4, work_limit=None)
+    # the Worker's settings of D34, with the waypoint cost and horizon of D37
+    assert config.mpc == MPCSettings(
+        horizon=15, q_pos=10.0, q_vel=1.0, r=0.1, target_weight=1e4, effort_weight=0.1, rho=1e-3, mip_gap=1e-4,
+        work_limit=None,
+    )
+    assert config.mpc == MPCSettings()  # the defaults are the decided values
     assert config.batch_size == 2048 and config.guaranteed_segments == 8 * 25
 
 
@@ -60,6 +64,11 @@ def test_the_configuration_round_trips() -> None:
         lambda d: d["mpc"].update(horizon=0),
         lambda d: d["mpc"].update(q_pos="10"),
         lambda d: d["mpc"].update(r=False),
+        lambda d: d["mpc"].pop("target_weight"),
+        lambda d: d["mpc"].update(target_weight=0.0),
+        lambda d: d["mpc"].update(target_weight="1e4"),
+        lambda d: d["mpc"].pop("effort_weight"),
+        lambda d: d["mpc"].update(effort_weight=-0.1),
         lambda d: d["mpc"].update(rho=float("inf")),
         lambda d: d["mpc"].update(rho=0.0),
         lambda d: d["mpc"].update(work_limit=-1.0),
@@ -95,7 +104,7 @@ def test_the_batch_sizes_are_validated() -> None:
 
 
 def test_a_repeated_key_is_refused(tmp_path: Path) -> None:
-    text = SHIPPED.read_text(encoding="utf-8").replace("  horizon: 10", "  horizon: 10\n  horizon: 12", 1)
+    text = SHIPPED.read_text(encoding="utf-8").replace("  horizon: 15", "  horizon: 15\n  horizon: 12", 1)
     path = tmp_path / "ppo_mpc.yaml"
     path.write_text(text, encoding="utf-8")
     with pytest.raises(ValueError):

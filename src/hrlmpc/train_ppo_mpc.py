@@ -1,4 +1,4 @@
-"""Training of PPO_MPC on the navigation environment (architecture 3; decision log D6, D20, D24-D35).
+"""Training of PPO_MPC on the navigation environment (architecture 3; decision log D6, D20, D24-D35, D37).
 
 Usage, from the repository root::
 
@@ -8,8 +8,10 @@ Usage, from the repository root::
 A PPO Manager sets a target every ``H`` steps on the common loop of
 :mod:`hrlmpc.hierarchy`, exactly as in hPPO; the Worker is the tube MPC of
 D31-D34 (:mod:`hrlmpc.mpc_worker`), which knows the model, the constraints and
-the obstacles, plans contact-free and does not learn. After each rollout the
-Manager is updated on the segments that ended (GAE at ``gamma^tau``, D27).
+the obstacles, plans contact-free and does not learn. It plans to pass the
+target when the segment ends, or to end the segment at the reachable point
+nearest to it (D37). After each rollout the Manager is updated on the segments
+that ended (GAE at ``gamma^tau``, D27).
 
 Each seed writes the run directory ``<runs-dir>/<layout>/ppo_mpc/seed<seed>-<UTC time>`` with:
 
@@ -103,8 +105,14 @@ def hierarchy_of(env_config: EnvConfig, config: PPOMPCConfig) -> Hierarchy:
 
 
 def problem_of(env_config: EnvConfig, config: PPOMPCConfig) -> MPCProblem:
-    """The Worker's problem: the environment's plant, map and disturbance, and the settings of D34."""
-    return MPCProblem(env_config.physics, Layout.from_config(env_config.geometry), config.mpc)
+    """The Worker's problem: the environment's plant, map and disturbance, and the settings of D34 and D37.
+
+    Raises:
+        ValueError: If the horizon leaves no room to stop after a segment (D37).
+    """
+    problem = MPCProblem(env_config.physics, Layout.from_config(env_config.geometry), config.mpc)
+    problem.check_segments(config.hierarchy.segment_steps)
+    return problem
 
 
 def _close(worker: StepActor) -> None:

@@ -1,4 +1,4 @@
-"""Tests of the common Manager/Worker loop (decision log D6, D24-D27, D29; rows AR2-AR5, R2, X1)."""
+"""Tests of the common Manager/Worker loop (decision log D6, D24-D27, D29, D37; rows AR2-AR5, R2, X1)."""
 
 from __future__ import annotations
 
@@ -516,8 +516,10 @@ def test_invalid_arguments_are_rejected() -> None:
 # --------------------------------------------------------------------------
 
 
-def _tracking_command(obs_map: ObservationMap) -> Callable[[np.ndarray, np.ndarray, np.ndarray], np.ndarray]:
-    def command(obs: np.ndarray, p: np.ndarray, g: np.ndarray) -> np.ndarray:
+def _tracking_command(
+    obs_map: ObservationMap,
+) -> Callable[[np.ndarray, np.ndarray, np.ndarray, np.ndarray], np.ndarray]:
+    def command(obs: np.ndarray, p: np.ndarray, g: np.ndarray, steps_left: np.ndarray) -> np.ndarray:
         u = 1.2 * (g - p) - 0.8 * obs_map.velocities(obs)
         norm = np.maximum(np.hypot(*u.T), 1e-12)
         return u * np.minimum(1.0, 2.4 / norm)[:, None]  # inside U, so the saturation never acts
@@ -542,7 +544,7 @@ def test_a_command_worker_drives_the_inputs() -> None:
     assert any(mask.sum() == 1 for mask in resets) and rollout.terminated[:, 0].any()
     # The commands reached the environment as accelerations: the effort term is that of the commands.
     p = obs_map.positions(rollout.obs)
-    u = np.stack([_tracking_command(obs_map)(rollout.obs[t], p[t], rollout.targets[t]) for t in range(45)])
+    u = np.stack([_tracking_command(obs_map)(rollout.obs[t], p[t], rollout.targets[t], None) for t in range(45)])
     effort = -0.01 * np.sum(u**2, axis=-1) / 2.5**2
     np.testing.assert_allclose(rollout.worker_reward.effort, effort, atol=1e-12)
 
@@ -550,9 +552,59 @@ def test_a_command_worker_drives_the_inputs() -> None:
 def test_the_worker_pays_effort_on_the_saturated_input() -> None:
     """D25: the effort term is that of the input after the saturation onto U, at most c_e per step."""
     config = _config()
-    strong = CommandWorker(command=lambda obs, p, g: np.tile([5.0, 0.0], (len(obs), 1)))
+    strong = CommandWorker(command=lambda obs, p, g, left: np.tile([5.0, 0.0], (len(obs), 1)))
     env, hierarchy, state, rollout, after = _run(config, batch=2, steps=12, worker=strong)
     np.testing.assert_allclose(rollout.worker_reward.effort, -0.01, rtol=1e-12)
+
+
+class _CountingWorker:
+    """A commanding Worker that records the steps left it is given, and tracks its targets."""
+
+    def __init__(self, obs_map: ObservationMap) -> None:
+        self.track = _tracking_command(obs_map)
+        self.calls: list[np.ndarray] = []
+
+    def command(self, obs: np.ndarray, p: np.ndarray, g: np.ndarray, steps_left: np.ndarray) -> np.ndarray:
+        assert steps_left.dtype == np.int64 and steps_left.shape == (len(obs),)
+        self.calls.append(steps_left.copy())
+        return self.track(obs, p, g, steps_left)
+
+
+def _expected_steps_left(done: np.ndarray, first: np.ndarray, segment_steps: int) -> np.ndarray:
+    """``H - j`` at every step, ``j`` the steps since the agent's last decision (after ``H`` steps or at an episode's
+    end)."""
+    expected = np.zeros(done.shape, dtype=np.int64)
+    j = first.copy()
+    for t in range(done.shape[0]):
+        expected[t] = segment_steps - j
+        j += 1
+        j[(j == segment_steps) | done[t]] = 0
+    return expected
+
+
+def test_a_command_worker_gets_the_steps_left_in_each_segment() -> None:
+    """D37: the MPC Worker plans to pass the target when the segment ends, so it gets H - j at step j, also
+    across rollouts and after an episode that ends in the middle of a segment."""
+    config = _config(task={"horizon": 15})  # episodes of 15 steps: segments of 10 and 5 steps
+    obs_map = ObservationMap.from_config(config)
+    recorder = _CountingWorker(obs_map)
+    worker = CommandWorker(command=recorder.command)
+    env = NavigationEnv(config, 2, seed=0)
+    hierarchy = _hierarchy(config)
+    state = start_segments(env, hierarchy, _manager_policy, _manager_value, positions=[[0.0, 0.0], [9.5, 0.0]])
+    rollouts = []
+    for steps in (7, 26):  # the first rollout stops in the middle of a segment
+        rollout, after = collect_hierarchical_rollout(env, state, steps, hierarchy, _manager_policy, _manager_value,
+                                                      worker)
+        rollouts.append((state, rollout))
+        state = after
+    calls = np.array(recorder.calls)
+    expected = np.concatenate(
+        [_expected_steps_left(r.done, s.segment_steps, H) for s, r in rollouts]
+    )
+    np.testing.assert_array_equal(calls, expected)
+    assert set(np.unique(calls)) == set(range(1, H + 1))
+    assert rollouts[1][1].terminated[:, 1].any() and rollouts[1][1].truncated[:, 0].any()
 
 
 # --------------------------------------------------------------------------
@@ -608,12 +660,15 @@ def test_the_controller_resets_a_command_worker_and_declares_its_inputs() -> Non
 def test_the_controller_with_a_command_worker() -> None:
     config = _config()
     obs_map = ObservationMap.from_config(config)
-    worker = CommandWorker(command=_tracking_command(obs_map))
+    recorder = _CountingWorker(obs_map)
+    worker = CommandWorker(command=recorder.command)
     env, hierarchy, state, rollout, after = _run(config, batch=3, steps=200, positions=STARTS, worker=worker)
     first = {}
     for episode in rollout.episodes:
         first.setdefault(episode.env, episode)
     assert sorted(first) == [0, 1, 2]
+    training = np.array(recorder.calls)
+    recorder.calls.clear()
     controller = HierarchicalController(hierarchy, lambda o: _manager_policy(o)[0], worker)
     assert controller.inputs
     result = evaluate(controller, config, STARTS, seed=99, inputs=True)
@@ -621,3 +676,7 @@ def test_the_controller_with_a_command_worker() -> None:
         mine, theirs = result.episodes[b], first[b]
         assert (mine.length, mine.success, mine.saturation_steps) == (theirs.length, theirs.success, 0)
         assert mine.unshaped_return == pytest.approx(theirs.unshaped_return, abs=1e-9)
+    evaluation = np.array(recorder.calls)  # every agent is stepped until the last episode ends
+    np.testing.assert_array_equal(evaluation[:, 0], H - np.arange(len(evaluation)) % H)
+    for b in range(3):  # within the first episode the steps left are those of training
+        np.testing.assert_array_equal(evaluation[: first[b].length, b], training[: first[b].length, b])

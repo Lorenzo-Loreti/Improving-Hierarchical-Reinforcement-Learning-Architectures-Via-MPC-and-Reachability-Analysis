@@ -1,11 +1,14 @@
-"""Typed configuration of PPO_MPC, loaded from YAML (code rule C2, decision log D24, D27, D28, D34).
+"""Typed configuration of PPO_MPC, loaded from YAML (code rule C2, decision log D24, D27, D28, D34, D37).
 
 ``configs/agent/ppo_mpc.yaml`` holds the hierarchy (segment length ``H`` and
 the targets' radius), the rollout, the Manager's network and PPO update, the
 MPC Worker's settings, the evaluation protocol and the runtime. The Manager and
-the hierarchy are hPPO's; the Worker is the tube MPC of D31-D34, designed for
-the disturbance of the environment's configuration. Unknown, missing or
-repeated keys are errors. This module does not import PyTorch or the solvers.
+the hierarchy are hPPO's; the Worker is the tube MPC of D31-D34 with the
+waypoint cost of D37, designed for the disturbance of the environment's
+configuration. Unknown, missing or repeated keys are errors. Whether the
+horizon leaves room to stop after a segment depends on the environment's
+physics, so the training checks it (:meth:`hrlmpc.mpc_problem.MPCProblem.check_segments`).
+This module does not import PyTorch or the solvers.
 """
 
 from __future__ import annotations
@@ -69,7 +72,9 @@ class PPOMPCConfig:
 
 
 _TOP = ("hierarchy", "rollout", "manager", "mpc", "evaluation", "runtime")
-_MPC = ("horizon", "q_pos", "q_vel", "r", "rho", "tail_tolerance", "mip_gap", "work_limit")
+_MPC = (
+    "horizon", "q_pos", "q_vel", "r", "target_weight", "effort_weight", "rho", "tail_tolerance", "mip_gap", "work_limit"
+)
 
 
 def _number(value: Any, where: str) -> float:
@@ -91,6 +96,8 @@ def _mpc(data: Any) -> MPCSettings:
         q_pos=_number(raw["q_pos"], "mpc.q_pos"),
         q_vel=_number(raw["q_vel"], "mpc.q_vel"),
         r=_number(raw["r"], "mpc.r"),
+        target_weight=_number(raw["target_weight"], "mpc.target_weight"),
+        effort_weight=_number(raw["effort_weight"], "mpc.effort_weight"),
         rho=_number(raw["rho"], "mpc.rho"),
         tail_tolerance=_number(raw["tail_tolerance"], "mpc.tail_tolerance"),
         mip_gap=_number(raw["mip_gap"], "mpc.mip_gap"),
