@@ -44,6 +44,8 @@ mpc:                           # the tube-MPC Worker (D31-D34, D37)
   mip_gap: 1.0e-4              # relative MIP gap
   work_limit: null             # Gurobi's work limit per solve; none, so every solve is deterministic
 
+reachability: null             # architecture 3: the targets of D24 (configs/agent/ppo_mpc_reachability.yaml: D38)
+
 evaluation:                    # decision log D20, D29
   every: 10240                 # samples between evaluations (5 updates); the first is at 0
   grid: [5, 5]                 # starts on the spawn box, at rest

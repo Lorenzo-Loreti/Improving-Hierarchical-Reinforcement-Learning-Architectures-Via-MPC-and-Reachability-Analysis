@@ -1,8 +1,10 @@
-"""Tests of the PPO_MPC configuration (code rule C2, decision log D24, D27, D28, D34, D37)."""
+"""Tests of the PPO_MPC and PPO_MPC_reachability configurations (code rule C2, decision log D24, D27, D28, D34,
+D37, D38)."""
 
 from __future__ import annotations
 
 import copy
+import dataclasses
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +15,7 @@ from hrlmpc.hppo_config import load_hppo_config
 from hrlmpc.mpc_problem import MPCSettings
 from hrlmpc.ppo_mpc_config import (
     PPOMPCConfig,
+    ReachabilityConfig,
     load_ppo_mpc_config,
     ppo_mpc_config_from_dict,
     ppo_mpc_config_to_dict,
@@ -20,6 +23,7 @@ from hrlmpc.ppo_mpc_config import (
 
 REPO = Path(__file__).resolve().parents[1]
 SHIPPED = REPO / "configs" / "agent" / "ppo_mpc.yaml"
+REACHABILITY = REPO / "configs" / "agent" / "ppo_mpc_reachability.yaml"
 
 
 def _data() -> dict[str, Any]:
@@ -42,6 +46,15 @@ def test_the_shipped_configuration_is_the_decided_one() -> None:
     )
     assert config.mpc == MPCSettings()  # the defaults are the decided values
     assert config.batch_size == 2048 and config.guaranteed_segments == 8 * 25
+    assert config.reachability is None and config.algorithm == "ppo_mpc"
+
+
+def test_architecture_4_differs_only_in_its_targets() -> None:
+    """D38: the shipped configuration of PPO_MPC_reachability is PPO_MPC's with the reachable targets."""
+    three, four = load_ppo_mpc_config(SHIPPED), load_ppo_mpc_config(REACHABILITY)
+    assert four.reachability == ReachabilityConfig(directions=16) and four.algorithm == "ppo_mpc_reachability"
+    assert four == dataclasses.replace(three, reachability=four.reachability)
+    assert ppo_mpc_config_from_dict(ppo_mpc_config_to_dict(four)) == four
 
 
 def test_the_configuration_round_trips() -> None:
@@ -79,6 +92,13 @@ def test_the_configuration_round_trips() -> None:
         lambda d: d["mpc"].update(tail_tolerance=0.0),
         lambda d: d["mpc"].update(tail_tolerance=-1e-3),
         lambda d: d.update(mpc=[10, 10.0]),
+        lambda d: d.pop("reachability"),
+        lambda d: d.update(reachability={}),
+        lambda d: d.update(reachability={"directions": 2}),
+        lambda d: d.update(reachability={"directions": 16.0}),
+        lambda d: d.update(reachability={"directions": True}),
+        lambda d: d.update(reachability={"directions": 16, "anchor": "centroid"}),
+        lambda d: d.update(reachability=16),
     ],
 )
 def test_invalid_settings_are_refused(change: Any) -> None:

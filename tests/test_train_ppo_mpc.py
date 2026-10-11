@@ -23,6 +23,7 @@ from hrlmpc.config import EnvConfig, env_config_from_dict  # noqa: E402
 from hrlmpc.mpc_command import CANDIDATE, EMERGENCY, KEPT, SOLVER, WorkerStep  # noqa: E402
 from hrlmpc.mpc_problem import MPCProblem, project_disk  # noqa: E402
 from hrlmpc.ppo_mpc_config import PPOMPCConfig, ppo_mpc_config_from_dict  # noqa: E402
+from hrlmpc.reachability import ReachableTargets, support_directions  # noqa: E402
 from hrlmpc.train_ppo_mpc import load_manager, main, train  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
@@ -48,6 +49,7 @@ class PDWorker:
         self.resets: list[int | None] = []
         self.steps: list[tuple[int, int, float]] = []
         self.left: list[int] = []
+        self.targets: list[np.ndarray] = []
         self.counts = [0] * num_slots
         self.closed = False
         PDWorker.instances.append(self)
@@ -58,6 +60,7 @@ class PDWorker:
     def act(self, x: Any, target: Any, steps_left: int, slot: int = 0) -> tuple[np.ndarray, WorkerStep]:
         self.problem.waypoint_stage(steps_left)  # the real Worker's check
         self.left.append(steps_left)
+        self.targets.append(np.array(target, dtype=np.float64))
         u = self.input(np.asarray(x, dtype=np.float64), np.asarray(target, dtype=np.float64))
         outcome = self.CYCLE[len(self.steps) % len(self.CYCLE)]
         self.counts[slot] += 1
@@ -75,6 +78,37 @@ class PDWorker:
 
     def close(self) -> None:
         self.closed = True
+
+
+class DiskTargetsStandIn:
+    """Stand-in targets of architecture 4: support points on a disk of 0.8 m around the free drift of the state,
+    and a projection that moves every point up, recording what it returns; ``release`` marks it closed.
+
+    The shift is 1 cm, or, with ``by_side``, 2 cm above the axis ``y = 0`` and none below it, so that decisions
+    of different agents differ."""
+
+    instances: list[ReachableTargets] = []
+    projected: list[np.ndarray] = []
+    by_side = False
+
+    @classmethod
+    def build(cls, problem: MPCProblem, config: PPOMPCConfig) -> ReachableTargets:
+        assert config.reachability is not None
+        directions = support_directions(config.reachability.directions)
+
+        def support(x: np.ndarray) -> np.ndarray:
+            return x[:2] + 0.5 * x[2:] + 0.8 * directions
+
+        def project(x: np.ndarray, q: np.ndarray) -> tuple[np.ndarray, int]:
+            shift = (0.02 if x[1] > 0.0 else 0.0) if cls.by_side else 0.01
+            g = q + np.array([0.0, shift])
+            cls.projected.append(g.copy())
+            return g, 0
+
+        targets = ReachableTargets(support=support, project=project, radius=1.2,
+                                   release=lambda: setattr(targets, "released", True))
+        cls.instances.append(targets)
+        return targets
 
 
 class PushWorker(PDWorker):
@@ -436,3 +470,109 @@ def test_the_command_line_trains_every_seed(tmp_path: Path, capsys: pytest.Captu
         main(["--env", str(env), "--agent", str(agent), "--budget", "40", "--seeds", "1", "1"])
     with pytest.raises(SystemExit):
         main(["--env", str(env), "--agent", str(agent), "--budget", "40", "--seeds", "12345"])
+
+
+# --------------------------------------------------------------------------
+# Architecture 4: the reachable targets (D38-D40)
+# --------------------------------------------------------------------------
+
+
+def _reach_config(**changes: Any) -> PPOMPCConfig:
+    return _config(reachability={"directions": 8}, **changes)
+
+
+def test_architecture_4_trains_on_its_projected_targets(tmp_path: Path) -> None:
+    """D38, D39: the Worker gets the projected targets, and the decisions are logged under reach/ and eval_reach/."""
+    PDWorker.instances.clear()
+    DiskTargetsStandIn.instances.clear()
+    DiskTargetsStandIn.projected.clear()
+    run_dir = train(_env(), _reach_config(), budget=80, seed=1, run_dir=tmp_path / "run", worker_factory=PDWorker,
+                    targets_factory=DiskTargetsStandIn.build, echo=None)
+    config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    assert config["algorithm"] == "ppo_mpc_reachability" and config["agent"]["reachability"] == {"directions": 8}
+    (targets,) = DiskTargetsStandIn.instances
+    assert getattr(targets, "released", False)  # closed with the run
+    records = _records(run_dir)
+    updates = [r for r in records if "train/updates" in r]
+    evaluations = [r for r in records if "eval/success_rate" in r]
+    assert all({"reach/decisions", "reach/support_ms_mean", "reach/projection_mean", "reach/hull_area_mean",
+                "reach/projection_failure_count", "hierarchy/reached_rate"} <= set(r) for r in updates)
+    assert all({"eval_reach/decisions", "eval_hierarchy/reached_rate"} <= set(r) for r in evaluations)
+    for record in updates:
+        assert record["reach/projection_mean"] == pytest.approx(0.01)  # the stand-in's shift
+        assert record["reach/projection_failure_count"] == 0.0
+    # the decisions of training: one per segment, those of the first update included
+    assert sum(r["reach/decisions"] for r in updates) == sum(r["hierarchy/segments"] for r in updates) + 2
+    # every target the Worker steered to was a projected one, held for its whole segment
+    rollout_worker = PDWorker.instances[0]
+    projected = {tuple(np.round(g, 12)) for g in DiskTargetsStandIn.projected}
+    assert all(tuple(np.round(g, 12)) in projected for g in rollout_worker.targets)
+    assert all(r["eval_reach/projection_mean"] == pytest.approx(0.01) for r in evaluations)
+
+
+@pytest.mark.parametrize("d_bar", [0.0, 0.5])
+def test_the_reached_rate_counts_the_full_segments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                   d_bar: float) -> None:
+    """D40: within r_p + 0.1 m of the target at the end of a segment of H steps; r_p = 0.065 m at d_bar = 0.5."""
+    rollouts: list[Any] = []
+    collect = train_ppo_mpc.collect_hierarchical_rollout
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        result = collect(*args, **kwargs)
+        rollouts.append(result[0])
+        return result
+
+    monkeypatch.setattr(train_ppo_mpc, "collect_hierarchical_rollout", spy)
+    PDWorker.instances.clear()
+    run_dir = train(_env(physics={"d_bar": d_bar}), _config(mpc__horizon=16), budget=80, seed=1,
+                    run_dir=tmp_path / "run", worker_factory=PDWorker, echo=None)
+    tolerance = PDWorker.instances[0].problem.tube.position_radius + 0.1
+    assert tolerance == pytest.approx(0.1 if d_bar == 0.0 else 0.165, abs=1e-3)
+    updates = [r for r in _records(run_dir) if "train/updates" in r]
+    for rollout, record in zip(rollouts, updates, strict=True):
+        full = rollout.segments.steps == 10
+        distances = rollout.segments.end_distances[full]
+        assert record["hierarchy/full_segments"] == float(full.sum()) > 0
+        assert record["hierarchy/reached_rate"] == pytest.approx(float(np.mean(distances <= tolerance)))
+        assert record["hierarchy/end_distance_mean"] == pytest.approx(float(distances.mean()))
+
+
+def test_the_evaluation_counts_the_segments_and_decisions_of_the_evaluated_episodes(tmp_path: Path) -> None:
+    """D29, D40: the agents from x = 2 reach the goal at x = 2.9 in exactly 10 steps, so their episodes end with
+    their first segment: their second decision and their first segment's end, both at step 10, do not count."""
+    PDWorker.instances.clear()
+    DiskTargetsStandIn.by_side = True  # agents at y = 1 are shifted 2 cm, those at y = -1 not at all
+    try:
+        env = _env(geometry={"goal_x": 2.9})
+        run_dir = train(env, _reach_config(), budget=40, seed=2, run_dir=tmp_path / "run", worker_factory=PushWorker,
+                        targets_factory=DiskTargetsStandIn.build, echo=None)
+    finally:
+        DiskTargetsStandIn.by_side = False
+    evaluations = [r for r in _records(run_dir) if "eval/success_rate" in r]
+    for record, detail in zip(evaluations, _details(run_dir), strict=True):
+        assert detail["length"] == [15, 15, 10, 10]  # starts (0, -1), (0, 1), (2, -1), (2, 1)
+        assert record["eval_reach/decisions"] == 4 + 2  # all four at step 0, only the two from x = 0 at step 10
+        assert record["eval_reach/projection_mean"] == pytest.approx(0.01)  # (0 + 2 + 0 + 2 + 0 + 2) cm / 6
+        assert record["eval_hierarchy/full_segments"] == 2.0  # the segments of the agents from x = 0, ended at 10
+
+
+def test_targets_that_cannot_be_built_leave_nothing_on_disk(tmp_path: Path) -> None:
+    PDWorker.instances.clear()
+
+    def broken(problem: MPCProblem, config: PPOMPCConfig) -> ReachableTargets:
+        raise RuntimeError("no licence for the projection")
+
+    with pytest.raises(RuntimeError, match="no licence"):
+        train(_env(), _reach_config(), budget=40, seed=1, run_dir=tmp_path / "run", worker_factory=PDWorker,
+              targets_factory=broken, echo=None)
+    assert not (tmp_path / "run").exists()
+    assert len(PDWorker.instances) == 2 and all(w.closed for w in PDWorker.instances)
+
+
+def test_the_saved_manager_of_architecture_4_comes_with_its_targets(tmp_path: Path) -> None:
+    DiskTargetsStandIn.instances.clear()
+    run_dir = train(_env(), _reach_config(), budget=40, seed=3, run_dir=tmp_path / "run", worker_factory=PDWorker,
+                    targets_factory=DiskTargetsStandIn.build, echo=None)
+    manager, hierarchy, problem = load_manager(run_dir, targets_factory=DiskTargetsStandIn.build)
+    assert hierarchy.targets is DiskTargetsStandIn.instances[-1] and len(DiskTargetsStandIn.instances) == 2
+    assert problem.N == 15 and hierarchy.segment_steps == 10

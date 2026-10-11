@@ -56,6 +56,12 @@ slot solves as a fresh Worker would. The conic problems are compiled when the
 Worker is built, so that cvxpy's compilation does not count in the first
 step's solve time.
 
+The targets of architecture 4 (D38, D39) use the same problem:
+:class:`ReachSupport` solves it without obstacles for the support points of the
+reachable set, and :meth:`MPCWorker.project` solves it, as a fresh Worker, for
+the reachable point nearest to a target; :func:`reachable_targets` puts them
+together for :mod:`hrlmpc.reachability`.
+
 Gurobi (academic licence: the pip licence is size-limited) and cvxpy with
 Clarabel are the extra ``mpc`` (D5); importing this module without them fails.
 """
@@ -75,6 +81,7 @@ from numpy.typing import ArrayLike, NDArray
 
 from hrlmpc.mpc_command import CANDIDATE, EMERGENCY, KEPT, SOLVER, WorkerStep
 from hrlmpc.mpc_problem import Binaries, Bounds, MPCProblem
+from hrlmpc.reachability import ReachableTargets, support_directions
 
 FloatArray = NDArray[np.float64]
 Plan = tuple[FloatArray, FloatArray]
@@ -129,6 +136,33 @@ class SolverFailure(RuntimeError):
     """Clarabel failed on a problem the step cannot do without: an exception, or an unusable result."""
 
 
+def _plan_constraints(problem: MPCProblem, x: Any) -> tuple[Any, Any, list[Any]]:
+    """The variables ``(z, v)`` of a plan from the state parameter ``x`` and its constraints without the obstacles:
+    the dynamics, the terminal rest, the arena, the disks and the tube in its lifted representation."""
+    N, tube = problem.N, problem.tube
+    z, v = cp.Variable((N + 1, 4)), cp.Variable((N, 2))
+    cons = [
+        z[1:] == z[:-1] @ problem.A.T + v @ problem.B.T,
+        z[N, 2:] == 0,  # the terminal set: at rest
+        z[:, :2] @ problem.arena_normals.T <= np.tile(problem.arena_bounds, (N + 1, 1)),
+        cp.norm(v, 2, axis=1) <= problem.u_bar,
+    ]
+    if N > 1:  # stage 0 free, stage N at rest
+        cons.append(cp.norm(z[1:N, 2:], 2, axis=1) <= problem.v_bar)
+    if tube.is_zero:
+        cons.append(z[0] == x)
+    else:
+        eta = cp.Variable(4)
+        lifted = tube.tail @ eta
+        cons.append(cp.norm(eta, 2) <= 1.0)
+        if tube.num_terms > 0:  # none for a tiny d_bar, whose tail alone is within the tolerance
+            d = cp.Variable((tube.num_terms, 2))
+            lifted = lifted + sum(tube.terms[lag] @ d[lag] for lag in range(tube.num_terms))
+            cons.append(cp.norm(d, 2, axis=1) <= tube.d_bar)
+        cons.append(z[0] + lifted == x)
+    return z, v, cons
+
+
 class _ExactProblem:
     """The problem with the binaries fixed: convex, with the disks and ``Z`` exact (Clarabel).
 
@@ -139,34 +173,14 @@ class _ExactProblem:
     """
 
     def __init__(self, problem: MPCProblem) -> None:
-        N, tube = problem.N, problem.tube
+        N = problem.N
         self.problem = problem
         self.x = cp.Parameter(4)
         self.target = cp.Parameter(2)
         self.select = cp.Parameter(N + 1, nonneg=True)
         self.mask = cp.Parameter((N, 2), nonneg=True)
-        self.z = cp.Variable((N + 1, 4))
-        self.v = cp.Variable((N, 2))
+        self.z, self.v, cons = _plan_constraints(problem, self.x)
         z, v = self.z, self.v
-        cons = [
-            z[1:] == z[:-1] @ problem.A.T + v @ problem.B.T,
-            z[N, 2:] == 0,  # the terminal set: at rest
-            z[:, :2] @ problem.arena_normals.T <= np.tile(problem.arena_bounds, (N + 1, 1)),
-            cp.norm(v, 2, axis=1) <= problem.u_bar,
-        ]
-        if N > 1:  # stage 0 free, stage N at rest
-            cons.append(cp.norm(z[1:N, 2:], 2, axis=1) <= problem.v_bar)
-        if tube.is_zero:
-            cons.append(z[0] == self.x)
-        else:
-            eta = cp.Variable(4)
-            lifted = tube.tail @ eta
-            cons.append(cp.norm(eta, 2) <= 1.0)
-            if tube.num_terms > 0:  # none for a tiny d_bar, whose tail alone is within the tolerance
-                d = cp.Variable((tube.num_terms, 2))
-                lifted = lifted + sum(tube.terms[lag] @ d[lag] for lag in range(tube.num_terms))
-                cons.append(cp.norm(d, 2, axis=1) <= tube.d_bar)
-            cons.append(z[0] + lifted == self.x)
         self.deltas: list[cp.Parameter] = []
         for obstacle in problem.obstacles:
             delta = cp.Parameter((N, obstacle.num_faces))
@@ -212,6 +226,58 @@ class _ExactProblem:
             return None
         z, v = np.array(self.z.value), np.array(self.v.value)
         return z, v, self.problem.cost(z, v, target, k)
+
+
+class ReachSupport:
+    """The support points of the reachable set without obstacles (D38): for each fixed direction ``a``, the
+    position at stage ``stage`` of the plan that goes farthest along ``a``, over the Worker's problem without its
+    obstacles (the tube, the tightened sets, the arena, the terminal rest).
+
+    One cone program, compiled once with the state and the direction as
+    parameters, solved by Clarabel once per direction. The set is convex, so
+    the convex hull of the points lies inside it. A failed or inaccurate solve
+    leaves a NaN row, which the target map skips and counts.
+
+    Args:
+        problem: The Worker's problem.
+        stage: The stage of the positions, ``H`` for the end of a segment.
+        directions: ``(n, 2)`` unit vectors.
+    """
+
+    def __init__(self, problem: MPCProblem, stage: int, directions: ArrayLike) -> None:
+        self.problem = problem
+        self.stage = problem.waypoint_stage(stage)
+        self.directions = np.asarray(directions, dtype=np.float64)
+        if self.directions.ndim != 2 or self.directions.shape[1] != 2:
+            raise ValueError(f"the directions must have shape (n, 2), got {self.directions.shape}")
+        self.x = cp.Parameter(4)
+        self.a = cp.Parameter(2)
+        self.z, _, cons = _plan_constraints(problem, self.x)
+        self.prob = cp.Problem(cp.Maximize(self.a @ self.z[self.stage, :2]), cons)
+        self.failures = 0
+        """Solves that failed or ended inaccurate, since the object was built."""
+        middle = 0.5 * (problem.position_low + problem.position_high)
+        self(np.array([middle[0], middle[1], 0.0, 0.0]))  # compile now, not within the first decision
+        self.failures = 0
+
+    def __call__(self, x: ArrayLike) -> FloatArray:
+        """``(n, 2)`` support points from the state ``x``, a NaN row where Clarabel failed."""
+        self.x.value = np.asarray(x, dtype=np.float64).reshape(4)
+        points = np.full((len(self.directions), 2), np.nan)
+        for i, a in enumerate(self.directions):
+            self.a.value = a
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    self.prob.solve(solver=cp.CLARABEL)
+            except cp.SolverError:
+                self.failures += 1
+                continue
+            if self.prob.status != "optimal" or self.z.value is None:
+                self.failures += 1
+                continue
+            points[i] = np.asarray(self.z.value)[self.stage, :2]
+        return points
 
 
 class _GaugeOracle:
@@ -579,37 +645,10 @@ class MPCWorker:
         started = time.perf_counter()
         self._errors = 0
         tube_ratio = self._tube_ratio(s, x)
-        if s.init is not None:
-            s.init.RHS = x
-        else:
-            s.z_base.RHS = self._z_h - self._z_dirs @ x
-        self._set_objective(s, g, k)
-        bounds = pr.fixed_binaries(x)
-        for d, (lb, ub) in zip(s.deltas, bounds, strict=True):
-            d.LB = lb
-            d.UB = ub
-        free = pr.free_binaries(bounds)
-
         candidate = None if s.plan is None else pr.candidate(*s.plan)
         candidate_cost = np.inf if candidate is None else pr.cost(candidate[0], candidate[1], g, k)
-        candidate_deltas = None if candidate is None else pr.binaries_of(candidate[0], bounds)
-        s.disk_seed = []
-        if candidate is not None:
-            for which, Y in enumerate((candidate[0][1 : pr.N, 2:], candidate[1])):
-                radius = s.disks[which][1]
-                norms = np.linalg.norm(Y, axis=1)
-                for i in np.flatnonzero(norms > 0.5 * radius):
-                    s.disk_seed.append((which, int(i), Y[i] / norms[i]))
-            s.z.Start = candidate[0]
-            s.v.Start = candidate[1]
-        else:
-            s.z.Start = np.full((pr.N + 1, 4), GRB.UNDEFINED)
-            s.v.Start = np.full((pr.N, 2), GRB.UNDEFINED)
-        starts: list[FloatArray | None] = [None] * len(s.deltas) if candidate_deltas is None else list(candidate_deltas)
-        for d, dv in zip(s.deltas, starts, strict=True):
-            d.Start = np.full(d.shape, GRB.UNDEFINED) if dv is None else dv
-
-        s.cut_rounds = 0
+        bounds = self._prepare(s, x, g, k, candidate)
+        free = pr.free_binaries(bounds)
         solution = self._optimize(s, x, g, k, bounds)
         plan, outcome, invalid = self._choose(x, g, k, solution, candidate, candidate_cost)
         if plan is None:
@@ -632,3 +671,82 @@ class MPCWorker:
             solver_errors=self._errors,
         )
         return u, info
+
+    def project(
+        self, x: ArrayLike, target: ArrayLike, steps_left: int, slot: int = 0
+    ) -> tuple[FloatArray | None, int]:
+        """The position at stage ``steps_left`` of the plan for ``target`` from the state ``x``, solved as by a
+        fresh Worker: the reachable point nearest to ``target`` up to the trade-off with the effort (D37, D39), or
+        ``None`` if the solvers find no plan; and the solver failures during the search.
+
+        The slot is reset before and after, so a projection neither uses nor
+        leaves a plan or cuts; it is meant for a Worker of its own, whose slots
+        steer no agent.
+
+        Raises:
+            ValueError: If ``steps_left`` does not lie in ``1, ..., N``.
+            gurobipy.GurobiError: Gurobi's licence errors (:data:`LICENCE_ERRORS`).
+        """
+        pr = self.problem
+        state = np.asarray(x, dtype=np.float64).reshape(4)
+        g = np.asarray(target, dtype=np.float64).reshape(2)
+        k = pr.waypoint_stage(steps_left)
+        s = self._slots[slot]
+        self.reset(slot)
+        self._errors = 0
+        try:
+            bounds = self._prepare(s, state, g, k, None)
+            solution = self._optimize(s, state, g, k, bounds)
+        finally:
+            self.reset(slot)
+        return (None if solution is None else np.array(solution[0][k, :2])), self._errors
+
+    def _prepare(self, s: _Slot, x: FloatArray, target: FloatArray, steps_left: int, candidate: Plan | None) -> Bounds:
+        """Set the slot's model for a solve from ``x``: the state, the objective, the binaries' bounds, and the MIP
+        start and the cuts of the disks from the shifted plan ``candidate``, if any; returns the bounds."""
+        pr = self.problem
+        if s.init is not None:
+            s.init.RHS = x
+        else:
+            s.z_base.RHS = self._z_h - self._z_dirs @ x
+        self._set_objective(s, target, steps_left)
+        bounds = pr.fixed_binaries(x)
+        for d, (lb, ub) in zip(s.deltas, bounds, strict=True):
+            d.LB = lb
+            d.UB = ub
+        candidate_deltas = None if candidate is None else pr.binaries_of(candidate[0], bounds)
+        s.disk_seed = []
+        if candidate is not None:
+            for which, Y in enumerate((candidate[0][1 : pr.N, 2:], candidate[1])):
+                radius = s.disks[which][1]
+                norms = np.linalg.norm(Y, axis=1)
+                for i in np.flatnonzero(norms > 0.5 * radius):
+                    s.disk_seed.append((which, int(i), Y[i] / norms[i]))
+            s.z.Start = candidate[0]
+            s.v.Start = candidate[1]
+        else:
+            s.z.Start = np.full((pr.N + 1, 4), GRB.UNDEFINED)
+            s.v.Start = np.full((pr.N, 2), GRB.UNDEFINED)
+        starts: list[FloatArray | None] = [None] * len(s.deltas) if candidate_deltas is None else list(candidate_deltas)
+        for d, dv in zip(s.deltas, starts, strict=True):
+            d.Start = np.full(d.shape, GRB.UNDEFINED) if dv is None else dv
+        s.cut_rounds = 0
+        return bounds
+
+
+def reachable_targets(problem: MPCProblem, segment_steps: int, directions: int) -> ReachableTargets:
+    """The targets of architecture 4 (D38, D39): the support points of the reachable set without obstacles in
+    ``directions`` fixed directions (Clarabel), and the projection by a Worker of their own (Gurobi and Clarabel),
+    which :meth:`~hrlmpc.reachability.ReachableTargets.close` releases.
+
+    Raises:
+        ValueError: If ``segment_steps`` exceeds the horizon or ``directions`` is below 3.
+    """
+    support = ReachSupport(problem, segment_steps, support_directions(directions))
+    projector = MPCWorker(problem, 1)
+
+    def project(x: FloatArray, q: FloatArray) -> tuple[FloatArray | None, int]:
+        return projector.project(x, q, segment_steps)
+
+    radius = problem.params.v_max * segment_steps * problem.dt
+    return ReachableTargets(support=support, project=project, radius=radius, release=projector.close)

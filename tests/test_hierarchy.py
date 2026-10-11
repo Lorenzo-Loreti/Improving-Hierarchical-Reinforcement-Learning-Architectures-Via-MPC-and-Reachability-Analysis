@@ -657,6 +657,29 @@ def test_the_controller_resets_a_command_worker_and_declares_its_inputs() -> Non
         evaluate(controller, config, STARTS, seed=1, inputs=False)
 
 
+def test_the_controller_records_how_far_each_segment_ends_from_its_target() -> None:
+    """D40: at every decision after the first, the distances of the agents from the targets of the segments that
+    ended, with the call at which they ended; a reset forgets them."""
+    config = _config()
+    obs_map = ObservationMap.from_config(config)
+    hierarchy = _hierarchy(config, segment_steps=3)
+    controller = HierarchicalController(hierarchy, lambda o: _manager_policy(o)[0],
+                                        CommandWorker(command=_tracking_command(obs_map)))
+    rng = np.random.default_rng(7)
+    positions = rng.uniform([0.0, -1.0], [8.0, 1.0], size=(8, 2, 2))
+    targets = []
+    for t, p in enumerate(positions):
+        obs = obs_map.observe(p, np.zeros((2, 2)))
+        if t % 3 == 0:
+            targets.append(hierarchy.targets(_manager_policy(obs)[0], p, np.zeros((2, 2))))
+        controller(obs)
+    assert [t for t, _ in controller.segment_ends] == [3, 6]
+    for (t, distances), target in zip(controller.segment_ends, targets[:-1], strict=True):
+        np.testing.assert_allclose(distances, np.linalg.norm(positions[t] - target, axis=1))
+    controller.reset(2)
+    assert controller.segment_ends == []
+
+
 def test_the_controller_with_a_command_worker() -> None:
     config = _config()
     obs_map = ObservationMap.from_config(config)

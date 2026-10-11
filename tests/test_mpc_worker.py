@@ -36,8 +36,9 @@ from hrlmpc.env import ObservationMap  # noqa: E402
 from hrlmpc.geometry import Layout  # noqa: E402
 from hrlmpc.mpc_command import CANDIDATE, EMERGENCY, KEPT, SOLVER, MPCCommand  # noqa: E402
 from hrlmpc.mpc_problem import MPCProblem, MPCSettings  # noqa: E402
-from hrlmpc.mpc_worker import MPCWorker, _GaugeOracle  # noqa: E402
+from hrlmpc.mpc_worker import MPCWorker, ReachSupport, _GaugeOracle, reachable_targets  # noqa: E402
 from hrlmpc.physics import physics_step  # noqa: E402
+from hrlmpc.reachability import support_directions  # noqa: E402
 
 GRB = gp.GRB
 TOL = 1e-5
@@ -615,6 +616,7 @@ def test_the_conic_problems_are_compiled_once() -> None:
     with _licence():
         worker = MPCWorker(problem)
     assert worker._exact.prob.is_dpp() and worker._gauge is not None and worker._gauge.prob.is_dpp()
+    assert ReachSupport(problem, H, support_directions(4)).prob.is_dpp()
     worker.close()
 
 
@@ -647,3 +649,121 @@ def test_the_command_adapter_steers_every_agent() -> None:
         command.command(np.vstack([obs, obs]), np.vstack([p, p]), np.vstack([p, p]), np.full(6, H))
     with pytest.raises(ValueError, match="steps_left"):
         MPCWorker(problem).act(np.array([1.0, 0.0, 0.0, 0.0]), [2.8, 0.0], problem.N + 1)
+
+
+# --------------------------------------------------------------------------
+# The targets of architecture 4 (D38, D39)
+# --------------------------------------------------------------------------
+
+
+def _f7_travel(problem: MPCProblem, speed: float, steps: int) -> float:
+    """The displacement of full thrust along a line in ``steps`` steps from ``speed`` (the recursion of F7)."""
+    travel = 0.0
+    for _ in range(steps):
+        speed = min((1.0 - problem.params.gamma * problem.dt) * speed + problem.dt * problem.u_bar, problem.v_bar)
+        travel += problem.dt * speed
+    return travel
+
+
+def test_the_support_points_from_rest_lie_on_the_circle_of_f7() -> None:
+    """D38 and F6: away from the walls and at rest, the reachable set is a disk, whose radius is the displacement
+    of full thrust in H steps, and its 16 support points lie on it, in their directions."""
+    _, _, problem = _setup("tunnel")
+    support = ReachSupport(problem, H, support_directions(16))
+    x = np.array([5.0, 0.0, 0.0, 0.0])
+    points = support(x)
+    radius = _f7_travel(problem, 0.0, H)
+    assert radius == pytest.approx(0.95092, abs=1e-5)
+    np.testing.assert_allclose(points - x[:2], radius * support_directions(16), atol=1e-5)
+    assert support.failures == 0
+
+
+def test_the_forward_support_point_at_full_speed_is_a_segment_at_full_speed() -> None:
+    """At the planned speed the set reaches H T_s v_bar ahead, and it is symmetric about the velocity."""
+    _, _, problem = _setup("tunnel")
+    support = ReachSupport(problem, H, support_directions(16))
+    x = np.array([2.0, 0.0, problem.v_bar, 0.0])
+    points = support(x)
+    np.testing.assert_allclose(points[0], [2.0 + H * problem.dt * problem.v_bar, 0.0], atol=1e-5)
+    np.testing.assert_allclose(points[4], points[12] * np.array([1.0, -1.0]), atol=1e-5)  # up and down mirror
+
+
+def _effort_bound(problem: MPCProblem) -> float:
+    """How far the Worker's plan may end from a reachable target (D37): the plan that reaches it costs at most its
+    effort, ``r_e H u_bar^2``, and the plan's cost exceeds ``q_g`` times the squared miss; 2.5 cm here. At the
+    edge of the set the miss is a few millimetres, inside it a fraction of one."""
+    s = problem.settings
+    return float(np.sqrt(s.effort_weight * H * problem.u_bar**2 / s.target_weight))
+
+
+def test_every_support_point_is_a_target_the_worker_reaches() -> None:
+    """The support points and the Worker share one problem, so the projection of a support point is itself, up
+    to the trade-off with the effort (D37)."""
+    _, _, problem = _setup("tunnel")
+    support = ReachSupport(problem, H, support_directions(8))
+    x = np.array([2.0, 0.5, 1.0, 0.3])
+    assert _effort_bound(problem) == pytest.approx(0.025)
+    with _licence():
+        worker = MPCWorker(problem)
+        for point in support(x):
+            reached, errors = worker.project(x, point, H)
+            assert reached is not None and errors == 0
+            assert np.linalg.norm(reached - point) <= _effort_bound(problem)
+
+
+def test_a_projection_solves_as_a_fresh_worker() -> None:
+    """D39: a projection neither uses nor leaves a plan or cuts of Z, near a gate, where Gurobi and the cuts work."""
+    _, _, problem = _setup("slalom", d_bar=0.5)
+    x, q = np.array([3.75, 0.45, 1.0, 0.0]), np.array([5.4, 1.2])
+    assert problem.free_binaries(problem.fixed_binaries(x)) > 0
+    with _licence():
+        used = MPCWorker(problem)
+        used.act(x, q, H)  # leaves a plan, and possibly cuts of Z
+        used.project(np.array([3.4, 1.0, 1.0, 0.0]), np.array([4.6, 0.5]), H)
+        first, _ = used.project(x, q, H)
+        fresh, _ = MPCWorker(problem).project(x, q, H)
+    assert first is not None and fresh is not None
+    np.testing.assert_allclose(first, fresh, rtol=0.0, atol=1e-9)
+    assert used._slots[0].plan is None and used._slots[0].z_seed == []
+
+
+def test_a_target_inside_an_obstacle_is_projected_next_to_its_face() -> None:
+    """D39: in front of O1 = [4, 5] x [-2, 0.25] at 0.8 m/s, a point inside it goes to the nearest reachable point,
+    next to the enlarged left face; the gate above is out of reach within the segment. The point stops a few
+    millimetres short of the face: the plan must rest there by the end of the horizon, and braking within the
+    segment costs effort (D37)."""
+    _, _, problem = _setup("slalom")
+    x, q = np.array([3.0, -1.0, 0.8, 0.0]), np.array([4.5, -1.0])
+    face = 4.0 - problem.margin
+    with _licence():
+        worker = MPCWorker(problem)
+        g, errors = worker.project(x, q, H)
+        assert g is not None and errors == 0
+        assert face - 2e-2 <= g[0] <= face + 1e-6 and abs(g[1] + 1.0) <= 1e-2
+        again, _ = worker.project(x, g, H)
+    assert again is not None and np.linalg.norm(again - g) <= _effort_bound(problem)  # reachable
+
+
+@pytest.mark.parametrize("d_bar", [0.0, 0.5])
+def test_the_reachable_targets_are_reachable_and_contact_free(d_bar: float) -> None:
+    """D38, D39 end to end on the slalom: from states near the gates, the targets of random actions lie outside
+    every enlarged obstacle, and a fresh projection leaves them where they are."""
+    _, _, problem = _setup("slalom", d_bar=d_bar)
+    rng = np.random.default_rng(8)
+    states = np.array([[3.4, 1.0, 1.0, 0.0], [6.4, 0.2, 0.8, -0.7], [1.0, 0.0, 0.0, 0.0]])
+    with _licence():
+        targets = reachable_targets(problem, H, 16)
+        checker = MPCWorker(problem)
+        actions = rng.uniform(-1.0, 1.0, size=(len(states), 2))
+        actions[0] = [1.0, -0.2]  # toward the obstacle below the first gate
+        g = targets(actions, states[:, :2], states[:, 2:])
+        for x, target in zip(states, g, strict=True):
+            for obstacle in problem.obstacles:  # beyond one face, to what a mixed-integer plan may leave
+                assert np.max(obstacle.normals @ target - obstacle.bounds) >= -problem.face_slack - 1e-9
+            again, _ = checker.project(x, target, H)
+            assert again is not None and np.linalg.norm(again - target) <= _effort_bound(problem)
+        stats = targets.pop_stats()
+        targets.close()
+        targets.close()
+    assert stats["projection_failed"].sum() == 0 and stats["support_failures"].sum() == 0
+    assert stats["hull_fallback"].sum() == 0 and np.all(stats["hull_area"] > 0.5)

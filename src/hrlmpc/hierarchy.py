@@ -12,8 +12,8 @@ horizon is bootstrapped with the value of the state it reached.
 
 Targets (D24). :class:`DiskTargets` maps ``x`` onto the disk of radius ``R``
 around the position at the segment's start, with the bijection of D15. The
-reachable sets of architecture 4 will enter through the same interface,
-:class:`TargetMap` (step 10).
+reachable targets of architecture 4 (D38, :class:`hrlmpc.reachability.ReachableTargets`)
+enter through the same interface, :class:`TargetMap`.
 
 Workers. The Worker is interchangeable. A :class:`LearnedWorker`, the hPPO
 Worker, sees the observation and the target offset ``(g - p) / R`` (D26) and
@@ -674,6 +674,12 @@ class HierarchicalController:
         self.worker = worker
         self.inputs = isinstance(worker, CommandWorker)
         """Whether the commands are accelerations (:func:`hrlmpc.evaluation.evaluate`'s ``inputs``)."""
+        self.segment_ends: list[tuple[int, FloatArray]] = []
+        """``(t, d)`` at every decision after the first since :meth:`reset`: the call ``t`` and the ``(B,)``
+        distances [m] of the agents from the targets of the segments that just ended (D40). The agents start
+        together, so an agent's segment ending at ``t`` lies within its first episode if ``t`` is below its length.
+        A segment that ends with the episode is not seen (the next observation is the next episode's), whereas
+        training also counts it, from the final observation."""
         self._agents = 0
         self._calls = 0
         self._targets = np.zeros((0, 2))
@@ -683,6 +689,7 @@ class HierarchicalController:
         self._agents = num_agents
         self._calls = 0
         self._targets = np.zeros((0, 2))
+        self.segment_ends = []
         if isinstance(self.worker, CommandWorker) and self.worker.reset is not None:
             self.worker.reset(np.ones(num_agents, dtype=bool))
 
@@ -695,6 +702,9 @@ class HierarchicalController:
             self.reset(len(o))
         step = self._calls % h.segment_steps
         if step == 0:
+            if self._calls > 0:
+                gap = p - self._targets
+                self.segment_ends.append((self._calls, np.hypot(gap[:, 0], gap[:, 1])))
             actions = _checked(self.manager(o), (len(o), 2), "Manager's actions")
             self._targets = h.targets(actions, p, h.obs_map.velocities(o))
         self._calls += 1

@@ -1,9 +1,11 @@
-"""Training of PPO_MPC on the navigation environment (architecture 3; decision log D6, D20, D24-D35, D37).
+"""Training of PPO_MPC and PPO_MPC_reachability (architectures 3 and 4; decision log D6, D20, D24-D35, D37-D40).
 
 Usage, from the repository root::
 
     python -m hrlmpc.train_ppo_mpc --env configs/env/tunnel.yaml --agent configs/agent/ppo_mpc.yaml \
         --budget 204800 --seeds 1 2 3 4 5
+
+and ``--agent configs/agent/ppo_mpc_reachability.yaml`` for architecture 4.
 
 A PPO Manager sets a target every ``H`` steps on the common loop of
 :mod:`hrlmpc.hierarchy`, exactly as in hPPO; the Worker is the tube MPC of
@@ -11,9 +13,12 @@ D31-D34 (:mod:`hrlmpc.mpc_worker`), which knows the model, the constraints and
 the obstacles, plans contact-free and does not learn. It plans to pass the
 target when the segment ends, or to end the segment at the reachable point
 nearest to it (D37). After each rollout the Manager is updated on the segments
-that ended (GAE at ``gamma^tau``, D27).
+that ended (GAE at ``gamma^tau``, D27). The architectures differ only in the
+targets: on the disk of D24 (architecture 3), or in the reachable set of D38,
+projected onto it by a Worker of their own (D39, :mod:`hrlmpc.reachability`).
 
-Each seed writes the run directory ``<runs-dir>/<layout>/ppo_mpc/seed<seed>-<UTC time>`` with:
+Each seed writes the run directory ``<runs-dir>/<layout>/<algorithm>/seed<seed>-<UTC time>``,
+``<algorithm>`` being ``ppo_mpc`` or ``ppo_mpc_reachability``, with:
 
     config.yaml        resolved configuration: environment, agent, budget, seed
     meta.json          provenance (hrlmpc.utils.runlog)
@@ -27,21 +32,28 @@ Worker's steps under ``mpc/`` and every evaluation under ``eval_mpc/``
 rates of the steps on the shifted plan (the fallback when the solvers found
 nothing, or kept because cheaper), the counts of emergencies, of shifted plans
 outside their tube and of solver failures, the free binaries, the cut rounds
-and, with a tube, the largest tube ratio. An evaluation counts the steps of the
-evaluated episodes only: agents that finished first keep being stepped, in
-ignored episodes (D29), and their solves cost time but no metric. The budget
-counts samples, physical steps during training summed over the agents (D6);
-the Worker's predictions are not samples, their cost is the solve time.
+and, with a tube, the largest tube ratio. Both log how close the agents end
+their full segments to the targets (D40) under ``hierarchy/`` and
+``eval_hierarchy/`` (:func:`hrlmpc.reachability.reached_metrics`), and
+architecture 4 its targets under ``reach/`` and ``eval_reach/``
+(:func:`hrlmpc.reachability.reach_metrics`). An evaluation counts the steps,
+segments and decisions of the evaluated episodes only: agents that finished
+first keep being stepped, in ignored episodes (D29), and their solves cost
+time but no metric. The budget counts samples, physical steps during training
+summed over the agents (D6); the Worker's predictions are not samples, their
+cost is the solve time.
 
-The Worker needs cvxpy, Clarabel and Gurobi (the extra ``mpc``); tests pass a
-stand-in through ``worker_factory``. The Workers are built before the run
-directory, so a Worker that cannot be built leaves nothing on disk.
+The Worker needs cvxpy, Clarabel and Gurobi (the extra ``mpc``), and so do the
+targets of architecture 4; tests pass stand-ins through ``worker_factory`` and
+``targets_factory``. The Workers and the targets are built before the run
+directory, so a solver that cannot be built leaves nothing on disk.
 """
 
 from __future__ import annotations
 
 import argparse
 import contextlib
+import dataclasses
 import datetime
 import json
 import os
@@ -50,6 +62,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 import yaml
 
@@ -78,6 +91,7 @@ from hrlmpc.ppo_mpc_config import (
     ppo_mpc_config_from_dict,
     ppo_mpc_config_to_dict,
 )
+from hrlmpc.reachability import REACHED_MARGIN, ReachableTargets, reach_metrics, reached_metrics
 from hrlmpc.rollout import episode_metrics
 from hrlmpc.train_hppo import _format_gap, _hierarchy_metrics, _manager_batch, _renamed
 from hrlmpc.utils.runlog import RunLogger
@@ -85,6 +99,9 @@ from hrlmpc.utils.seeding import seed_everything
 
 WorkerFactory = Callable[[MPCProblem, int], StepActor]
 """Builds a Worker for a problem and a number of agents."""
+
+TargetsFactory = Callable[[MPCProblem, PPOMPCConfig], ReachableTargets]
+"""Builds the targets of architecture 4 for a problem and a configuration."""
 
 
 def solver_worker(problem: MPCProblem, num_slots: int) -> StepActor:
@@ -94,8 +111,19 @@ def solver_worker(problem: MPCProblem, num_slots: int) -> StepActor:
     return MPCWorker(problem, num_slots)
 
 
+def solver_targets(problem: MPCProblem, config: PPOMPCConfig) -> ReachableTargets:
+    """The targets of architecture 4 (D38, D39) with the solvers: the support points of the reachable set
+    without obstacles (Clarabel) and the projection by a Worker of their own (Gurobi and Clarabel)."""
+    from hrlmpc.mpc_worker import reachable_targets
+
+    if config.reachability is None:
+        raise ValueError("the configuration has no reachable targets")
+    return reachable_targets(problem, config.hierarchy.segment_steps, config.reachability.directions)
+
+
 def hierarchy_of(env_config: EnvConfig, config: PPOMPCConfig) -> Hierarchy:
-    """Targets and segments (D24, D27), as hPPO's, with the Manager's discount."""
+    """Targets and segments (D24, D27), as hPPO's, with the Manager's discount; architecture 4 replaces the
+    targets by those of D38 (:func:`solver_targets`)."""
     return disk_hierarchy(
         env_config,
         segment_steps=config.hierarchy.segment_steps,
@@ -115,10 +143,15 @@ def problem_of(env_config: EnvConfig, config: PPOMPCConfig) -> MPCProblem:
     return problem
 
 
-def _close(worker: StepActor) -> None:
+def _close(worker: Any) -> None:
     close = getattr(worker, "close", None)
     if callable(close):
         close()
+
+
+def _reach_tolerance(problem: MPCProblem) -> float:
+    """``r_p + REACHED_MARGIN``: a target counts as reached within this distance [m] at the end of a segment (D40)."""
+    return float(problem.tube.position_radius + REACHED_MARGIN)
 
 
 def train(
@@ -132,8 +165,9 @@ def train(
     repo_dir: str | Path | None = None,
     echo: Callable[[str], None] | None = print,
     worker_factory: WorkerFactory | None = None,
+    targets_factory: TargetsFactory | None = None,
 ) -> Path:
-    """Train PPO_MPC for ``budget`` samples and write the run directory.
+    """Train PPO_MPC or PPO_MPC_reachability for ``budget`` samples and write the run directory.
 
     Args:
         env_config: Layout, physics, task and reward.
@@ -148,6 +182,7 @@ def train(
         echo: Receives the Worker's summary and one line per evaluation; ``None`` keeps quiet.
         worker_factory: Builds the Workers of the rollouts and of the evaluations;
             :func:`solver_worker` by default.
+        targets_factory: Builds the targets of architecture 4; :func:`solver_targets` by default.
 
     Returns:
         The run directory.
@@ -177,7 +212,8 @@ def train(
     threads, benchmark = torch.get_num_threads(), torch.backends.cudnn.benchmark
     try:
         factory = solver_worker if worker_factory is None else worker_factory
-        return _train(env_config, config, budget, seed, Path(run_dir), provenance, repo_dir, echo, factory)
+        targets = solver_targets if targets_factory is None else targets_factory
+        return _train(env_config, config, budget, seed, Path(run_dir), provenance, repo_dir, echo, factory, targets)
     finally:  # leave the process's global PyTorch settings as they were
         torch.use_deterministic_algorithms(deterministic, warn_only=warn_only)
         torch.set_num_threads(threads)
@@ -194,6 +230,7 @@ def _train(
     repo_dir: str | Path | None,
     echo: Callable[[str], None] | None,
     worker_factory: WorkerFactory,
+    targets_factory: TargetsFactory,
 ) -> Path:
     per_update, every = config.batch_size, config.evaluation.every
     seed_everything(seed)
@@ -205,8 +242,9 @@ def _train(
     manager = PPOAgent(env.observation_size, env.action_size, m_cfg.network, m_cfg.update, device=config.runtime.device)
     starts = spawn_grid(env_config.task.spawn, config.evaluation.grid)
     obs_map = ObservationMap.from_config(env_config)
+    reach_tolerance, segment_steps = _reach_tolerance(problem), config.hierarchy.segment_steps
     run_config: dict[str, Any] = {
-        "algorithm": "ppo_mpc",
+        "algorithm": config.algorithm,
         "seed": seed,
         "budget": budget,
         **dict(provenance or {}),
@@ -222,19 +260,33 @@ def _train(
         stack.callback(_close, eval_worker)
         command = MPCCommand(rollout_worker, obs_map)
         eval_command = MPCCommand(eval_worker, obs_map)
+        reach: ReachableTargets | None = None
+        if config.reachability is not None:
+            reach = targets_factory(problem, config)
+            stack.callback(_close, reach)
+            hierarchy = dataclasses.replace(hierarchy, targets=reach)
         logger = stack.enter_context(RunLogger(path, run_config, seed=seed, repo_dir=source))
         if echo is not None:
             echo(problem.summary())
 
         def evaluate_now() -> None:
+            if reach is not None:
+                reach.pop_stats()  # the training's decisions are logged with its updates
             controller = HierarchicalController(hierarchy, manager.deterministic_action, eval_command.as_worker())
             result = evaluate(controller, env_config, starts, seed=config.evaluation.seed)
             metrics: dict[str, Any] = result.metrics()
             stats = eval_command.pop_stats()
-            lengths = [episode.length for episode in result.episodes]
-            if len(stats["outcome"]) != max(lengths):  # one Worker call per step until the last episode ends
-                raise RuntimeError(f"{len(stats['outcome'])} Worker steps for episodes of up to {max(lengths)} steps")
+            lengths = np.array([episode.length for episode in result.episodes])
+            if len(stats["outcome"]) != lengths.max():  # one Worker call per step until the last episode ends
+                raise RuntimeError(f"{len(stats['outcome'])} Worker steps for episodes of up to {lengths.max()} steps")
             metrics.update(mpc_metrics(stats, "eval_mpc", episode_mask(lengths, len(stats["outcome"]))))
+            ends = [d[t < lengths] for t, d in controller.segment_ends]  # segments within the evaluated episodes
+            metrics.update(reached_metrics(np.concatenate(ends) if ends else [], reach_tolerance, "eval_hierarchy"))
+            if reach is not None:
+                decisions = reach.pop_stats()
+                calls = len(decisions["projection"]) // len(starts)  # every agent decides at every H-th call
+                within = (segment_steps * np.arange(calls))[:, None] < lengths[None, :]
+                metrics.update(reach_metrics(decisions, "eval_reach", within.reshape(-1)))
             logger.log(metrics, env.counter)
             with (path / "evaluations.jsonl").open("a", encoding="utf-8") as f:
                 f.write(json.dumps({"env_steps": env.counter.env_steps, **result.details()}) + "\n")
@@ -264,7 +316,11 @@ def _train(
             training_time += time.perf_counter() - tick
             metrics.update(episode_metrics(rollout.episodes))
             metrics.update(_hierarchy_metrics(rollout))
+            full = rollout.segments.steps == segment_steps
+            metrics.update(reached_metrics(rollout.segments.end_distances[full], reach_tolerance, "hierarchy"))
             metrics.update(mpc_metrics(command.pop_stats(), "mpc"))
+            if reach is not None:
+                metrics.update(reach_metrics(reach.pop_stats(), "reach"))
             metrics.update(
                 {
                     "manager/learning_rate": actor_rate,
@@ -282,10 +338,14 @@ def _train(
     return path
 
 
-def load_manager(run_dir: str | Path, checkpoint: str = "final.pt") -> tuple[PPOAgent, Hierarchy, MPCProblem]:
+def load_manager(
+    run_dir: str | Path, checkpoint: str = "final.pt", targets_factory: TargetsFactory | None = None
+) -> tuple[PPOAgent, Hierarchy, MPCProblem]:
     """The Manager, the hierarchy and the Worker's problem of a run, rebuilt from ``config.yaml`` and a checkpoint.
 
-    The Worker itself is built from the problem by the caller (it needs the solvers).
+    The Worker itself is built from the problem by the caller (it needs the solvers). For architecture 4 the
+    hierarchy's targets are built by ``targets_factory`` (:func:`solver_targets` by default, which needs the
+    solvers); the caller closes them.
     """
     path = Path(run_dir)
     raw = yaml.safe_load((path / "config.yaml").read_text(encoding="utf-8"))
@@ -297,17 +357,25 @@ def load_manager(run_dir: str | Path, checkpoint: str = "final.pt") -> tuple[PPO
     )
     state = torch.load(path / checkpoint, map_location=manager.device, weights_only=True)
     manager.load_state_dict(state["manager"])
-    return manager, hierarchy_of(env_config, config), problem_of(env_config, config)
+    problem = problem_of(env_config, config)
+    hierarchy = hierarchy_of(env_config, config)
+    if config.reachability is not None:
+        targets = (solver_targets if targets_factory is None else targets_factory)(problem, config)
+        hierarchy = dataclasses.replace(hierarchy, targets=targets)
+    return manager, hierarchy, problem
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Command line: one training run per seed."""
-    parser = argparse.ArgumentParser(description="Train PPO_MPC on a layout of the navigation environment.")
+    parser = argparse.ArgumentParser(
+        description="Train PPO_MPC or PPO_MPC_reachability on a layout of the navigation environment."
+    )
     parser.add_argument(
         "--env", type=Path, required=True, help="environment configuration, e.g. configs/env/tunnel.yaml"
     )
     parser.add_argument(
-        "--agent", type=Path, required=True, help="PPO_MPC configuration, e.g. configs/agent/ppo_mpc.yaml"
+        "--agent", type=Path, required=True,
+        help="configuration, e.g. configs/agent/ppo_mpc.yaml or configs/agent/ppo_mpc_reachability.yaml",
     )
     parser.add_argument(
         "--budget", type=int, required=True, help="samples per run: physical steps summed over the agents (D6)"
@@ -324,7 +392,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(f"training seeds must be non-negative and differ from the evaluation seed, got {bad}")
     for seed in args.seeds:
         stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
-        run_dir = args.runs_dir / args.env.stem / "ppo_mpc" / f"seed{seed}-{stamp}"
+        run_dir = args.runs_dir / args.env.stem / config.algorithm / f"seed{seed}-{stamp}"
         train(
             env_config,
             config,
