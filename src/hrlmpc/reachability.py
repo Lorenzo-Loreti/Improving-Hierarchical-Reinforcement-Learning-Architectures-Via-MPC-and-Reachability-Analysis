@@ -1,4 +1,4 @@
-"""Targets of PPO_MPC_reachability: the reachable set and the Manager's action map (decision log D38-D40).
+"""Targets of PPO_MPC_reachability: the reachable set and the Manager's action map (decision log D38-D40, D47).
 
 At a decision the Manager's action ``x`` in ``[-1, 1]^2`` sets a target in the
 set ``R_H`` of the positions at stage ``H`` of the plans that the MPC Worker
@@ -20,13 +20,14 @@ sense of the tube, contact-free, and able to stop by the end of the horizon.
    the point of ``R_H``, obstacles included, nearest to ``q`` up to the
    trade-off with the effort (D37: millimetres at the edge of the set), and
    reachable by construction (D39). If no plan is found the target is ``q``,
-   and the failure is counted.
+   and the failure is counted, with how the projection's search ended (D47).
 
 The Worker of architecture 3 treats an unreachable target in the same way
 (D37), so architectures 3 and 4 differ only in the map of the Manager's
 action: onto the disk of D24, or onto ``C``.
 
-Everything here is NumPy; the solvers enter as callables.
+Everything here is NumPy; the solvers enter as callables, and their reports
+as :class:`~hrlmpc.mpc_command.SearchReport`.
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ from numpy.typing import ArrayLike, NDArray
 
 from hrlmpc.action_map import square_to_disk
 from hrlmpc.env import ACTION_TOL
+from hrlmpc.mpc_command import EXITS, SearchReport
 
 FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
@@ -62,9 +64,10 @@ REACHED_MARGIN = 0.1
 SupportFn = Callable[[FloatArray], FloatArray]
 """``(4,)`` state to ``(n, 2)`` support points in the fixed directions, a NaN row where a solve failed."""
 
-ProjectFn = Callable[[FloatArray, FloatArray], tuple[FloatArray | None, int]]
+ProjectFn = Callable[[FloatArray, FloatArray], tuple[FloatArray | None, SearchReport]]
 """``(4,)`` state and ``(2,)`` point to the reachable target nearest to it, or ``None`` if no plan was found, and
-the solver failures the search survived or ended with."""
+the report of the search: the solver failures it survived or ended with, how it ended and how its exact solves
+went (D47)."""
 
 REACH_KEYS = (
     "support_ms",
@@ -75,11 +78,16 @@ REACH_KEYS = (
     "hull_fallback",
     "projection_failed",
     "projection_errors",
+    "projection_exit",
+    "projection_exact_inaccurate",
+    "projection_exact_infeasible",
+    "projection_exact_uncertified",
 )
 """Statistics of every decision: the solve times [ms]; the hull's area [m^2]; the distance [m] by which the
 projection moved the point of the hull; the directions whose solve failed; whether the hull was degenerate,
-so that the point was the support points' mean or the position; whether the projection found no plan; and the
-solver failures during the projection."""
+so that the point was the support points' mean or the position; whether the projection found no plan; the
+solver failures during the projection; how its search ended, a code of :data:`~hrlmpc.mpc_command.EXITS`; its
+exact solves that were inaccurate or infeasible; and its exact plans not certified within the MIP gap (D47)."""
 
 
 def support_directions(count: int) -> FloatArray:
@@ -262,7 +270,7 @@ class ReachableTargets:
             started = time.perf_counter()
             q, area, failures, fallback = self.point(x[i], state)
             between = time.perf_counter()
-            projected, errors = self.project(state, q)
+            projected, report = self.project(state, q)
             ended = time.perf_counter()
             failed = projected is None
             targets[i] = q if projected is None else np.asarray(projected, dtype=np.float64).reshape(2)
@@ -274,7 +282,11 @@ class ReachableTargets:
                 "support_failures": float(failures),
                 "hull_fallback": float(fallback),
                 "projection_failed": float(failed),
-                "projection_errors": float(errors),
+                "projection_errors": float(report.errors),
+                "projection_exit": float(report.exit),
+                "projection_exact_inaccurate": float(report.exact_inaccurate),
+                "projection_exact_infeasible": float(report.exact_infeasible),
+                "projection_exact_uncertified": float(report.exact_uncertified),
             }
             for key in REACH_KEYS:
                 self._stats[key].append(row[key])
@@ -318,7 +330,12 @@ def reach_metrics(stats: dict[str, FloatArray], prefix: str, mask: ArrayLike | N
     the point of the hull (mean, largest, and the fraction of decisions moved by
     more than :data:`MOVED`, i.e. by an obstacle or the arena), and the counts
     of failed support directions, degenerate hulls, failed projections and
-    solver failures during the projections.
+    solver failures during the projections; per exit of
+    :data:`~hrlmpc.mpc_command.EXITS`, the projections whose search ended
+    there, ``projection_exit_<name>_count``; the projections' exact solves
+    without a plan, ``projection_exact_inaccurate_count`` and
+    ``projection_exact_infeasible_count``; and their exact plans not certified
+    within the MIP gap, ``projection_exact_uncertified_count`` (D47).
 
     Args:
         stats: Arrays ``(decisions,)``.
@@ -330,7 +347,7 @@ def reach_metrics(stats: dict[str, FloatArray], prefix: str, mask: ArrayLike | N
     if not keep.any():
         return {}
     moved = stats["projection"][keep]
-    return {
+    result = {
         f"{prefix}/support_ms_mean": float(stats["support_ms"][keep].mean()),
         f"{prefix}/project_ms_mean": float(stats["project_ms"][keep].mean()),
         f"{prefix}/hull_area_mean": float(stats["hull_area"][keep].mean()),
@@ -343,3 +360,9 @@ def reach_metrics(stats: dict[str, FloatArray], prefix: str, mask: ArrayLike | N
         f"{prefix}/projection_error_count": float(stats["projection_errors"][keep].sum()),
         f"{prefix}/decisions": float(keep.sum()),
     }
+    exits = stats["projection_exit"][keep]
+    for code, name in enumerate(EXITS):
+        result[f"{prefix}/projection_exit_{name}_count"] = float(np.sum(exits == code))
+    for key in ("projection_exact_inaccurate", "projection_exact_infeasible", "projection_exact_uncertified"):
+        result[f"{prefix}/{key}_count"] = float(stats[key][keep].sum())
+    return result

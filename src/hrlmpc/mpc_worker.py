@@ -3,7 +3,8 @@
 :mod:`hrlmpc.mpc_problem` defines the problem; this module solves it, at every
 step and for every agent, with the scheme of the pre-alignment Worker
 (``algorithms/tube_mpc.py``, D34). The cost depends on the steps left in the
-segment (D37), so it is set at every step:
+segment (D37) and, with a tube, on the measured state (the regularizer of
+D46), so it is set at every step; both solvers minimise the same cost:
 
 - Gurobi solves a relaxation, a mixed-integer QP: the speed and thrust disks
   replaced by the regular polygon of :data:`BASE_SIDES` sides circumscribed
@@ -46,7 +47,20 @@ depends on the last step's disturbance, and it is checked (to
 A solver failure (an exception of Clarabel or Gurobi, or an unusable result
 of the gauge oracle) ends the step's search as if nothing was found and is
 counted in ``solver_errors``; Gurobi's licence errors propagate, since every
-step would repeat them.
+step would repeat them. A failure of Clarabel on the exact problem within the
+rounds of cuts is survived: the round goes on with the relaxation's plan.
+
+Each search reports how it ended (D47, the exits of
+:data:`~hrlmpc.mpc_command.EXITS`): with every binary fixed, a plan
+(``FIXED``) or none (``UNSOLVED``); otherwise the exact plan within the gap
+(``CONVERGED``), the relaxation's own plan (``RELAXATION``), the rounds
+exhausted (``ROUNDS``) or a relaxation without a solution (``EMPTY``); and
+``ERROR`` when a solver failure ended it. It also counts the exact solves that
+gave no plan, inaccurate (an inaccurate optimum, or Clarabel's iteration limit:
+a plan may exist) or infeasible (certified or almost: the binaries admit no
+plan), and the exact plans that the relaxation's bound did not certify within
+the gap: feasible plans, lost if the rounds then run out. ``cut_rounds`` counts
+the mixed-integer solves the search started, whether or not it found a plan.
 
 Every solve depends only on its inputs and on the slot's earlier solves in the
 same episode (the shifted plan, and the cuts of ``Z`` it keeps): Gurobi runs
@@ -79,7 +93,21 @@ import numpy as np
 from gurobipy import GRB
 from numpy.typing import ArrayLike, NDArray
 
-from hrlmpc.mpc_command import CANDIDATE, EMERGENCY, KEPT, SOLVER, WorkerStep
+from hrlmpc.mpc_command import (
+    CANDIDATE,
+    CONVERGED,
+    EMERGENCY,
+    EMPTY,
+    ERROR,
+    FIXED,
+    KEPT,
+    RELAXATION,
+    ROUNDS,
+    SOLVER,
+    UNSOLVED,
+    SearchReport,
+    WorkerStep,
+)
 from hrlmpc.mpc_problem import Binaries, Bounds, MPCProblem
 from hrlmpc.reachability import ReachableTargets, support_directions
 
@@ -169,7 +197,8 @@ class _ExactProblem:
     Built once with the measured state, the target, the waypoint's stage and the
     binaries as parameters, so that one compiled problem serves every step: the
     stage enters as a one-hot selector of the plan's positions, the effort as a
-    0/1 mask of the inputs before it.
+    0/1 mask of the inputs before it. With a tube and ``eps > 0`` the cost has
+    the regularizer ``eps ||z_0 - x||^2`` of D46.
     """
 
     def __init__(self, problem: MPCProblem) -> None:
@@ -191,41 +220,57 @@ class _ExactProblem:
         settings = problem.settings
         objective = settings.target_weight * cp.sum_squares(self.select @ z[:, :2] - self.target)
         objective = objective + settings.effort_weight * cp.sum_squares(cp.multiply(self.mask, v))
+        if problem.regularized:  # D46
+            objective = objective + settings.start_weight * cp.sum_squares(z[0] - self.x)
         self.prob = cp.Problem(cp.Minimize(objective), cons)
+        self.last_status: str | None = None
+        """cvxpy's status of the last solve; ``None`` before the first or after a failure."""
 
-    def __call__(
-        self, x: FloatArray, target: FloatArray, steps_left: int, deltas: Binaries
-    ) -> tuple[FloatArray, FloatArray, float] | None:
-        """``(z, v, J)`` of the exact optimum for these binaries, or ``None``.
-
-        ``None`` when the binaries leave the exact problem infeasible, or
-        Clarabel reaches only an inaccurate solution: a plan whose constraints
-        are not met to the solver's tolerance has no place in a robust plan,
-        and the step falls back on the relaxation's cuts or on the shifted plan.
+    def assign(self, x: FloatArray, target: FloatArray, steps_left: int, deltas: Binaries) -> int:
+        """Set the parameters for a solve; returns the waypoint's stage ``k*``.
 
         Raises:
-            SolverFailure: If Clarabel fails (cvxpy's ``SolverError``).
+            ValueError: If ``steps_left`` does not lie in ``1, ..., N``.
         """
         N = self.problem.N
         k = self.problem.waypoint_stage(steps_left)
         select, mask = np.zeros(N + 1), np.zeros((N, 2))
         select[k] = 1.0
         mask[:k] = 1.0
-        self.x.value = np.asarray(x, dtype=np.float64)
+        self.x.value = np.asarray(x, dtype=np.float64).reshape(4)
         self.target.value = np.asarray(target, dtype=np.float64).reshape(2)
         self.select.value, self.mask.value = select, mask
         for parameter, value in zip(self.deltas, deltas, strict=True):
             parameter.value = value
+        return k
+
+    def __call__(
+        self, x: FloatArray, target: FloatArray, steps_left: int, deltas: Binaries
+    ) -> tuple[FloatArray, FloatArray, float] | None:
+        """``(z, v, J)`` of the exact optimum for these binaries, or ``None``; the status in :attr:`last_status`.
+
+        ``None`` when the binaries leave the exact problem infeasible, or
+        Clarabel reaches only an inaccurate solution or its iteration limit: a
+        plan whose constraints are not met to the solver's tolerance has no
+        place in a robust plan, and the step falls back on the relaxation's
+        cuts or on the shifted plan.
+
+        Raises:
+            SolverFailure: If Clarabel fails (cvxpy's ``SolverError``).
+        """
+        k = self.assign(x, target, steps_left, deltas)
+        self.last_status = None
         try:
             with warnings.catch_warnings():  # inaccurate solves are handled below
                 warnings.simplefilter("ignore")
                 self.prob.solve(solver=cp.CLARABEL)
         except cp.SolverError as error:
             raise SolverFailure(f"Clarabel failed on the exact problem: {error}") from error
+        self.last_status = self.prob.status
         if self.prob.status != "optimal" or self.z.value is None or self.v.value is None:
             return None
         z, v = np.array(self.z.value), np.array(self.v.value)
-        return z, v, self.problem.cost(z, v, target, k)
+        return z, v, self.problem.cost(z, v, target, k, x=x)
 
 
 class ReachSupport:
@@ -368,6 +413,10 @@ class MPCWorker:
         self.problem = problem
         self.num_slots = int(num_slots)
         self._errors = 0
+        self._exit = CONVERGED
+        self._inaccurate = 0
+        self._infeasible = 0
+        self._uncertified = 0
         self._z_dirs = z_directions()
         self._z_h = problem.tube.support(self._z_dirs)
         self._gauge = None if problem.tube.is_zero else _GaugeOracle(problem)
@@ -456,14 +505,37 @@ class MPCWorker:
             self._env = None
 
     # ---------------------------------------------------------------- helpers
-    def _set_objective(self, slot: _Slot, target: FloatArray, steps_left: int) -> None:
+    def _begin_search(self) -> None:
+        """Clear the report of the search that starts (D47)."""
+        self._errors = 0
+        self._exit = CONVERGED
+        self._inaccurate = 0
+        self._infeasible = 0
+        self._uncertified = 0
+
+    def _report(self) -> SearchReport:
+        """The report of the last search (D47)."""
+        return SearchReport(
+            errors=self._errors,
+            exit=self._exit,
+            exact_inaccurate=self._inaccurate,
+            exact_infeasible=self._infeasible,
+            exact_uncertified=self._uncertified,
+        )
+
+    def _set_objective(self, slot: _Slot, target: FloatArray, steps_left: int, x: FloatArray) -> None:
         """The cost of D37 for the target and the waypoint's stage ``k* = steps_left``, expanded:
-        ``q_g (z' z - 2 g' z + g' g) + r_e sum_{k<k*} v_k' v_k`` with ``z`` the waypoint's position."""
+        ``q_g (z' z - 2 g' z + g' g) + r_e sum_{k<k*} v_k' v_k`` with ``z`` the waypoint's position, plus, when
+        the problem is regularized (D46), ``eps (z_0' z_0 - 2 x' z_0 + x' x)``: the cost of the exact problem."""
         settings = self.problem.settings
         waypoint = slot.z[steps_left, :2]
         distance = waypoint @ waypoint - 2.0 * (target @ waypoint) + float(target @ target)
         effort = sum(slot.v[k] @ slot.v[k] for k in range(steps_left))
-        slot.m.setObjective(settings.target_weight * distance + settings.effort_weight * effort, GRB.MINIMIZE)
+        objective = settings.target_weight * distance + settings.effort_weight * effort
+        if self.problem.regularized:
+            start = slot.z[0]
+            objective = objective + settings.start_weight * (start @ start - 2.0 * (x @ start) + float(x @ x))
+        slot.m.setObjective(objective, GRB.MINIMIZE)
 
     def _tube_ratio(self, slot: _Slot, x: FloatArray) -> float:
         tube = self.problem.tube
@@ -490,12 +562,28 @@ class MPCWorker:
         """Solve the slot's relaxation (Gurobi)."""
         slot.m.optimize()
 
+    def _exact_solve(
+        self, x: FloatArray, target: FloatArray, steps_left: int, deltas: Binaries
+    ) -> tuple[FloatArray, FloatArray, float] | None:
+        """The exact problem for these binaries; a solve without a plan is counted by its status (D47).
+
+        Raises:
+            SolverFailure: If Clarabel fails.
+        """
+        exact = self._exact(x, target, steps_left, deltas)
+        if exact is None:
+            if self._exact.last_status in ("infeasible", "infeasible_inaccurate"):
+                self._infeasible += 1
+            else:  # an inaccurate optimum, or the iteration limit
+                self._inaccurate += 1
+        return exact
+
     def _exact_plan(
         self, x: FloatArray, target: FloatArray, steps_left: int, deltas: Binaries
     ) -> tuple[FloatArray, FloatArray, float] | None:
-        """The exact problem for these binaries; a Clarabel failure counts as no plan, and as an error."""
+        """The exact problem within the rounds of cuts; a Clarabel failure counts as no plan, and as an error."""
         try:
-            return self._exact(x, target, steps_left, deltas)
+            return self._exact_solve(x, target, steps_left, deltas)
         except SolverFailure:
             self._errors += 1
             return None
@@ -503,27 +591,32 @@ class MPCWorker:
     def _optimize(
         self, slot: _Slot, x: FloatArray, target: FloatArray, steps_left: int, bounds: Bounds
     ) -> Plan | None:
-        """The optimal plan, or ``None`` if there is none, the cuts did not converge or a solver failed.
+        """The optimal plan, or ``None`` if there is none, the cuts did not converge or a solver failed; the exit
+        of the search is recorded (D47).
 
         Raises:
             gurobipy.GurobiError: Gurobi's licence errors (:data:`LICENCE_ERRORS`).
         """
         try:
             if all(np.array_equal(lb, ub) for lb, ub in bounds):
-                exact = self._exact_plan(x, target, steps_left, [lb for lb, _ in bounds])
+                exact = self._exact_solve(x, target, steps_left, [lb for lb, _ in bounds])
+                self._exit = UNSOLVED if exact is None else FIXED
                 return None if exact is None else exact[:2]
             return self._cut_loop(slot, x, target, steps_left)
         except SolverFailure:
             self._errors += 1
+            self._exit = ERROR
             return None
         except gp.GurobiError as error:
             if getattr(error, "errno", None) in LICENCE_ERRORS:
                 raise
             self._errors += 1
+            self._exit = ERROR
             return None
 
     def _cut_loop(self, slot: _Slot, x: FloatArray, target: FloatArray, steps_left: int) -> Plan | None:
-        """Relaxation, exact problem and cuts, until the exact plan is optimal to the gap (module docstring)."""
+        """Relaxation, exact problem and cuts, until the exact plan is optimal to the gap (module docstring); the
+        exit is recorded, except a failure's, which :meth:`_optimize` records."""
         m = slot.m
         cuts: list[Any] = []
         gap = self.problem.settings.mip_gap
@@ -544,15 +637,19 @@ class MPCWorker:
                 cuts.append(m.addConstr(-(slot.z[0] @ y) <= 1.0 - y @ x))
         try:
             for rnd in range(MAX_CUT_ROUNDS):
+                slot.cut_rounds = rnd + 1  # the mixed-integer solves started, whatever the search's end
                 self._relax(slot)
                 if m.SolCount == 0:
+                    self._exit = EMPTY
                     return None
                 deltas = self._one_face_each(slot)
                 bound = m.ObjBound
                 exact = self._exact_plan(x, target, steps_left, deltas)
                 if exact is not None and exact[2] <= bound + gap * abs(exact[2]) + 1e-9:
-                    slot.cut_rounds = rnd + 1
+                    self._exit = CONVERGED
                     return exact[0], exact[1]
+                if exact is not None:  # feasible, but not certified within the gap
+                    self._uncertified += 1
                 added = len(cuts)
                 plans: list[tuple[FloatArray, FloatArray, float]] = [(slot.z.X, slot.v.X, CUT_TOL)]
                 if exact is not None:
@@ -569,8 +666,9 @@ class MPCWorker:
                         if gamma > 1.0 + slack:
                             z_cut(y)
                 if len(cuts) == added:  # the relaxation's plan already satisfies the exact sets
-                    slot.cut_rounds = rnd + 1
+                    self._exit = RELAXATION
                     return slot.z.X.copy(), slot.v.X.copy()
+            self._exit = ROUNDS
             return None
         finally:
             if cuts:
@@ -607,7 +705,7 @@ class MPCWorker:
     ) -> tuple[Plan | None, int, int]:
         """Algorithm 3's choice: ``(plan, outcome, invalid_candidate)`` (module docstring)."""
         if solution is not None:
-            cost = self.problem.cost(solution[0], solution[1], target, steps_left)
+            cost = self.problem.cost(solution[0], solution[1], target, steps_left, x=x)
             if candidate is None or cost <= candidate_cost + ACCEPT_TOL * (1.0 + abs(candidate_cost)):
                 return solution, SOLVER, 0
             if self._shift_is_feasible(x, candidate[0][0]):
@@ -643,10 +741,10 @@ class MPCWorker:
         k = pr.waypoint_stage(steps_left)
         s = self._slots[slot]
         started = time.perf_counter()
-        self._errors = 0
+        self._begin_search()
         tube_ratio = self._tube_ratio(s, x)
         candidate = None if s.plan is None else pr.candidate(*s.plan)
-        candidate_cost = np.inf if candidate is None else pr.cost(candidate[0], candidate[1], g, k)
+        candidate_cost = np.inf if candidate is None else pr.cost(candidate[0], candidate[1], g, k, x=x)
         bounds = self._prepare(s, x, g, k, candidate)
         free = pr.free_binaries(bounds)
         solution = self._optimize(s, x, g, k, bounds)
@@ -658,7 +756,8 @@ class MPCWorker:
         else:
             u = pr.input(x, plan[0], plan[1])
             s.plan = (plan[0], plan[1])
-            cost = pr.cost(plan[0], plan[1], g, k)
+            cost = pr.cost(plan[0], plan[1], g, k, x=x)
+        report = self._report()
         info = WorkerStep(
             outcome=outcome,
             solve_ms=1e3 * (time.perf_counter() - started),
@@ -668,16 +767,21 @@ class MPCWorker:
             cut_rounds=s.cut_rounds,
             plan=None if plan is None else plan[0],
             invalid_candidate=invalid,
-            solver_errors=self._errors,
+            solver_errors=report.errors,
+            exit=report.exit,
+            exact_inaccurate=report.exact_inaccurate,
+            exact_infeasible=report.exact_infeasible,
+            exact_uncertified=report.exact_uncertified,
         )
         return u, info
 
     def project(
         self, x: ArrayLike, target: ArrayLike, steps_left: int, slot: int = 0
-    ) -> tuple[FloatArray | None, int]:
+    ) -> tuple[FloatArray | None, SearchReport]:
         """The position at stage ``steps_left`` of the plan for ``target`` from the state ``x``, solved as by a
-        fresh Worker: the reachable point nearest to ``target`` up to the trade-off with the effort (D37, D39), or
-        ``None`` if the solvers find no plan; and the solver failures during the search.
+        fresh Worker: the reachable point nearest to ``target`` up to the trade-off with the effort and, with a
+        tube, the regularizer (D37, D39, D46), or ``None`` if the solvers find no plan; and the report of the
+        search (D47).
 
         The slot is reset before and after, so a projection neither uses nor
         leaves a plan or cuts; it is meant for a Worker of its own, whose slots
@@ -693,13 +797,13 @@ class MPCWorker:
         k = pr.waypoint_stage(steps_left)
         s = self._slots[slot]
         self.reset(slot)
-        self._errors = 0
+        self._begin_search()
         try:
             bounds = self._prepare(s, state, g, k, None)
             solution = self._optimize(s, state, g, k, bounds)
         finally:
             self.reset(slot)
-        return (None if solution is None else np.array(solution[0][k, :2])), self._errors
+        return (None if solution is None else np.array(solution[0][k, :2])), self._report()
 
     def _prepare(self, s: _Slot, x: FloatArray, target: FloatArray, steps_left: int, candidate: Plan | None) -> Bounds:
         """Set the slot's model for a solve from ``x``: the state, the objective, the binaries' bounds, and the MIP
@@ -709,7 +813,7 @@ class MPCWorker:
             s.init.RHS = x
         else:
             s.z_base.RHS = self._z_h - self._z_dirs @ x
-        self._set_objective(s, target, steps_left)
+        self._set_objective(s, target, steps_left, x)
         bounds = pr.fixed_binaries(x)
         for d, (lb, ub) in zip(s.deltas, bounds, strict=True):
             d.LB = lb
@@ -745,7 +849,7 @@ def reachable_targets(problem: MPCProblem, segment_steps: int, directions: int) 
     support = ReachSupport(problem, segment_steps, support_directions(directions))
     projector = MPCWorker(problem, 1)
 
-    def project(x: FloatArray, q: FloatArray) -> tuple[FloatArray | None, int]:
+    def project(x: FloatArray, q: FloatArray) -> tuple[FloatArray | None, SearchReport]:
         return projector.project(x, q, segment_steps)
 
     radius = problem.params.v_max * segment_steps * problem.dt

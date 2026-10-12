@@ -1,12 +1,12 @@
-"""The MPC Worker's interface to the common loop, and its statistics, without solvers (decision log D34, D37).
+"""The MPC Worker's interface to the common loop, and its statistics, without solvers (decision log D34, D37, D47).
 
 :class:`MPCCommand` turns any :class:`StepActor` -- the solver-based
 :class:`hrlmpc.mpc_worker.MPCWorker`, or a stand-in in tests -- into the
 :class:`~hrlmpc.hierarchy.CommandWorker` of the common loop, and records each
 step's outcome, solve time, free binaries, tube ratio, cut rounds, shifted
-plan outside its tube and solver failures. The summaries of
-:func:`mpc_metrics` are logged in training and evaluation (row AR3e of
-``ALIGNMENT.md``).
+plan outside its tube, solver failures, how the search for a plan ended and
+how its exact solves went (D47). The summaries of :func:`mpc_metrics` are
+logged in training and evaluation (row AR3e of ``ALIGNMENT.md``).
 """
 
 from __future__ import annotations
@@ -28,6 +28,43 @@ SOLVER, CANDIDATE, EMERGENCY, KEPT = 0, 1, 2, 3
 """Outcomes of a step: the solvers' plan; the shifted previous plan because the solvers found none;
 no plan at all (a brake); the shifted previous plan because it was cheaper than the solvers' plan."""
 
+CONVERGED, RELAXATION, FIXED, ROUNDS, EMPTY, UNSOLVED, ERROR = range(7)
+"""How the search for a plan ended (D47). With some binaries free (module docstring of
+:mod:`hrlmpc.mpc_worker`): the exact plan within the MIP gap of the relaxation's bound; the relaxation's own
+plan, because a round added no cut; the rounds exhausted; the relaxation without a solution. With every
+binary fixed, Clarabel alone: a plan; no plan (infeasible or inaccurate). In both: a solver failure ended the
+search."""
+
+EXITS = ("converged", "relaxation", "fixed", "rounds", "empty", "unsolved", "error")
+"""The names of the exits, by code: ``EXITS[ROUNDS] == "rounds"``."""
+
+FOUND = (CONVERGED, RELAXATION, FIXED)
+"""The exits of a search that found a plan."""
+
+
+@dataclass(frozen=True)
+class SearchReport:
+    """How one search for a plan went (D47): a step of the Worker, or a projection of D39.
+
+    Attributes:
+        errors: Solver failures caught during the search, whether it survived them or ended with them; for a
+            step of the Worker, also those of the check of the shifted plan, which follows the search.
+        exit: How it ended: :data:`CONVERGED`, :data:`RELAXATION`, :data:`FIXED`, :data:`ROUNDS`,
+            :data:`EMPTY`, :data:`UNSOLVED` or :data:`ERROR`.
+        exact_inaccurate: Exact solves (Clarabel, binaries fixed) that stopped short of the solver's accuracy
+            without finding the binaries infeasible (an inaccurate optimum, or the iteration limit): no plan,
+            though one may exist.
+        exact_infeasible: Exact solves that found the binaries infeasible, certified or almost: no plan.
+        exact_uncertified: Exact plans that the relaxation's bound did not certify within the MIP gap: feasible
+            plans that the search went on from, and lost if it then ended without a plan (:data:`ROUNDS`).
+    """
+
+    errors: int = 0
+    exit: int = CONVERGED
+    exact_inaccurate: int = 0
+    exact_infeasible: int = 0
+    exact_uncertified: int = 0
+
 
 @dataclass(frozen=True)
 class WorkerStep:
@@ -41,7 +78,8 @@ class WorkerStep:
             last plan's prediction; at most 1 while the disturbance stays in
             ``D`` (a necessary condition for ``e`` in ``Z``). NaN without a plan or a tube.
         cost: The plan's cost, NaN in an emergency.
-        cut_rounds: Mixed-integer solves the step took; 0 when Clarabel solved alone.
+        cut_rounds: Mixed-integer solves the step started, whether or not its search found a plan (D47);
+            0 when Clarabel solved alone.
         plan: The nominal states of the applied plan, or ``None`` in an emergency.
         invalid_candidate: 1 if the shifted plan would have been applied
             (cheaper than the solvers' plan, or the only plan) but the state had
@@ -49,6 +87,10 @@ class WorkerStep:
             benchmark, and applied only as the last resort; 0 otherwise.
         solver_errors: Solver failures caught during the step (exceptions, or
             results the step could not use).
+        exit: How the search for a plan ended (:class:`SearchReport`, D47).
+        exact_inaccurate: Exact solves that stopped short of Clarabel's accuracy, not infeasible.
+        exact_infeasible: Exact solves that found their binaries infeasible.
+        exact_uncertified: Exact plans not certified within the MIP gap.
     """
 
     outcome: int
@@ -60,6 +102,10 @@ class WorkerStep:
     plan: FloatArray | None
     invalid_candidate: int = 0
     solver_errors: int = 0
+    exit: int = CONVERGED
+    exact_inaccurate: int = 0
+    exact_infeasible: int = 0
+    exact_uncertified: int = 0
 
 
 class StepActor(Protocol):
@@ -80,7 +126,19 @@ class StepActor(Protocol):
         ...
 
 
-STAT_KEYS = ("outcome", "solve_ms", "free_binaries", "tube_ratio", "cut_rounds", "invalid_candidate", "solver_errors")
+STAT_KEYS = (
+    "outcome",
+    "solve_ms",
+    "free_binaries",
+    "tube_ratio",
+    "cut_rounds",
+    "invalid_candidate",
+    "solver_errors",
+    "exit",
+    "exact_inaccurate",
+    "exact_infeasible",
+    "exact_uncertified",
+)
 
 
 class MPCCommand:
@@ -147,8 +205,12 @@ def mpc_metrics(stats: dict[str, FloatArray], prefix: str, mask: BoolArray | Non
     shifted plan because it was cheaper. Counts: ``emergency_count`` (brakes),
     ``invalid_candidate_count`` (shifted plans that would have been applied
     with the state outside their tube, i.e. after disturbances outside ``D``)
-    and ``solver_error_count``. ``tube_ratio_max`` is logged only when some step
-    had a tube ratio, so never for a Worker designed for ``d_bar = 0``.
+    and ``solver_error_count``; per exit of :data:`EXITS`, the steps whose
+    search ended there, ``exit_<name>_count``; the exact solves without a plan,
+    ``exact_inaccurate_count`` and ``exact_infeasible_count``; and the exact
+    plans not certified within the MIP gap, ``exact_uncertified_count`` (D47).
+    ``tube_ratio_max`` is logged only when some step had a tube ratio, so
+    never for a Worker designed for ``d_bar = 0``.
 
     Args:
         stats: Arrays ``(steps, agents)``.
@@ -174,6 +236,11 @@ def mpc_metrics(stats: dict[str, FloatArray], prefix: str, mask: BoolArray | Non
         f"{prefix}/cut_rounds_mean": float(stats["cut_rounds"][keep].mean()),
         f"{prefix}/steps": float(keep.sum()),
     }
+    exits = stats["exit"][keep]
+    for code, name in enumerate(EXITS):
+        result[f"{prefix}/exit_{name}_count"] = float(np.sum(exits == code))
+    for key in ("exact_inaccurate", "exact_infeasible", "exact_uncertified"):
+        result[f"{prefix}/{key}_count"] = float(np.sum(stats[key][keep]))
     if np.any(~np.isnan(ratio)):
         result[f"{prefix}/tube_ratio_max"] = float(np.nanmax(ratio))
     return result

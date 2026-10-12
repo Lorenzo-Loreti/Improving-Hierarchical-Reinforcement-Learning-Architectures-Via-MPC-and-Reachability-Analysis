@@ -1,4 +1,5 @@
-"""Tests of the tube-MPC Worker with its solvers (decision log D31-D35, D37); they need cvxpy, Clarabel and Gurobi.
+"""Tests of the tube-MPC Worker with its solvers (decision log D31-D35, D37-D39, D45-D47); they need cvxpy, Clarabel
+and Gurobi.
 
 The closed loops run on the environment's own physics (:func:`hrlmpc.physics.physics_step`),
 with scripted targets in place of a Manager, one per segment of ``H = 10``
@@ -7,8 +8,10 @@ checked where they matter: the real state never touches a wall, the error to
 the plan stays in the tube (by its gauge), the input never needs the
 saturation, the shifted plan stays feasible, the plans are optimal, a
 reachable target is passed when the segment ends and an unreachable one is
-projected onto the reachable set. Gurobi's pip licence is size-limited: a
-test whose model exceeds it is skipped with that reason.
+projected onto the reachable set. Every search reports how it ended (D47),
+consistently with its outcome; the solvers minimise the problem's cost, the
+regularizer of D46 included. Gurobi's pip licence is size-limited: a test
+whose model exceeds it is skipped with that reason.
 
 The tolerances follow the solvers': a plan from Clarabel meets its constraints
 to about 1e-8, the relaxation's own plan (module docstring of
@@ -34,7 +37,21 @@ pytest.importorskip("clarabel")
 from hrlmpc.config import EnvConfig, load_env_config  # noqa: E402
 from hrlmpc.env import ObservationMap  # noqa: E402
 from hrlmpc.geometry import Layout  # noqa: E402
-from hrlmpc.mpc_command import CANDIDATE, EMERGENCY, KEPT, SOLVER, MPCCommand  # noqa: E402
+from hrlmpc.mpc_command import (  # noqa: E402
+    CANDIDATE,
+    CONVERGED,
+    EMERGENCY,
+    EMPTY,
+    ERROR,
+    FIXED,
+    FOUND,
+    KEPT,
+    RELAXATION,
+    ROUNDS,
+    SOLVER,
+    UNSOLVED,
+    MPCCommand,
+)
 from hrlmpc.mpc_problem import MPCProblem, MPCSettings  # noqa: E402
 from hrlmpc.mpc_worker import MPCWorker, ReachSupport, _GaugeOracle, reachable_targets  # noqa: E402
 from hrlmpc.physics import physics_step  # noqa: E402
@@ -60,14 +77,12 @@ def _licence() -> Iterator[None]:
 
 
 def _setup(name: str, d_bar: float = 0.0, **settings: Any) -> tuple[EnvConfig, Layout, MPCProblem]:
-    """The problem of a layout; by default with the horizon training would use, ``H`` plus the steps to stop
-    (15 at ``d_bar = 0``, 16 at 0.5, 17 at 1.0; D37)."""
+    """The problem of a layout; by default with the horizon training uses, the automatic one of D45 (``H`` plus
+    the steps to stop: 15 at ``d_bar = 0``, 16 at 0.5, 17 at 1.0), and the regularizer of D46."""
     cfg = load_env_config(f"configs/env/{name}.yaml")
     cfg = dataclasses.replace(cfg, physics=dataclasses.replace(cfg.physics, d_bar=d_bar))
     layout = Layout.from_config(cfg.geometry)
-    if "horizon" not in settings:
-        settings["horizon"] = H + MPCProblem(cfg.physics, layout, MPCSettings()).stopping_steps()
-    return cfg, layout, MPCProblem(cfg.physics, layout, MPCSettings(**settings))
+    return cfg, layout, MPCProblem(cfg.physics, layout, MPCSettings(**settings), segment_steps=H)
 
 
 WAYPOINTS = np.array([[3.5, 1.0], [5.5, 1.0], [6.5, -1.0], [8.5, -1.0], [10.6, -1.0]])
@@ -110,7 +125,8 @@ def _run(
     """A closed loop with a target set every ``H`` steps; returns the trajectory and every check.
 
     Per step: what the Worker reported (outcome, tube ratio, free binaries,
-    cut rounds, invalid shifted plans, solver errors, cost); the violations of the
+    cut rounds, invalid shifted plans, solver errors, cost, the search's exit and
+    its exact solves without a plan); the violations of the
     applied plan; the norm of the input before its projection onto
     ``U``, at most ``a_max`` by D33 so that the saturation never acts; contact
     and the speed limiter in the physics; and, with a tube, the gauge of the
@@ -119,8 +135,8 @@ def _run(
     worker = MPCWorker(problem) if worker is None else worker
     p, v = np.array(start, dtype=np.float64), np.zeros(2)
     target = targets(p)
-    names = ("outcome", "ratio", "free", "rounds", "invalid", "errors", "cost", "violations", "thrust", "contact",
-             "limited", "gauge")
+    names = ("outcome", "ratio", "free", "rounds", "invalid", "errors", "cost", "exit", "inaccurate", "infeasible",
+             "uncertified", "violations", "thrust", "contact", "limited", "gauge")
     log: dict[str, Any] = {name: [] for name in names}
     log.update(p=[p.copy()], success=False)
     with _licence():
@@ -131,7 +147,9 @@ def _run(
             u, info = worker.act(x, target, H - k % H)
             for name, value in (("outcome", info.outcome), ("ratio", info.tube_ratio), ("free", info.free_binaries),
                                 ("rounds", info.cut_rounds), ("invalid", info.invalid_candidate),
-                                ("errors", info.solver_errors), ("cost", info.cost)):
+                                ("errors", info.solver_errors), ("cost", info.cost), ("exit", info.exit),
+                                ("inaccurate", info.exact_inaccurate), ("infeasible", info.exact_infeasible),
+                                ("uncertified", info.exact_uncertified)):
                 log[name].append(value)
             plan = worker._slots[0].plan  # the applied plan; None after a brake
             if plan is not None:
@@ -157,8 +175,26 @@ def _worst(log: dict[str, Any]) -> dict[str, float]:
     return {key: max(v[key] for v in log["violations"]) for key in log["violations"][0]}
 
 
+def _consistent(log: dict[str, Any]) -> None:
+    """D47: every step's exit agrees with its free binaries, its outcome, its solver failures, its rounds and its
+    exact solves."""
+    for free, end, outcome, errors, rounds, exact in zip(
+        log["free"], log["exit"], log["outcome"], log["errors"], log["rounds"],
+        zip(log["inaccurate"], log["infeasible"], log["uncertified"], strict=True), strict=True
+    ):
+        assert end in ((FIXED, UNSOLVED, ERROR) if free == 0 else (CONVERGED, RELAXATION, ROUNDS, EMPTY, ERROR))
+        assert (end in FOUND) == (outcome in (SOLVER, KEPT))  # a plan from the solvers, applied or benchmarked
+        assert end != ERROR or errors > 0
+        assert (rounds == 0) == (free == 0)  # Gurobi solves exactly when some binary is free
+        if free == 0:  # one exact solve, certified by none: a plan, or a status
+            assert exact[2] == 0 and sum(exact) == (0 if end == FIXED else int(end == UNSOLVED))
+        else:  # at most one exact solve per round
+            assert sum(exact) <= rounds
+
+
 def _nominal(log: dict[str, Any], problem: MPCProblem) -> None:
     """What every closed loop with its disturbances in ``D`` must show."""
+    _consistent(log)
     assert not any(log["contact"])  # the wall reaction never acted, and no state lay on a face
     assert EMERGENCY not in log["outcome"]
     assert sum(log["errors"]) == 0 and sum(log["invalid"]) == 0
@@ -173,6 +209,8 @@ def test_the_tunnel_is_convex_and_reaches_the_goal() -> None:
     assert log["success"]
     assert set(log["outcome"]) == {SOLVER}
     assert max(log["free"]) == 0 and max(log["rounds"]) == 0  # no binaries: Clarabel alone
+    assert set(log["exit"]) == {FIXED} and sum(log["inaccurate"]) == sum(log["infeasible"]) == 0  # D47
+    assert sum(log["uncertified"]) == 0
     _nominal(log, problem)
     assert max(_worst(log).values()) <= 1e-6  # Clarabel's plans alone
     assert len(log["outcome"]) == 78  # the bound of F7 from (1, 0): the waypoint Worker drives at full speed (D37)
@@ -184,6 +222,7 @@ def test_a_manager_that_aims_at_the_openings_threads_the_slalom() -> None:
     assert log["success"]
     _nominal(log, problem)
     assert max(log["free"]) > 0  # the gates' binaries were live
+    assert {CONVERGED, RELAXATION} & set(log["exit"])  # and Gurobi's searches found plans (D47)
     costs = np.array(log["cost"])
     for start in range(0, len(costs) - 1, H):  # D37: without disturbance the cost does not grow within a segment
         segment = costs[start : start + H]
@@ -357,6 +396,8 @@ def _exhaustive_cost(problem: MPCProblem, x: np.ndarray, target: np.ndarray, ste
                 cons += [z[k, :2] @ n >= b, z[k + 1, :2] @ n >= b]
         cost = weights.target_weight * cp.sum_squares(z[steps_left, :2] - target)  # D37
         cost = cost + weights.effort_weight * cp.sum_squares(v[:steps_left])
+        if problem.regularized:  # D46
+            cost = cost + weights.start_weight * cp.sum_squares(z[0] - x)
         prob = cp.Problem(cp.Minimize(cost), cons)
         prob.solve(solver=cp.CLARABEL)
         if prob.status == "optimal":
@@ -442,7 +483,66 @@ def test_a_state_that_cannot_avoid_a_wall_brakes_as_an_emergency() -> None:
         u, info = MPCWorker(problem).act(x, [6.0, -1.0], H)
     assert info.outcome == EMERGENCY and info.plan is None and np.isnan(info.cost)
     assert info.solver_errors == 0  # infeasible is no failure
+    # D47: O1's binaries are free, and the first relaxation is already infeasible, so no exact solve follows
+    assert info.free_binaries > 0 and info.exit == EMPTY and info.cut_rounds == 1
+    assert info.exact_inaccurate == info.exact_infeasible == info.exact_uncertified == 0
     np.testing.assert_allclose(u, problem.emergency_input(x))
+
+
+def test_a_state_that_cannot_avoid_the_tunnels_wall_has_no_plan() -> None:
+    """D47: without binaries Clarabel alone finds the problem infeasible (certified or almost): no plan, no
+    failure, one infeasible exact solve. 5 cm below the upper wall at full speed upward, the next position lies
+    3.9 cm past it at least (``0.114 m`` of drift against ``0.025 m`` of full thrust)."""
+    _, _, problem = _setup("tunnel")
+    x = np.array([5.0, 1.95, 0.0, 1.2])
+    with _licence():
+        u, info = MPCWorker(problem).act(x, [6.0, 1.0], H)
+    assert info.outcome == EMERGENCY and info.free_binaries == 0 and info.cut_rounds == 0
+    assert info.exit == UNSOLVED and info.exact_infeasible == 1 and info.exact_inaccurate == 0
+    assert info.solver_errors == 0
+    np.testing.assert_allclose(u, problem.emergency_input(x))
+
+
+class _Status:
+    """Stands in for a cvxpy problem whose solve ends with a given status and without a plan."""
+
+    def __init__(self, status: str) -> None:
+        self.status = status
+
+    def solve(self, **kwargs: Any) -> None:
+        pass
+
+
+@pytest.mark.parametrize(
+    ("status", "inaccurate"),
+    [("optimal_inaccurate", 1), ("user_limit", 1), ("infeasible", 0), ("infeasible_inaccurate", 0)],
+)
+def test_an_exact_solve_without_a_plan_is_counted_by_its_status(status: str, inaccurate: int,
+                                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    """D47: an exact solve that ends with an inaccurate optimum or at Clarabel's iteration limit (cvxpy's
+    ``user_limit``), where a plan may exist, counts as inaccurate; one that finds the binaries infeasible,
+    certified or almost, as infeasible; neither is a solver failure."""
+    _, _, problem = _setup("tunnel")
+    worker = MPCWorker(problem)
+    monkeypatch.setattr(worker._exact, "prob", _Status(status))
+    with _licence():
+        _, info = worker.act(np.array([1.0, 0.0, 0.3, 0.0]), [2.8, 0.0], H)
+    assert info.outcome == EMERGENCY and info.exit == UNSOLVED and info.solver_errors == 0
+    assert (info.exact_inaccurate, info.exact_infeasible, info.exact_uncertified) == (inaccurate, 1 - inaccurate, 0)
+    worker.close()
+
+
+def test_a_search_out_of_rounds_ends_as_such(monkeypatch: pytest.MonkeyPatch) -> None:
+    """D47: with no round of cuts allowed, a search with free binaries ends with its rounds exhausted, before
+    any mixed-integer solve."""
+    import hrlmpc.mpc_worker as module
+
+    _, _, problem = _setup("slalom", d_bar=0.5, horizon=5)
+    monkeypatch.setattr(module, "MAX_CUT_ROUNDS", 0)
+    with _licence():
+        _, info = MPCWorker(problem).act(NEAR_THE_GATE, [5.4, 1.2], 5)
+    assert info.free_binaries > 0 and info.outcome == EMERGENCY  # a fresh Worker: no shifted plan
+    assert info.exit == ROUNDS and info.cut_rounds == 0 and info.solver_errors == 0
 
 
 def test_the_shifted_plan_takes_over_when_the_solvers_find_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -483,7 +583,7 @@ def test_a_feasible_shifted_plan_cheaper_than_the_solvers_plan_is_kept(d_bar: fl
     x_next = plan[0][1] + (np.array([0.0, 0.0, 0.0, 1e-3]) if d_bar > 0.0 else 0.0)
     u, info = worker.act(x_next, target, H - 1)
     assert info.outcome == KEPT and info.invalid_candidate == 0 and info.solver_errors == 0
-    assert info.cost == pytest.approx(problem.cost(*shifted, target, H - 1))
+    assert info.cost == pytest.approx(problem.cost(*shifted, target, H - 1, x=x_next))  # with a tube, D46's term
     np.testing.assert_allclose(u, problem.input(x_next, *shifted))
 
 
@@ -533,10 +633,12 @@ def test_a_gurobi_failure_is_counted_and_the_shifted_plan_takes_over(monkeypatch
         fresh = MPCWorker(problem)
         monkeypatch.setattr(fresh, "_relax", _no_solution)
         _, alone = fresh.act(NEAR_THE_GATE, target, 5)
-    assert first.outcome == SOLVER and first.solver_errors == 0
+    assert first.outcome == SOLVER and first.solver_errors == 0 and first.exit in (CONVERGED, RELAXATION)
     assert info.free_binaries > 0 and info.outcome == CANDIDATE
     assert info.solver_errors == 1 and info.invalid_candidate == 0
+    assert info.exit == ERROR and info.cut_rounds == 1  # D47: the failure ended the search in its first round
     assert alone.outcome == EMERGENCY and alone.solver_errors == 1  # no shifted plan in a fresh episode
+    assert alone.exit == ERROR and alone.cut_rounds == 1
 
 
 def test_gurobis_licence_errors_propagate(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -562,6 +664,8 @@ def test_a_clarabel_failure_is_counted_and_brakes_without_a_shifted_plan(monkeyp
     with _licence():
         u, info = worker.act(x, [2.8, 0.0], H)
     assert info.outcome == EMERGENCY and info.solver_errors == 1
+    assert info.exit == ERROR and info.exact_inaccurate == info.exact_infeasible == 0  # D47: a failure, no status
+    assert info.exact_uncertified == 0
     np.testing.assert_allclose(u, problem.emergency_input(x))
 
 
@@ -613,11 +717,97 @@ def test_the_conic_problems_are_compiled_once() -> None:
     """Every parameter enters affinely (DPP), so cvxpy compiles the exact problem and the gauge oracle once,
     when the Worker is built, and only updates their data at each step."""
     _, _, problem = _setup("slalom", d_bar=0.5)
+    assert problem.regularized  # the regularizer of D46 is affine in the parameters too
     with _licence():
         worker = MPCWorker(problem)
     assert worker._exact.prob.is_dpp() and worker._gauge is not None and worker._gauge.prob.is_dpp()
     assert ReachSupport(problem, H, support_directions(4)).prob.is_dpp()
     worker.close()
+
+
+def _relaxation_objective(worker: MPCWorker, z: np.ndarray, v: np.ndarray) -> float:
+    """The objective that Gurobi minimises in slot 0, evaluated at the plan ``(z, v)``."""
+    slot = worker._slots[0]
+    slot.m.update()
+    values = np.zeros(slot.m.NumVars)
+    for variables, plan in ((slot.z, z), (slot.v, v)):
+        flat = [var for row in variables.tolist() for var in row]  # row by row, as ravel orders the plan
+        for var, value in zip(flat, plan.ravel(), strict=True):
+            values[var.index] = value
+    objective = slot.m.getObjective()
+    linear = objective.getLinExpr()
+    total = linear.getConstant() + sum(linear.getCoeff(i) * values[linear.getVar(i).index]
+                                       for i in range(linear.size()))
+    return float(total + sum(objective.getCoeff(i) * values[objective.getVar1(i).index]
+                             * values[objective.getVar2(i).index] for i in range(objective.size())))
+
+
+@pytest.mark.parametrize("d_bar", [0.0, 0.5])
+def test_both_solvers_minimise_the_cost_of_the_problem(d_bar: float) -> None:
+    """D37, D46: at any plan, the objective of Gurobi's relaxation and that of Clarabel's exact problem equal the
+    problem's cost, the regularizer included with a tube. So the relaxation's bound bounds the exact optimum, and
+    the costs of the solvers' plan and of the shifted plan compare."""
+    _, _, problem = _setup("slalom", d_bar=d_bar)
+    assert problem.regularized == (d_bar > 0.0)
+    rng = np.random.default_rng(4)
+    ones = [np.ones((problem.N, obstacle.num_faces)) for obstacle in problem.obstacles]
+    with _licence():
+        worker = MPCWorker(problem)
+        for k in (1, 4, H):
+            z, v = rng.normal(size=(problem.N + 1, 4)), rng.normal(size=(problem.N, 2))
+            x, g = rng.normal(size=4), rng.normal(size=2)  # x far from z_0: the regularizer weighs
+            expected = problem.cost(z, v, g, k, x=x)
+            worker._set_objective(worker._slots[0], g, k, x)
+            assert _relaxation_objective(worker, z, v) == pytest.approx(expected, rel=1e-9)
+            worker._exact.assign(x, g, k, ones)
+            worker._exact.z.value, worker._exact.v.value = z, v
+            assert float(worker._exact.prob.objective.value) == pytest.approx(expected, rel=1e-9)
+        worker.close()
+
+
+def test_the_regularizer_keeps_the_nominal_start_nearer_the_state() -> None:
+    """D46: among the plans that are optimal without it, the regularizer takes one whose nominal start is no
+    farther from the state than any of them, at an extra cost of D37 of at most ``eps`` times that distance
+    squared. On the tunnel, Clarabel alone, with reachable targets, so that the costs are small and the solvers'
+    tolerances do not blur the distances.
+
+    A strong regularizer must pull the start to the state, which the solvers do only if they minimise it:
+    ``eps d^2 <= J(x) - J(z_0) <= J_c``, with ``J_c`` the cost of D37 of the plan that coasts from ``z_0 = x``
+    to the waypoint and brakes afterwards (feasible: below ``v_bar``, at rest by ``N``). In the third case the
+    coasting plan misses the target by 5.9 cm, which the tube absorbs (the reachable shifts of the waypoint form
+    a disk of 7.1 cm): without the regularizer the optimum costs nothing and starts at least 5.5 cm from ``x``,
+    with ``eps = 1e6`` within ``sqrt(J_c / eps) = 5.9 mm``."""
+    _, _, problem = _setup("tunnel", d_bar=0.5)
+    _, _, plain = _setup("tunnel", d_bar=0.5, start_weight=0.0)
+    _, _, strong = _setup("tunnel", d_bar=0.5, start_weight=1e6)
+    assert problem.regularized and not plain.regularized
+    eps = problem.settings.start_weight
+    cases = (([1.0, 0.0, 0.0, 0.0], [1.5, 0.2], H), ([2.0, 0.5, 0.8, -0.3], [2.5, 0.4], 6),
+             ([3.0, -1.0, 1.0, 0.4], [3.35, -0.8], 4))
+    distances = []
+    with _licence():
+        for x_list, target, left in cases:
+            x = np.array(x_list)
+            regularized, unregularized = MPCWorker(problem), MPCWorker(plain)
+            _, info_r = regularized.act(x, target, left)
+            _, info_u = unregularized.act(x, target, left)
+            assert info_r.outcome == info_u.outcome == SOLVER and info_r.exit == info_u.exit == FIXED
+            (z_r, v_r), (z_u, _) = regularized._slots[0].plan, unregularized._slots[0].plan
+            d_r, d_u = np.linalg.norm(x - z_r[0]), np.linalg.norm(x - z_u[0])
+            distances.append(d_u)
+            # eps d_r^2 <= eps d_u^2 + (the unregularized plan's excess over the optimum, 1e-6 at most)
+            assert d_r**2 <= d_u**2 + 1e-6 / eps
+            optimum = info_u.cost  # D37's optimum, without the regularizer
+            assert optimum - 1e-6 <= plain.cost(z_r, v_r, target, left) <= optimum + eps * d_u**2 + 1e-6
+            assert info_r.cost == pytest.approx(plain.cost(z_r, v_r, target, left) + eps * d_r**2, rel=1e-9)
+        x, target, left = np.array(cases[2][0]), np.array(cases[2][1]), cases[2][2]
+        coast = np.linalg.matrix_power(problem.A, left) @ x
+        bound = float(np.sqrt(problem.settings.target_weight * np.sum((coast[:2] - target) ** 2) / 1e6))
+        pulled = MPCWorker(strong)
+        _, info_s = pulled.act(x, target, left)
+        z_s = pulled._slots[0].plan[0]
+    assert bound == pytest.approx(5.9e-3, abs=1e-4) and distances[2] >= 0.05
+    assert info_s.outcome == SOLVER and np.linalg.norm(x - z_s[0]) <= bound + 1e-6
 
 
 def test_slots_do_not_share_plans() -> None:
@@ -690,10 +880,12 @@ def test_the_forward_support_point_at_full_speed_is_a_segment_at_full_speed() ->
 
 def _effort_bound(problem: MPCProblem) -> float:
     """How far the Worker's plan may end from a reachable target (D37): the plan that reaches it costs at most its
-    effort, ``r_e H u_bar^2``, and the plan's cost exceeds ``q_g`` times the squared miss; 2.5 cm here. At the
-    edge of the set the miss is a few millimetres, inside it a fraction of one."""
-    s = problem.settings
-    return float(np.sqrt(s.effort_weight * H * problem.u_bar**2 / s.target_weight))
+    effort, ``r_e H u_bar^2``, plus with a tube the regularizer of D46, at most ``eps (r_p^2 + r_v^2)`` since
+    ``x - z_0`` lies in ``Z``; and the plan's cost exceeds ``q_g`` times the squared miss. 2.5 cm without a tube,
+    1.8 cm at ``d_bar = 0.5``. At the edge of the set the miss is a few millimetres, inside it a fraction of one."""
+    s, tube = problem.settings, problem.tube
+    start = s.start_weight * (tube.position_radius**2 + tube.speed_radius**2) if problem.regularized else 0.0
+    return float(np.sqrt((s.effort_weight * H * problem.u_bar**2 + start) / s.target_weight))
 
 
 def test_every_support_point_is_a_target_the_worker_reaches() -> None:
@@ -706,8 +898,8 @@ def test_every_support_point_is_a_target_the_worker_reaches() -> None:
     with _licence():
         worker = MPCWorker(problem)
         for point in support(x):
-            reached, errors = worker.project(x, point, H)
-            assert reached is not None and errors == 0
+            reached, report = worker.project(x, point, H)
+            assert reached is not None and report.errors == 0 and report.exit == FIXED  # D47: no binaries
             assert np.linalg.norm(reached - point) <= _effort_bound(problem)
 
 
@@ -737,8 +929,8 @@ def test_a_target_inside_an_obstacle_is_projected_next_to_its_face() -> None:
     face = 4.0 - problem.margin
     with _licence():
         worker = MPCWorker(problem)
-        g, errors = worker.project(x, q, H)
-        assert g is not None and errors == 0
+        g, report = worker.project(x, q, H)
+        assert g is not None and report.errors == 0 and report.exit in FOUND
         assert face - 2e-2 <= g[0] <= face + 1e-6 and abs(g[1] + 1.0) <= 1e-2
         again, _ = worker.project(x, g, H)
     assert again is not None and np.linalg.norm(again - g) <= _effort_bound(problem)  # reachable
@@ -767,3 +959,4 @@ def test_the_reachable_targets_are_reachable_and_contact_free(d_bar: float) -> N
         targets.close()
     assert stats["projection_failed"].sum() == 0 and stats["support_failures"].sum() == 0
     assert stats["hull_fallback"].sum() == 0 and np.all(stats["hull_area"] > 0.5)
+    assert np.all(np.isin(stats["projection_exit"], FOUND))  # D47: every projection found its plan
