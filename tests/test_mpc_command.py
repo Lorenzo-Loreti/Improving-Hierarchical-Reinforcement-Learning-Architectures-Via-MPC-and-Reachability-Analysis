@@ -1,4 +1,4 @@
-"""Tests of the MPC Worker's adapter to the common loop and of its statistics, without solvers (decision log D34)."""
+"""Tests of the MPC Worker's adapter to the common loop and of its statistics, without solvers (D34, D37)."""
 
 from __future__ import annotations
 
@@ -29,11 +29,14 @@ class Recorder:
     def __init__(self, num_slots: int) -> None:
         self.num_slots = num_slots
         self.calls: list[tuple[np.ndarray, np.ndarray, int]] = []
+        self.steps_left: list[int] = []
         self.resets: list[int | None] = []
 
-    def act(self, x: Any, target: Any, slot: int = 0) -> tuple[np.ndarray, WorkerStep]:
+    def act(self, x: Any, target: Any, steps_left: int, slot: int = 0) -> tuple[np.ndarray, WorkerStep]:
         x, target = np.asarray(x, dtype=np.float64), np.asarray(target, dtype=np.float64)
+        assert type(steps_left) is int  # a plain integer, as the problem's checks expect
         self.calls.append((x, target, slot))
+        self.steps_left.append(steps_left)
         info = WorkerStep(outcome=(SOLVER, CANDIDATE, KEPT, EMERGENCY)[slot % 4], solve_ms=1.0 + slot,
                           free_binaries=2 * slot, tube_ratio=float("nan") if slot == 0 else 0.1 * slot,
                           cost=1.0, cut_rounds=slot, plan=None, invalid_candidate=int(slot == 1),
@@ -54,9 +57,10 @@ def test_the_command_steers_every_agent_with_its_own_slot() -> None:
     p = np.array([[1.0, 0.5], [2.0, -0.5], [3.0, 1.5]])
     v = np.array([[0.1, 0.2], [-0.3, 0.4], [0.5, -0.6]])
     targets = p + 1.0
-    u = command.command(obs_map.observe(p, v), p, targets)
+    u = command.command(obs_map.observe(p, v), p, targets, np.array([10, 3, 1]))
     np.testing.assert_allclose(u, v + targets)
     assert [slot for _, _, slot in worker.calls] == [0, 1, 2]
+    assert worker.steps_left == [10, 3, 1]  # each agent's steps to the end of its segment (D37)
     for (x, target, _), p_i, v_i, g_i in zip(worker.calls, p, v, targets, strict=True):
         np.testing.assert_allclose(x, np.concatenate([p_i, v_i]))  # the velocity read back from the observation
         np.testing.assert_array_equal(target, g_i)
@@ -67,7 +71,7 @@ def test_the_statistics_are_kept_per_step_and_agent_until_popped() -> None:
     command = MPCCommand(worker, obs_map)
     p, v = np.zeros((4, 2)), np.zeros((4, 2))
     for _ in range(3):
-        command.command(obs_map.observe(p, v), p, p)
+        command.command(obs_map.observe(p, v), p, p, np.full(4, 5))
     stats = command.pop_stats()
     assert set(stats) == set(STAT_KEYS)
     assert all(values.shape == (3, 4) for values in stats.values())
@@ -84,7 +88,11 @@ def test_too_many_agents_are_refused() -> None:
     command = MPCCommand(Recorder(2), obs_map)
     p = np.zeros((3, 2))
     with pytest.raises(ValueError, match="slots"):
-        command.command(obs_map.observe(p, p), p, p)
+        command.command(obs_map.observe(p, p), p, p, np.ones(3, dtype=np.int64))
+    two = np.zeros((2, 2))
+    for bad in (np.ones(3, dtype=np.int64), np.array([9.7, 3.0]), np.array([True, False])):
+        with pytest.raises(ValueError, match="steps_left"):  # the shape, and integers only: 9.7 is no stage
+            command.command(obs_map.observe(two, two), two, two, bad)
 
 
 def test_a_reset_reaches_the_slots_of_the_finished_agents_only() -> None:

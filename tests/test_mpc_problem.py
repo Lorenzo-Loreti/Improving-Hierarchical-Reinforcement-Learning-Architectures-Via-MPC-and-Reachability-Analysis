@@ -1,4 +1,4 @@
-"""Tests of the MPC Worker's problem data, without solvers (decision log D31-D34)."""
+"""Tests of the MPC Worker's problem data, without solvers (decision log D31-D34, D37)."""
 
 from __future__ import annotations
 
@@ -21,23 +21,36 @@ def _setup(name: str, d_bar: float = 0.0, **settings: float) -> tuple[EnvConfig,
 
 
 def _random_plan(problem: MPCProblem, x: np.ndarray, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
-    """Positions of a nominal sequence that respects the speed bounds (not the dynamics)."""
+    """Positions of a nominal sequence whose speeds respect the bounds of every plan (not the dynamics):
+    the planned speed, and what still lets the plan rest by stage N."""
     N = problem.N
     z = np.zeros((N + 1, 4))
     angle = rng.uniform(0, 2 * np.pi)
     z[0, :2] = x[:2] + rng.uniform(0, problem.tube.position_radius) * np.array([np.cos(angle), np.sin(angle)])
+    bounds = problem.stage_speed_bounds()
     for k in range(1, N + 1):
-        if k < N:
-            w = rng.normal(size=2)
-            z[k, 2:] = rng.uniform(0, problem.v_bar) * w / np.linalg.norm(w)
+        w = rng.normal(size=2)
+        z[k, 2:] = rng.uniform(0, bounds[k - 1]) * w / np.linalg.norm(w)
         z[k, :2] = z[k - 1, :2] + problem.dt * z[k, 2:]
     return z, np.zeros((N, 2))
 
 
+def _brake(problem: MPCProblem, speed: float, steps: int) -> float:
+    """The speed left after ``steps`` steps of full braking along the velocity, from ``speed``."""
+    beta = 1.0 - problem.params.gamma * problem.dt
+    for _ in range(steps):
+        speed = max(0.0, beta * speed - problem.dt * problem.u_bar)
+    return speed
+
+
 def test_settings_are_validated() -> None:
     MPCSettings()
+    defaults = MPCSettings()
+    assert (defaults.horizon, defaults.target_weight, defaults.effort_weight, defaults.r) == (15, 1e4, 0.1, 0.1)  # D37
     for bad in ({"horizon": 0}, {"horizon": 2.5}, {"horizon": True}, {"q_pos": 0.0}, {"r": -1.0}, {"rho": 0.0},
-                {"tail_tolerance": float("nan")}, {"mip_gap": -1e-4}, {"mip_gap": 1.0}, {"work_limit": 0.0}):
+                {"target_weight": 0.0}, {"target_weight": float("inf")}, {"effort_weight": -0.1},
+                {"effort_weight": 0.0}, {"tail_tolerance": float("nan")}, {"mip_gap": -1e-4}, {"mip_gap": 1.0},
+                {"work_limit": 0.0}):
         with pytest.raises(ValueError):
             MPCSettings(**bad)  # type: ignore[arg-type]
 
@@ -104,6 +117,85 @@ def test_the_margin_covers_what_a_mixed_integer_plan_may_violate_a_face_by() -> 
     assert tunnel.face_slack == mpc_problem.FEAS_TOL  # no obstacle, no binary
 
 
+def test_the_cost_is_the_distance_at_the_waypoint_and_the_effort_before_it() -> None:
+    """D37: q_g ||z_{k*,p} - g||^2 + r_e sum_{k<k*} ||v_k||^2, with k* the steps left in the segment."""
+    _, _, problem = _setup("tunnel", target_weight=100.0, effort_weight=0.5)
+    N = problem.N
+    rng = np.random.default_rng(4)
+    z, v = rng.normal(size=(N + 1, 4)), rng.normal(size=(N, 2))
+    g = np.array([3.0, -1.0])
+    for k in (1, 4, N):
+        expected = 100.0 * np.sum((z[k, :2] - g) ** 2) + 0.5 * np.sum(v[:k] ** 2)
+        assert problem.cost(z, v, g, k) == pytest.approx(expected, rel=1e-12)
+        assert problem.cost(z, v, g, np.int64(k)) == pytest.approx(expected, rel=1e-12)
+    later = z.copy()
+    later[3:, :2] += 5.0  # the stages after the waypoint and the inputs from it on cost nothing
+    tail = v.copy()
+    tail[2:] *= 7.0
+    assert problem.cost(later, tail, g, 2) == pytest.approx(problem.cost(z, v, g, 2), rel=1e-12)
+    for bad in (0, N + 1, -1, 2.0, True):
+        with pytest.raises(ValueError, match="steps_left"):
+            problem.cost(z, v, g, bad)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("d_bar", [0.0, 0.5, 1.0])
+def test_the_speed_bounds_are_exactly_what_still_lets_a_plan_rest(d_bar: float) -> None:
+    """Stage k of every plan: speed at most v_bar, and at most the speed from which full braking rests by N."""
+    _, _, problem = _setup("tunnel", d_bar=d_bar)
+    N, bounds = problem.N, problem.stage_speed_bounds()
+    assert bounds.shape == (N,) and bounds[-1] == 0.0
+    assert np.all(np.diff(bounds) <= 1e-12) and np.all(bounds <= problem.v_bar)
+    capped = int(np.sum(bounds < problem.v_bar))
+    assert capped == problem.stopping_steps()  # only the last n_b stages are capped by the stop
+    for k in range(1, N + 1):
+        n, s = N - k, bounds[k - 1]
+        assert _brake(problem, s, n) <= 1e-9  # full braking from the bound rests by stage N
+        if s < problem.v_bar:  # the bound is exact: from slightly faster no plan rests in time
+            assert _brake(problem, s * (1.0 + 1e-6) + 1e-9, n) > 0.0
+
+
+def _dynamic_plan(problem: MPCProblem, x: np.ndarray, rng: np.random.Generator) -> tuple[np.ndarray, bool]:
+    """A plan that follows the dynamics from a start in the tube: random inputs in the thrust disk, then full
+    braking along the velocity; ``True`` if it meets the speed bound and rests at stage N, as every plan must."""
+    N, beta, dt = problem.N, 1.0 - problem.params.gamma * problem.dt, problem.dt
+    z = np.zeros((N + 1, 4))
+    w = rng.normal(size=4)
+    z[0] = x + rng.uniform() * w / np.linalg.norm(w) * np.array([problem.tube.position_radius] * 2
+                                                                 + [problem.tube.speed_radius] * 2)
+    brake_from = int(rng.integers(0, N))
+    heading = rng.normal(size=2)
+    for k in range(N):
+        speed = float(np.linalg.norm(z[k, 2:]))
+        if k >= brake_from:  # the input that lowers the speed most, without reversing
+            u = -min(problem.u_bar, beta * speed / dt) * z[k, 2:] / max(speed, 1e-300)
+        else:
+            u = problem.u_bar * rng.uniform() * heading / np.linalg.norm(heading)
+        z[k + 1, 2:] = beta * z[k, 2:] + dt * u
+        z[k + 1, :2] = z[k, :2] + dt * z[k + 1, 2:]
+    speeds = np.linalg.norm(z[1:N, 2:], axis=1)
+    return z, bool(np.all(speeds <= problem.v_bar) and np.linalg.norm(z[N, 2:]) <= 1e-12)
+
+
+@pytest.mark.parametrize(
+    ("d_bar", "horizon", "speed"), [(0.0, 3, 0.25), (0.0, 15, 0.95), (0.5, 5, 0.6), (0.5, 16, 0.95), (1.0, 17, 0.9)]
+)
+def test_the_reach_boxes_contain_every_plan_that_follows_the_dynamics(d_bar: float, horizon: int,
+                                                                       speed: float) -> None:
+    """Not circular: the plans obey the dynamics, the thrust disk, the speed bound and the terminal rest, and the
+    boxes built from :meth:`stage_speed_bounds` contain every one of them. The start is slow enough to rest by N."""
+    _, _, problem = _setup("slalom", d_bar=d_bar, horizon=horizon)
+    rng = np.random.default_rng(6)
+    x = np.array([5.5, 0.0, 0.9 * speed / 0.95, 0.3 * speed / 0.95])
+    lo, hi = problem.reach_boxes(x)
+    accepted = 0
+    for _ in range(3000):
+        z, ok = _dynamic_plan(problem, x, rng)
+        if ok:
+            accepted += 1
+            assert np.all(z[:, :2] >= lo - 1e-12) and np.all(z[:, :2] <= hi + 1e-12)
+    assert accepted > 300
+
+
 @pytest.mark.parametrize("d_bar", [0.0, 0.5])
 def test_the_reach_boxes_contain_every_plan(d_bar: float) -> None:
     _, _, problem = _setup("slalom", d_bar=d_bar)
@@ -114,6 +206,11 @@ def test_the_reach_boxes_contain_every_plan(d_bar: float) -> None:
         z, _ = _random_plan(problem, x, rng)
         assert np.all(z[:, :2] >= lo - 1e-12) and np.all(z[:, :2] <= hi + 1e-12)
     assert np.all(np.diff(hi - lo, axis=0) >= -1e-12)  # nested boxes
+    half = 0.5 * (hi - lo)[:, 0]
+    travel = np.concatenate([[0.0], np.cumsum(problem.stage_speed_bounds())])
+    expected = problem.tube.position_radius + problem.dt * travel
+    np.testing.assert_allclose(half, expected, rtol=1e-12)
+    assert half[-1] < problem.tube.position_radius + (problem.N - 1) * problem.dt * problem.v_bar - 0.1  # tighter
     lo_c, hi_c = problem.reach_boxes(np.array([-0.9, 1.9, 0.0, 0.0]))  # near a corner: clipped
     assert np.all(lo_c >= problem.position_low - 1e-12) and np.all(hi_c <= problem.position_high + 1e-12)
 
@@ -239,9 +336,25 @@ def test_the_applied_inputs() -> None:
 
 
 def test_the_summary_and_the_stopping_time() -> None:
-    _, _, problem = _setup("slalom", d_bar=0.5)
+    _, _, problem = _setup("slalom", d_bar=0.5, horizon=16)
     text = problem.summary()
-    assert "planned speed <= 1.083" in text and "4 obstacles, 120 binaries" in text
+    assert "planned speed <= 1.083" in text and "4 obstacles, 192 binaries" in text and "q_g = 10000" in text
     assert problem.stopping_steps() == 6
     _, _, calm = _setup("tunnel")
     assert calm.stopping_steps() == 5
+    _, _, rough = _setup("tunnel", d_bar=1.0, horizon=17)
+    assert rough.stopping_steps() == 7
+
+
+def test_the_horizon_must_leave_room_to_stop_after_a_segment() -> None:
+    """D37: the waypoint lies at stage H at a decision, so N >= H + n_b: 15 at d_bar = 0, 16 at 0.5, 17 at 1.0."""
+    for d_bar, needed in ((0.0, 15), (0.5, 16), (1.0, 17)):
+        _, _, enough = _setup("tunnel", d_bar=d_bar, horizon=needed)
+        enough.check_segments(10)
+        _, _, short = _setup("tunnel", d_bar=d_bar, horizon=needed - 1)
+        with pytest.raises(ValueError, match=f"N >= {needed}"):
+            short.check_segments(10)
+    _, _, problem = _setup("tunnel")
+    problem.check_segments(3)
+    with pytest.raises(ValueError, match="N >= 16"):
+        problem.check_segments(11)

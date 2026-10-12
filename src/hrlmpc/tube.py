@@ -59,9 +59,10 @@ _ROTATION_ANGLES = (0.3, 1.1, 2.5)
 
 @dataclass(frozen=True)
 class Weights:
-    """Stage weights of the MPC cost, ``Q = diag(q_pos, q_pos, q_vel, q_vel)``, ``R = r I2`` (D34).
+    """Weights of the LQR that gives the ancillary gain ``K`` (D31).
 
-    They also give the ancillary gain ``K`` and the terminal cost ``P`` (LQR).
+    ``Q = diag(q_pos, q_pos, q_vel, q_vel)`` and ``R = r I2``. Until D37 they
+    were also the stage weights of the plan's cost, with the LQR's cost as its terminal cost.
 
     Raises:
         ValueError: If a weight is not positive and finite.

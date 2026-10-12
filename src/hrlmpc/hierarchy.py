@@ -12,16 +12,17 @@ horizon is bootstrapped with the value of the state it reached.
 
 Targets (D24). :class:`DiskTargets` maps ``x`` onto the disk of radius ``R``
 around the position at the segment's start, with the bijection of D15. The
-reachable sets of architecture 4 will enter through the same interface,
-:class:`TargetMap` (step 10).
+reachable targets of architecture 4 (D38, :class:`hrlmpc.reachability.ReachableTargets`)
+enter through the same interface, :class:`TargetMap`.
 
 Workers. The Worker is interchangeable. A :class:`LearnedWorker`, the hPPO
 Worker, sees the observation and the target offset ``(g - p) / R`` (D26) and
 returns actions in the square, mapped onto ``U`` by the environment (D15). A
-:class:`CommandWorker`, the MPC Worker of step 9, returns commanded
-accelerations. Every Worker is scored with the reward of D25, for learning
-(hPPO) or as a diagnostic. A learned Worker bootstraps its value at the end of
-every episode: its stream of targets has no terminal state (D25).
+:class:`CommandWorker`, the MPC Worker, returns commanded accelerations; it
+also gets the steps left in each segment, since it plans to pass the target
+when the segment ends (D37). Every Worker is scored with the reward of D25, for
+learning (hPPO) or as a diagnostic. A learned Worker bootstraps its value at
+the end of every episode: its stream of targets has no terminal state (D25).
 
 Rollouts straddle updates. A segment still in flight when a rollout ends goes
 on in the next one (:class:`HierarchyState`), so the Manager never re-plans
@@ -205,17 +206,19 @@ class LearnedWorker:
 
 @dataclass(frozen=True)
 class CommandWorker:
-    """A Worker that commands accelerations, like the MPC Worker (step 9); it does not learn.
+    """A Worker that commands accelerations, like the MPC Worker (D34, D37); it does not learn.
 
     Attributes:
-        command: ``(obs, positions, targets)``, each with one row per agent, to
-            ``(B, 2)`` commanded accelerations.
+        command: ``(obs, positions, targets, steps_left)``, each with one row
+            per agent, to ``(B, 2)`` commanded accelerations. ``steps_left`` is
+            ``H - j`` at step ``j`` of a segment of ``H`` steps: the steps until
+            the segment ends, ``H`` at a decision and 1 at its last step.
         reset: Called with the ``(B,)`` mask of the agents whose episode just
             ended, before they act in their new episode; ``None`` if the
             Worker keeps no state.
     """
 
-    command: Callable[[FloatArray, FloatArray, FloatArray], ArrayLike]
+    command: Callable[[FloatArray, FloatArray, FloatArray, IntArray], ArrayLike]
     reset: Callable[[BoolArray], None] | None = None
 
 
@@ -527,7 +530,8 @@ def collect_hierarchical_rollout(
             log_probs = _checked(log_probs_raw, (batch,), "Worker's log-probabilities")
             out = env.step(actions)
         else:
-            commands = _checked(worker.command(obs, p, targets), (batch, 2), "Worker's accelerations")
+            commanded = worker.command(obs, p, targets, horizon - seg_steps)
+            commands = _checked(commanded, (batch, 2), "Worker's accelerations")
             out = env.step_input(commands)
         done = out.terminated | out.truncated
         reached = obs_map.positions(out.final_obs)
@@ -670,6 +674,12 @@ class HierarchicalController:
         self.worker = worker
         self.inputs = isinstance(worker, CommandWorker)
         """Whether the commands are accelerations (:func:`hrlmpc.evaluation.evaluate`'s ``inputs``)."""
+        self.segment_ends: list[tuple[int, FloatArray]] = []
+        """``(t, d)`` at every decision after the first since :meth:`reset`: the call ``t`` and the ``(B,)``
+        distances [m] of the agents from the targets of the segments that just ended (D40). The agents start
+        together, so an agent's segment ending at ``t`` lies within its first episode if ``t`` is below its length.
+        A segment that ends with the episode is not seen (the next observation is the next episode's), whereas
+        training also counts it, from the final observation."""
         self._agents = 0
         self._calls = 0
         self._targets = np.zeros((0, 2))
@@ -679,6 +689,7 @@ class HierarchicalController:
         self._agents = num_agents
         self._calls = 0
         self._targets = np.zeros((0, 2))
+        self.segment_ends = []
         if isinstance(self.worker, CommandWorker) and self.worker.reset is not None:
             self.worker.reset(np.ones(num_agents, dtype=bool))
 
@@ -689,11 +700,17 @@ class HierarchicalController:
         p = h.obs_map.positions(o)
         if len(o) != self._agents:
             self.reset(len(o))
-        if self._calls % h.segment_steps == 0:
+        step = self._calls % h.segment_steps
+        if step == 0:
+            if self._calls > 0:
+                gap = p - self._targets
+                self.segment_ends.append((self._calls, np.hypot(gap[:, 0], gap[:, 1])))
             actions = _checked(self.manager(o), (len(o), 2), "Manager's actions")
             self._targets = h.targets(actions, p, h.obs_map.velocities(o))
         self._calls += 1
         if isinstance(self.worker, CommandWorker):
-            return _checked(self.worker.command(o, p, self._targets), (len(o), 2), "Worker's accelerations")
+            left = np.full(len(o), h.segment_steps - step, dtype=np.int64)
+            commanded = self.worker.command(o, p, self._targets, left)
+            return _checked(commanded, (len(o), 2), "Worker's accelerations")
         inputs = worker_inputs(o, p, self._targets, h.targets.radius)
         return _checked(self.worker(inputs), (len(o), 2), "Worker's actions")

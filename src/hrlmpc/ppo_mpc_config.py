@@ -1,11 +1,19 @@
-"""Typed configuration of PPO_MPC, loaded from YAML (code rule C2, decision log D24, D27, D28, D34).
+"""Typed configuration of PPO_MPC and PPO_MPC_reachability, loaded from YAML (code rule C2, decision log D24,
+D27, D28, D34, D37, D38).
 
-``configs/agent/ppo_mpc.yaml`` holds the hierarchy (segment length ``H`` and
-the targets' radius), the rollout, the Manager's network and PPO update, the
-MPC Worker's settings, the evaluation protocol and the runtime. The Manager and
-the hierarchy are hPPO's; the Worker is the tube MPC of D31-D34, designed for
-the disturbance of the environment's configuration. Unknown, missing or
-repeated keys are errors. This module does not import PyTorch or the solvers.
+``configs/agent/ppo_mpc.yaml`` (architecture 3) and
+``configs/agent/ppo_mpc_reachability.yaml`` (architecture 4) hold the hierarchy
+(segment length ``H`` and the radius of the targets of D24), the rollout, the
+Manager's network and PPO update, the MPC Worker's settings, the targets of
+architecture 4 (``reachability``: ``null`` for architecture 3, else the number
+of support directions of D38), the evaluation protocol and the runtime. The
+Manager and the hierarchy are hPPO's; the Worker is the tube MPC of D31-D34
+with the waypoint cost of D37, designed for the disturbance of the
+environment's configuration. The two architectures differ only in the
+targets. Unknown, missing or repeated keys are errors. Whether the
+horizon leaves room to stop after a segment depends on the environment's
+physics, so the training checks it (:meth:`hrlmpc.mpc_problem.MPCProblem.check_segments`).
+This module does not import PyTorch or the solvers.
 """
 
 from __future__ import annotations
@@ -23,8 +31,23 @@ from hrlmpc.utils.strict_yaml import load_yaml
 
 
 @dataclass(frozen=True)
+class ReachabilityConfig:
+    """The targets of architecture 4 (D38).
+
+    Attributes:
+        directions: Support directions of the inner approximation of the reachable set, at least 3.
+    """
+
+    directions: int
+
+    def __post_init__(self) -> None:
+        if isinstance(self.directions, bool) or not isinstance(self.directions, int) or self.directions < 3:
+            raise ValueError(f"reachability.directions must be an integer of at least 3, got {self.directions!r}")
+
+
+@dataclass(frozen=True)
 class PPOMPCConfig:
-    """Complete configuration of PPO_MPC.
+    """Complete configuration of PPO_MPC (``reachability`` is ``None``) or PPO_MPC_reachability.
 
     Raises:
         ValueError: If a rollout cannot close a segment per agent, if the
@@ -37,6 +60,7 @@ class PPOMPCConfig:
     rollout: RolloutConfig
     manager: LevelConfig
     mpc: MPCSettings
+    reachability: ReachabilityConfig | None
     evaluation: EvaluationConfig
     runtime: RuntimeConfig
 
@@ -58,6 +82,11 @@ class PPOMPCConfig:
             )
 
     @property
+    def algorithm(self) -> str:
+        """``ppo_mpc_reachability`` with the reachable targets of D38, ``ppo_mpc`` otherwise."""
+        return "ppo_mpc" if self.reachability is None else "ppo_mpc_reachability"
+
+    @property
     def batch_size(self) -> int:
         """Samples per update, ``num_envs * num_steps``."""
         return self.rollout.num_envs * self.rollout.num_steps
@@ -68,8 +97,10 @@ class PPOMPCConfig:
         return self.rollout.num_envs * (self.rollout.num_steps // self.hierarchy.segment_steps)
 
 
-_TOP = ("hierarchy", "rollout", "manager", "mpc", "evaluation", "runtime")
-_MPC = ("horizon", "q_pos", "q_vel", "r", "rho", "tail_tolerance", "mip_gap", "work_limit")
+_TOP = ("hierarchy", "rollout", "manager", "mpc", "reachability", "evaluation", "runtime")
+_MPC = (
+    "horizon", "q_pos", "q_vel", "r", "target_weight", "effort_weight", "rho", "tail_tolerance", "mip_gap", "work_limit"
+)
 
 
 def _number(value: Any, where: str) -> float:
@@ -91,11 +122,20 @@ def _mpc(data: Any) -> MPCSettings:
         q_pos=_number(raw["q_pos"], "mpc.q_pos"),
         q_vel=_number(raw["q_vel"], "mpc.q_vel"),
         r=_number(raw["r"], "mpc.r"),
+        target_weight=_number(raw["target_weight"], "mpc.target_weight"),
+        effort_weight=_number(raw["effort_weight"], "mpc.effort_weight"),
         rho=_number(raw["rho"], "mpc.rho"),
         tail_tolerance=_number(raw["tail_tolerance"], "mpc.tail_tolerance"),
         mip_gap=_number(raw["mip_gap"], "mpc.mip_gap"),
         work_limit=None if limit is None else _number(limit, "mpc.work_limit"),
     )
+
+
+def _reachability(data: Any) -> ReachabilityConfig | None:
+    if data is None:
+        return None
+    raw = check_keys(data, ("directions",), "reachability")
+    return ReachabilityConfig(directions=raw["directions"])
 
 
 def ppo_mpc_config_from_dict(data: Mapping[str, Any]) -> PPOMPCConfig:
@@ -110,6 +150,7 @@ def ppo_mpc_config_from_dict(data: Mapping[str, Any]) -> PPOMPCConfig:
         rollout=RolloutConfig(**parse_section(top["rollout"], "rollout")),
         manager=_level(top["manager"], "manager"),
         mpc=_mpc(top["mpc"]),
+        reachability=_reachability(top["reachability"]),
         evaluation=EvaluationConfig(**parse_section(top["evaluation"], "evaluation")),
         runtime=RuntimeConfig(**parse_section(top["runtime"], "runtime")),
     )

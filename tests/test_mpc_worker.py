@@ -1,12 +1,14 @@
-"""Tests of the tube-MPC Worker with its solvers (decision log D31-D35); they need cvxpy, Clarabel and Gurobi.
+"""Tests of the tube-MPC Worker with its solvers (decision log D31-D35, D37); they need cvxpy, Clarabel and Gurobi.
 
 The closed loops run on the environment's own physics (:func:`hrlmpc.physics.physics_step`),
-with scripted targets in place of a Manager and with chosen disturbances, so
-the claims of D31-D33 are checked where they matter: the real state never
-touches a wall, the error to the plan stays in the tube (by its gauge), the
-input never needs the saturation, the shifted plan stays feasible, and the
-plans are optimal. Gurobi's pip licence is size-limited: a test whose model
-exceeds it is skipped with that reason.
+with scripted targets in place of a Manager, one per segment of ``H = 10``
+steps, and with chosen disturbances, so the claims of D31-D33 and D37 are
+checked where they matter: the real state never touches a wall, the error to
+the plan stays in the tube (by its gauge), the input never needs the
+saturation, the shifted plan stays feasible, the plans are optimal, a
+reachable target is passed when the segment ends and an unreachable one is
+projected onto the reachable set. Gurobi's pip licence is size-limited: a
+test whose model exceeds it is skipped with that reason.
 
 The tolerances follow the solvers': a plan from Clarabel meets its constraints
 to about 1e-8, the relaxation's own plan (module docstring of
@@ -34,12 +36,16 @@ from hrlmpc.env import ObservationMap  # noqa: E402
 from hrlmpc.geometry import Layout  # noqa: E402
 from hrlmpc.mpc_command import CANDIDATE, EMERGENCY, KEPT, SOLVER, MPCCommand  # noqa: E402
 from hrlmpc.mpc_problem import MPCProblem, MPCSettings  # noqa: E402
-from hrlmpc.mpc_worker import MPCWorker, _GaugeOracle  # noqa: E402
+from hrlmpc.mpc_worker import MPCWorker, ReachSupport, _GaugeOracle, reachable_targets  # noqa: E402
 from hrlmpc.physics import physics_step  # noqa: E402
+from hrlmpc.reachability import support_directions  # noqa: E402
 
 GRB = gp.GRB
 TOL = 1e-5
 """Violations and gauge excess accepted in the closed loops (the solvers' tolerances; module docstring)."""
+
+H = 10
+"""Steps per segment, as in the configurations (D27): the scripted targets change every ``H`` steps."""
 
 
 @contextlib.contextmanager
@@ -54,9 +60,13 @@ def _licence() -> Iterator[None]:
 
 
 def _setup(name: str, d_bar: float = 0.0, **settings: Any) -> tuple[EnvConfig, Layout, MPCProblem]:
+    """The problem of a layout; by default with the horizon training would use, ``H`` plus the steps to stop
+    (15 at ``d_bar = 0``, 16 at 0.5, 17 at 1.0; D37)."""
     cfg = load_env_config(f"configs/env/{name}.yaml")
     cfg = dataclasses.replace(cfg, physics=dataclasses.replace(cfg.physics, d_bar=d_bar))
     layout = Layout.from_config(cfg.geometry)
+    if "horizon" not in settings:
+        settings["horizon"] = H + MPCProblem(cfg.physics, layout, MPCSettings()).stopping_steps()
     return cfg, layout, MPCProblem(cfg.physics, layout, MPCSettings(**settings))
 
 
@@ -97,10 +107,10 @@ def _run(
     disturbance: Callable[[np.ndarray, int], np.ndarray] | None = None,
     worker: MPCWorker | None = None,
 ) -> dict[str, Any]:
-    """A closed loop with a target set every 10 steps; returns the trajectory and every check.
+    """A closed loop with a target set every ``H`` steps; returns the trajectory and every check.
 
     Per step: what the Worker reported (outcome, tube ratio, free binaries,
-    cut rounds, invalid shifted plans, solver errors); the violations of the
+    cut rounds, invalid shifted plans, solver errors, cost); the violations of the
     applied plan; the norm of the input before its projection onto
     ``U``, at most ``a_max`` by D33 so that the saturation never acts; contact
     and the speed limiter in the physics; and, with a tube, the gauge of the
@@ -109,19 +119,19 @@ def _run(
     worker = MPCWorker(problem) if worker is None else worker
     p, v = np.array(start, dtype=np.float64), np.zeros(2)
     target = targets(p)
-    names = ("outcome", "ratio", "free", "rounds", "invalid", "errors", "violations", "thrust", "contact", "limited",
-             "gauge")
+    names = ("outcome", "ratio", "free", "rounds", "invalid", "errors", "cost", "violations", "thrust", "contact",
+             "limited", "gauge")
     log: dict[str, Any] = {name: [] for name in names}
     log.update(p=[p.copy()], success=False)
     with _licence():
         for k in range(steps):
-            if k % 10 == 0:
+            if k % H == 0:
                 target = targets(p)
             x = np.concatenate([p, v])
-            u, info = worker.act(x, target)
+            u, info = worker.act(x, target, H - k % H)
             for name, value in (("outcome", info.outcome), ("ratio", info.tube_ratio), ("free", info.free_binaries),
                                 ("rounds", info.cut_rounds), ("invalid", info.invalid_candidate),
-                                ("errors", info.solver_errors)):
+                                ("errors", info.solver_errors), ("cost", info.cost)):
                 log[name].append(value)
             plan = worker._slots[0].plan  # the applied plan; None after a brake
             if plan is not None:
@@ -165,7 +175,7 @@ def test_the_tunnel_is_convex_and_reaches_the_goal() -> None:
     assert max(log["free"]) == 0 and max(log["rounds"]) == 0  # no binaries: Clarabel alone
     _nominal(log, problem)
     assert max(_worst(log).values()) <= 1e-6  # Clarabel's plans alone
-    assert len(log["outcome"]) <= 81  # the bound of F7 from (1, 0) is 78 steps: the gap of D20 is at most 5%
+    assert len(log["outcome"]) == 78  # the bound of F7 from (1, 0): the waypoint Worker drives at full speed (D37)
 
 
 def test_a_manager_that_aims_at_the_openings_threads_the_slalom() -> None:
@@ -174,6 +184,49 @@ def test_a_manager_that_aims_at_the_openings_threads_the_slalom() -> None:
     assert log["success"]
     _nominal(log, problem)
     assert max(log["free"]) > 0  # the gates' binaries were live
+    costs = np.array(log["cost"])
+    for start in range(0, len(costs) - 1, H):  # D37: without disturbance the cost does not grow within a segment
+        segment = costs[start : start + H]
+        assert np.all(np.diff(segment) <= 1e-6 * (1.0 + segment[:-1])), start
+
+
+def _segment(worker: MPCWorker, problem: MPCProblem, cfg: EnvConfig, layout: Layout, x: np.ndarray,
+             target: np.ndarray, rng: np.random.Generator | None = None) -> np.ndarray:
+    """One segment of ``H`` steps toward ``target``, with random disturbances on the edge of ``D`` if ``rng``."""
+    with _licence():
+        for j in range(H):
+            u, info = worker.act(x, target, H - j)
+            assert info.outcome == SOLVER and info.solver_errors == 0
+            w = np.zeros(2) if rng is None else rng.normal(size=2)
+            d = problem.params.d_bar * w / max(float(np.linalg.norm(w)), 1e-12)
+            step = physics_step(x[None, :2], x[None, 2:], u[None], d[None], cfg.physics, layout)
+            assert not (step.contact[0] or step.wall_reaction[0])
+            x = np.concatenate([step.p[0], step.v[0]])
+    return x
+
+
+@pytest.mark.parametrize("d_bar", [0.0, 0.5])
+def test_a_reachable_target_is_passed_when_the_segment_ends(d_bar: float) -> None:
+    """D37: the agent is at the target after H steps, up to the tube, and still moving: a waypoint, not a rest."""
+    cfg, layout, problem = _setup("tunnel", d_bar=d_bar)
+    target = np.array([1.5, 0.2])  # 0.54 m from the start: reachable in 10 steps from rest (0.95 m)
+    rng = None if d_bar == 0.0 else np.random.default_rng(5)
+    x = _segment(MPCWorker(problem), problem, cfg, layout, np.array([1.0, 0.0, 0.0, 0.0]), target, rng)
+    assert np.linalg.norm(x[:2] - target) <= problem.tube.position_radius + 2e-3
+    assert np.linalg.norm(x[2:]) > 0.3  # it passes the target (about 0.69 m/s without disturbance)
+
+
+def test_an_unreachable_target_is_projected_onto_the_reachable_set() -> None:
+    """D37: a target beyond reach leaves the agent at the reachable point nearest to it, here the farthest point
+    straight ahead: full thrust from rest covers the displacement of the bound of F7 in 10 steps."""
+    cfg, layout, problem = _setup("tunnel")
+    x = _segment(MPCWorker(problem), problem, cfg, layout, np.array([1.0, 0.0, 0.0, 0.0]), np.array([4.0, 0.0]))
+    speed, travel = 0.0, 0.0
+    for _ in range(H):
+        speed = min((1.0 - problem.params.gamma * problem.dt) * speed + problem.dt * problem.params.a_max,
+                    problem.params.v_max)
+        travel += problem.dt * speed
+    assert x[0] - 1.0 == pytest.approx(travel, abs=1e-4) and abs(x[1]) <= 1e-6
 
 
 def test_a_target_straight_ahead_leaves_the_worker_in_front_of_the_second_gate() -> None:
@@ -219,9 +272,9 @@ def test_the_shifted_plan_is_feasible_after_every_disturbance_in_d(d_bar: float)
     p, v = np.array([1.0, 0.0]), np.zeros(2)
     free = []
     with _licence():
-        for _ in range(80):  # through the first gate
+        for k in range(80):  # through the first gate
             x = np.concatenate([p, v])
-            u, info = worker.act(x, _through_the_gates(p))
+            u, info = worker.act(x, _through_the_gates(p), H - k % H)
             assert info.outcome != EMERGENCY and info.invalid_candidate == 0 and info.solver_errors == 0
             free.append(info.free_binaries)
             w = rng.normal(size=2)
@@ -272,7 +325,7 @@ def test_a_tube_of_its_tail_alone_is_solved() -> None:
     assert set(log["outcome"]) == {SOLVER} and sum(log["errors"]) == 0 and not any(log["contact"])
 
 
-def _exhaustive_cost(problem: MPCProblem, x: np.ndarray, target: np.ndarray) -> float:
+def _exhaustive_cost(problem: MPCProblem, x: np.ndarray, target: np.ndarray, steps_left: int) -> float:
     """The optimum over every choice of one face per obstacle and segment, each a convex problem (cvxpy, Clarabel)."""
     N, tube = problem.N, problem.tube
     bounds = problem.fixed_binaries(x)
@@ -283,7 +336,7 @@ def _exhaustive_cost(problem: MPCProblem, x: np.ndarray, target: np.ndarray) -> 
                 options.append([int(np.argmax(lb[k]))])
             else:
                 options.append(list(range(obstacle.num_faces)))
-    x_r = problem.rest_state(target)
+    weights = problem.settings
     best = np.inf
     for choice in itertools.product(*options):
         z, v = cp.Variable((N + 1, 4)), cp.Variable((N, 2))
@@ -302,8 +355,8 @@ def _exhaustive_cost(problem: MPCProblem, x: np.ndarray, target: np.ndarray) -> 
                 j = next(it)
                 n, b = obstacle.normals[j], obstacle.bounds[j]
                 cons += [z[k, :2] @ n >= b, z[k + 1, :2] @ n >= b]
-        cost = sum(cp.quad_form(z[k] - x_r, problem.Q) + cp.quad_form(v[k], problem.R) for k in range(N))
-        cost = cost + cp.quad_form(z[N] - x_r, problem.P)
+        cost = weights.target_weight * cp.sum_squares(z[steps_left, :2] - target)  # D37
+        cost = cost + weights.effort_weight * cp.sum_squares(v[:steps_left])
         prob = cp.Problem(cp.Minimize(cost), cons)
         prob.solve(solver=cp.CLARABEL)
         if prob.status == "optimal":
@@ -311,16 +364,25 @@ def _exhaustive_cost(problem: MPCProblem, x: np.ndarray, target: np.ndarray) -> 
     return best
 
 
+OPTIMALITY_STATES = {
+    0.0: (([3.95, 0.3, 0.3, 0.0], [5.4, 1.2], 2), ([6.95, -0.2, 0.3, -0.3], [7.5, -1.2], 3)),
+    0.5: (([3.9, 0.3, 0.3, 0.0], [5.4, 1.2], 2), ([6.85, -0.2, 0.3, -0.3], [7.5, -1.2], 3)),
+}
+"""States slow enough to rest within ``N = 3`` steps and so close to a corner of a gate that the stopping-limited
+reach boxes leave 9 binaries free; certified feasible (with ``z_0 = x`` and inscribed 32-gons) by a mixed-integer
+linear program in SciPy. The waypoint lies before the end of the horizon, then at its end."""
+
+
 @pytest.mark.parametrize("d_bar", [0.0, 0.5])
 def test_the_plan_is_the_optimum_over_every_choice_of_faces(d_bar: float) -> None:
     _, _, problem = _setup("slalom", d_bar=d_bar, horizon=3)
-    # slow enough to come to rest within N = 3 steps, and close enough to a gate for its binaries to be live
-    for x, target in (([3.9, 0.3, 0.3, 0.0], [5.4, 1.2]), ([6.85, -0.2, 0.3, -0.3], [7.5, -1.2])):
+    for x, target, left in OPTIMALITY_STATES[d_bar]:
         x_arr = np.array(x)
+        assert problem.free_binaries(problem.fixed_binaries(x_arr)) > 0
         with _licence():
-            u, info = MPCWorker(problem).act(x_arr, target)
+            u, info = MPCWorker(problem).act(x_arr, target, left)
         assert info.outcome == SOLVER and info.free_binaries > 0 and info.solver_errors == 0
-        best = _exhaustive_cost(problem, x_arr, np.array(target))
+        best = _exhaustive_cost(problem, x_arr, np.array(target), left)
         assert info.cost <= best + 1e-4 * abs(best) + 1e-6
         assert info.cost >= best - 1e-6 * (1.0 + abs(best))
 
@@ -341,7 +403,7 @@ def test_the_plan_does_not_depend_on_the_relaxations_polygon(monkeypatch: pytest
         with _licence():
             worker = MPCWorker(problem)
             for x in states:
-                _, info = worker.act(np.array(x), _through_the_gates(np.array(x[:2])))
+                _, info = worker.act(np.array(x), _through_the_gates(np.array(x[:2])), H)
                 z, v = worker._slots[0].plan
                 worker.reset()
                 assert info.outcome == SOLVER and info.free_binaries > 0 and info.solver_errors == 0
@@ -352,17 +414,24 @@ def test_the_plan_does_not_depend_on_the_relaxations_polygon(monkeypatch: pytest
     np.testing.assert_allclose(costs[64], costs[16], rtol=2e-4)
 
 
+NEAR_THE_GATE = np.array([3.75, 0.45, 1.0, 0.0])
+"""A state at ``d_bar = 0.5`` with ``N = 5`` whose stopping-limited reach boxes leave 12 binaries of the first gate
+free, so that every solve calls Gurobi; certified feasible like :data:`OPTIMALITY_STATES`."""
+
+
 def test_fixing_unreachable_binaries_changes_no_solution(monkeypatch: pytest.MonkeyPatch) -> None:
     _, _, problem = _setup("slalom", d_bar=0.5, horizon=5)
-    states = [([3.6, 0.6, 1.0, 0.0], [5.4, 1.2]), ([1.0, 0.0, 0.0, 0.0], [2.8, 0.0])]
+    states = [(NEAR_THE_GATE, [5.4, 1.2]), (np.array([1.0, 0.0, 0.0, 0.0]), [2.8, 0.0])]
+    assert problem.free_binaries(problem.fixed_binaries(states[0][0])) > 0  # some fixed, some free
+    assert problem.free_binaries(problem.fixed_binaries(states[1][0])) == 0  # every one fixed
     with _licence():
-        fixed = [MPCWorker(problem).act(np.array(x), g)[1].cost for x, g in states]
+        fixed = [MPCWorker(problem).act(np.array(x), g, 3)[1].cost for x, g in states]
 
         def all_free(x: Any) -> list[tuple[np.ndarray, np.ndarray]]:
             return [(np.zeros((problem.N, o.num_faces)), np.ones((problem.N, o.num_faces))) for o in problem.obstacles]
 
         monkeypatch.setattr(problem, "fixed_binaries", all_free)
-        free = [MPCWorker(problem).act(np.array(x), g)[1].cost for x, g in states]
+        free = [MPCWorker(problem).act(np.array(x), g, 3)[1].cost for x, g in states]
     np.testing.assert_allclose(free, fixed, rtol=2e-4)
 
 
@@ -370,7 +439,7 @@ def test_a_state_that_cannot_avoid_a_wall_brakes_as_an_emergency() -> None:
     _, _, problem = _setup("slalom")
     x = np.array([3.95, -1.0, 1.2, 0.0])  # 5 cm from O1 at full speed: no plan stops in time
     with _licence():
-        u, info = MPCWorker(problem).act(x, [6.0, -1.0])
+        u, info = MPCWorker(problem).act(x, [6.0, -1.0], H)
     assert info.outcome == EMERGENCY and info.plan is None and np.isnan(info.cost)
     assert info.solver_errors == 0  # infeasible is no failure
     np.testing.assert_allclose(u, problem.emergency_input(x))
@@ -381,21 +450,22 @@ def test_the_shifted_plan_takes_over_when_the_solvers_find_nothing(monkeypatch: 
     worker = MPCWorker(problem)
     x = np.array([1.0, 0.0, 0.0, 0.0])
     with _licence():
-        worker.act(x, [2.8, 0.0])
+        worker.act(x, [2.8, 0.0], H)
     plan = worker._slots[0].plan
     assert plan is not None
     monkeypatch.setattr(worker, "_optimize", lambda *args: None)
     x_next = plan[0][1]  # exactly where the plan said: no disturbance
-    u, info = worker.act(x_next, [2.8, 0.0])
+    u, info = worker.act(x_next, [2.8, 0.0], H - 1)
     assert info.outcome == CANDIDATE and info.invalid_candidate == 0
     z_c, v_c = problem.candidate(*plan)
     np.testing.assert_allclose(u, problem.input(x_next, z_c, v_c))
 
 
 def _costlier(problem: MPCProblem, worker: MPCWorker, target: list[float]) -> tuple[Any, Any, Any]:
-    """After one step from rest: the plan, its shift and a plan one metre off the target, costlier than the shift."""
+    """After the first step of a segment, from rest: the plan, its shift and a plan one metre off the target,
+    costlier than the shift at the next step."""
     with _licence():
-        worker.act(np.array([1.0, 0.0, 0.0, 0.0]), target)
+        worker.act(np.array([1.0, 0.0, 0.0, 0.0]), target, H)
     plan = worker._slots[0].plan
     assert plan is not None
     z_c, v_c = problem.candidate(*plan)
@@ -411,9 +481,9 @@ def test_a_feasible_shifted_plan_cheaper_than_the_solvers_plan_is_kept(d_bar: fl
     monkeypatch.setattr(worker, "_optimize", lambda *args: costlier)
     # where the plan said, or (with a tube) a small disturbance away, well inside Z (gauge about 0.03)
     x_next = plan[0][1] + (np.array([0.0, 0.0, 0.0, 1e-3]) if d_bar > 0.0 else 0.0)
-    u, info = worker.act(x_next, target)
+    u, info = worker.act(x_next, target, H - 1)
     assert info.outcome == KEPT and info.invalid_candidate == 0 and info.solver_errors == 0
-    assert info.cost == pytest.approx(problem.cost(*shifted, problem.rest_state(target)))
+    assert info.cost == pytest.approx(problem.cost(*shifted, target, H - 1))
     np.testing.assert_allclose(u, problem.input(x_next, *shifted))
 
 
@@ -427,12 +497,12 @@ def test_a_shifted_plan_outside_its_tube_is_only_the_last_resort(d_bar: float,
     plan, shifted, costlier = _costlier(problem, worker, target)
     x_next = plan[0][1] + np.array([0.0, 0.0, 0.0, 0.5])  # pushed sideways at 0.5 m/s: r_v is 0.17 m/s at most
     monkeypatch.setattr(worker, "_optimize", lambda *args: costlier)
-    u, info = worker.act(x_next, target)
+    u, info = worker.act(x_next, target, H - 1)
     assert info.outcome == SOLVER and info.invalid_candidate == 1  # applied, though costlier
     np.testing.assert_allclose(u, problem.input(x_next, *costlier))
     worker._slots[0].plan = plan  # the same step, now without a plan from the solvers
     monkeypatch.setattr(worker, "_optimize", lambda *args: None)
-    u, info = worker.act(x_next, target)
+    u, info = worker.act(x_next, target, H - 1)
     assert info.outcome == CANDIDATE and info.invalid_candidate == 1
     np.testing.assert_allclose(u, problem.input(x_next, *shifted))
 
@@ -456,13 +526,13 @@ def test_a_gurobi_failure_is_counted_and_the_shifted_plan_takes_over(monkeypatch
     _, _, problem = _setup("slalom", d_bar=0.5, horizon=5)
     worker, target = MPCWorker(problem), [5.4, 1.2]
     with _licence():
-        _, first = worker.act(np.array([3.6, 0.6, 1.0, 0.0]), target)
+        _, first = worker.act(NEAR_THE_GATE, target, 5)
         plan = worker._slots[0].plan
         monkeypatch.setattr(worker, "_relax", _no_solution)
-        u, info = worker.act(plan[0][1], target)
+        u, info = worker.act(plan[0][1], target, 4)
         fresh = MPCWorker(problem)
         monkeypatch.setattr(fresh, "_relax", _no_solution)
-        _, alone = fresh.act(np.array([3.6, 0.6, 1.0, 0.0]), target)
+        _, alone = fresh.act(NEAR_THE_GATE, target, 5)
     assert first.outcome == SOLVER and first.solver_errors == 0
     assert info.free_binaries > 0 and info.outcome == CANDIDATE
     assert info.solver_errors == 1 and info.invalid_candidate == 0
@@ -479,8 +549,9 @@ def test_gurobis_licence_errors_propagate(monkeypatch: pytest.MonkeyPatch) -> No
         _no_solution(worker._slots[0])
     monkeypatch.setattr(module, "LICENCE_ERRORS", (failure.value.errno,))  # as if it were a licence error
     monkeypatch.setattr(worker, "_relax", _no_solution)
+    assert problem.free_binaries(problem.fixed_binaries(NEAR_THE_GATE)) > 0  # so Gurobi is called
     with pytest.raises(gp.GurobiError):
-        worker.act(np.array([3.6, 0.6, 1.0, 0.0]), [5.4, 1.2])
+        worker.act(NEAR_THE_GATE, [5.4, 1.2], 5)
 
 
 def test_a_clarabel_failure_is_counted_and_brakes_without_a_shifted_plan(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -489,7 +560,7 @@ def test_a_clarabel_failure_is_counted_and_brakes_without_a_shifted_plan(monkeyp
     monkeypatch.setattr(worker._exact, "prob", _FailingProblem())
     x = np.array([1.0, 0.0, 0.3, 0.0])
     with _licence():
-        u, info = worker.act(x, [2.8, 0.0])
+        u, info = worker.act(x, [2.8, 0.0], H)
     assert info.outcome == EMERGENCY and info.solver_errors == 1
     np.testing.assert_allclose(u, problem.emergency_input(x))
 
@@ -500,21 +571,22 @@ def test_a_failed_check_of_the_shifted_plan_counts_as_infeasible(monkeypatch: py
     plan, _, costlier = _costlier(problem, worker, target)
     monkeypatch.setattr(worker, "_optimize", lambda *args: costlier)
     monkeypatch.setattr(worker._gauge, "prob", _FailingProblem())
-    _, info = worker.act(plan[0][1] + np.array([0.0, 0.0, 0.0, 1e-3]), target)
+    _, info = worker.act(plan[0][1] + np.array([0.0, 0.0, 0.0, 1e-3]), target, H - 1)
     assert info.outcome == SOLVER and info.invalid_candidate == 1 and info.solver_errors == 1
 
 
 def test_the_worker_is_deterministic_and_reset_forgets_the_plan() -> None:
     _, _, problem = _setup("slalom", d_bar=0.5, horizon=5)
-    states = [np.array([3.6, 0.6, 1.0, 0.0]), np.array([3.7, 0.62, 1.0, 0.05])]
+    states = [NEAR_THE_GATE, np.array([3.85, 0.47, 1.0, 0.05])]  # 12 free binaries each: Gurobi's determinism too
+    assert all(problem.free_binaries(problem.fixed_binaries(x)) > 0 for x in states)
     with _licence():
         a, b = MPCWorker(problem), MPCWorker(problem)
-        for x in states:
-            ua, _ = a.act(x, [5.4, 1.2])
-            ub, _ = b.act(x, [5.4, 1.2])
+        for left, x in zip((5, 4), states, strict=True):
+            ua, _ = a.act(x, [5.4, 1.2], left)
+            ub, _ = b.act(x, [5.4, 1.2], left)
             np.testing.assert_array_equal(ua, ub)
         a.reset()
-        _, info = a.act(states[1], [5.4, 1.2])
+        _, info = a.act(states[1], [5.4, 1.2], 4)
     assert np.isnan(info.tube_ratio) and info.outcome == SOLVER  # no previous plan, so no candidate either
 
 
@@ -522,25 +594,37 @@ def test_a_reset_slot_solves_as_a_fresh_worker() -> None:
     """D29, D34: a reset forgets the plan, the cuts of ``Z`` and Gurobi's last solution, so an evaluation does
     not depend on the earlier ones, and a saved Manager evaluated with a new Worker reproduces it."""
     _, _, problem = _setup("slalom", d_bar=0.5, horizon=5)
-    x, target = np.array([3.6, 0.6, 1.0, 0.0]), [5.4, 1.2]
+    x, target = NEAR_THE_GATE, [5.4, 1.2]
     with _licence():
         used = MPCWorker(problem)
-        for state in ([3.6, 0.6, 1.0, 0.0], [3.7, 0.62, 1.0, 0.05], [1.0, 0.0, 0.0, 0.0]):
-            used.act(np.array(state), target)
+        for left, state in zip((5, 4, 3), ([3.75, 0.45, 1.0, 0.0], [3.85, 0.47, 1.0, 0.05], [1.0, 0.0, 0.0, 0.0]),
+                               strict=True):
+            used.act(np.array(state), target, left)
         used.reset(0)
-        u_used, info_used = used.act(x, target)
-        u_fresh, info_fresh = MPCWorker(problem).act(x, target)
+        u_used, info_used = used.act(x, target, 5)
+        u_fresh, info_fresh = MPCWorker(problem).act(x, target, 5)
     assert info_used.free_binaries > 0 and info_used.outcome == info_fresh.outcome == SOLVER
     assert np.isnan(info_used.tube_ratio)
     np.testing.assert_allclose(u_used, u_fresh, rtol=0.0, atol=1e-9)
     assert info_used.cost == pytest.approx(info_fresh.cost, rel=1e-9)
 
 
+def test_the_conic_problems_are_compiled_once() -> None:
+    """Every parameter enters affinely (DPP), so cvxpy compiles the exact problem and the gauge oracle once,
+    when the Worker is built, and only updates their data at each step."""
+    _, _, problem = _setup("slalom", d_bar=0.5)
+    with _licence():
+        worker = MPCWorker(problem)
+    assert worker._exact.prob.is_dpp() and worker._gauge is not None and worker._gauge.prob.is_dpp()
+    assert ReachSupport(problem, H, support_directions(4)).prob.is_dpp()
+    worker.close()
+
+
 def test_slots_do_not_share_plans() -> None:
     _, _, problem = _setup("tunnel")
     with _licence():
         worker = MPCWorker(problem, num_slots=2)
-        worker.act(np.array([1.0, 0.0, 0.0, 0.0]), [2.8, 0.0], slot=0)
+        worker.act(np.array([1.0, 0.0, 0.0, 0.0]), [2.8, 0.0], H, slot=0)
     assert worker._slots[0].plan is not None and worker._slots[1].plan is None
     worker.reset(0)
     assert worker._slots[0].plan is None
@@ -556,10 +640,130 @@ def test_the_command_adapter_steers_every_agent() -> None:
     v = np.zeros((3, 2))
     obs = obs_map.observe(p, v)
     with _licence():
-        u = command.command(obs, p, p + np.array([1.8, 0.0]))
+        u = command.command(obs, p, p + np.array([1.8, 0.0]), np.full(3, H))
     assert u.shape == (3, 2) and np.all(u[:, 0] > 0.0)
     stats = command.pop_stats()
     assert stats["outcome"].shape == (1, 3) and np.all(stats["outcome"] == SOLVER)
     assert command.pop_stats()["outcome"].size == 0
     with pytest.raises(ValueError, match="slots"):
-        command.command(np.vstack([obs, obs]), np.vstack([p, p]), np.vstack([p, p]))
+        command.command(np.vstack([obs, obs]), np.vstack([p, p]), np.vstack([p, p]), np.full(6, H))
+    with pytest.raises(ValueError, match="steps_left"):
+        MPCWorker(problem).act(np.array([1.0, 0.0, 0.0, 0.0]), [2.8, 0.0], problem.N + 1)
+
+
+# --------------------------------------------------------------------------
+# The targets of architecture 4 (D38, D39)
+# --------------------------------------------------------------------------
+
+
+def _f7_travel(problem: MPCProblem, speed: float, steps: int) -> float:
+    """The displacement of full thrust along a line in ``steps`` steps from ``speed`` (the recursion of F7)."""
+    travel = 0.0
+    for _ in range(steps):
+        speed = min((1.0 - problem.params.gamma * problem.dt) * speed + problem.dt * problem.u_bar, problem.v_bar)
+        travel += problem.dt * speed
+    return travel
+
+
+def test_the_support_points_from_rest_lie_on_the_circle_of_f7() -> None:
+    """D38 and F6: away from the walls and at rest, the reachable set is a disk, whose radius is the displacement
+    of full thrust in H steps, and its 16 support points lie on it, in their directions."""
+    _, _, problem = _setup("tunnel")
+    support = ReachSupport(problem, H, support_directions(16))
+    x = np.array([5.0, 0.0, 0.0, 0.0])
+    points = support(x)
+    radius = _f7_travel(problem, 0.0, H)
+    assert radius == pytest.approx(0.95092, abs=1e-5)
+    np.testing.assert_allclose(points - x[:2], radius * support_directions(16), atol=1e-5)
+    assert support.failures == 0
+
+
+def test_the_forward_support_point_at_full_speed_is_a_segment_at_full_speed() -> None:
+    """At the planned speed the set reaches H T_s v_bar ahead, and it is symmetric about the velocity."""
+    _, _, problem = _setup("tunnel")
+    support = ReachSupport(problem, H, support_directions(16))
+    x = np.array([2.0, 0.0, problem.v_bar, 0.0])
+    points = support(x)
+    np.testing.assert_allclose(points[0], [2.0 + H * problem.dt * problem.v_bar, 0.0], atol=1e-5)
+    np.testing.assert_allclose(points[4], points[12] * np.array([1.0, -1.0]), atol=1e-5)  # up and down mirror
+
+
+def _effort_bound(problem: MPCProblem) -> float:
+    """How far the Worker's plan may end from a reachable target (D37): the plan that reaches it costs at most its
+    effort, ``r_e H u_bar^2``, and the plan's cost exceeds ``q_g`` times the squared miss; 2.5 cm here. At the
+    edge of the set the miss is a few millimetres, inside it a fraction of one."""
+    s = problem.settings
+    return float(np.sqrt(s.effort_weight * H * problem.u_bar**2 / s.target_weight))
+
+
+def test_every_support_point_is_a_target_the_worker_reaches() -> None:
+    """The support points and the Worker share one problem, so the projection of a support point is itself, up
+    to the trade-off with the effort (D37)."""
+    _, _, problem = _setup("tunnel")
+    support = ReachSupport(problem, H, support_directions(8))
+    x = np.array([2.0, 0.5, 1.0, 0.3])
+    assert _effort_bound(problem) == pytest.approx(0.025)
+    with _licence():
+        worker = MPCWorker(problem)
+        for point in support(x):
+            reached, errors = worker.project(x, point, H)
+            assert reached is not None and errors == 0
+            assert np.linalg.norm(reached - point) <= _effort_bound(problem)
+
+
+def test_a_projection_solves_as_a_fresh_worker() -> None:
+    """D39: a projection neither uses nor leaves a plan or cuts of Z, near a gate, where Gurobi and the cuts work."""
+    _, _, problem = _setup("slalom", d_bar=0.5)
+    x, q = np.array([3.75, 0.45, 1.0, 0.0]), np.array([5.4, 1.2])
+    assert problem.free_binaries(problem.fixed_binaries(x)) > 0
+    with _licence():
+        used = MPCWorker(problem)
+        used.act(x, q, H)  # leaves a plan, and possibly cuts of Z
+        used.project(np.array([3.4, 1.0, 1.0, 0.0]), np.array([4.6, 0.5]), H)
+        first, _ = used.project(x, q, H)
+        fresh, _ = MPCWorker(problem).project(x, q, H)
+    assert first is not None and fresh is not None
+    np.testing.assert_allclose(first, fresh, rtol=0.0, atol=1e-9)
+    assert used._slots[0].plan is None and used._slots[0].z_seed == []
+
+
+def test_a_target_inside_an_obstacle_is_projected_next_to_its_face() -> None:
+    """D39: in front of O1 = [4, 5] x [-2, 0.25] at 0.8 m/s, a point inside it goes to the nearest reachable point,
+    next to the enlarged left face; the gate above is out of reach within the segment. The point stops a few
+    millimetres short of the face: the plan must rest there by the end of the horizon, and braking within the
+    segment costs effort (D37)."""
+    _, _, problem = _setup("slalom")
+    x, q = np.array([3.0, -1.0, 0.8, 0.0]), np.array([4.5, -1.0])
+    face = 4.0 - problem.margin
+    with _licence():
+        worker = MPCWorker(problem)
+        g, errors = worker.project(x, q, H)
+        assert g is not None and errors == 0
+        assert face - 2e-2 <= g[0] <= face + 1e-6 and abs(g[1] + 1.0) <= 1e-2
+        again, _ = worker.project(x, g, H)
+    assert again is not None and np.linalg.norm(again - g) <= _effort_bound(problem)  # reachable
+
+
+@pytest.mark.parametrize("d_bar", [0.0, 0.5])
+def test_the_reachable_targets_are_reachable_and_contact_free(d_bar: float) -> None:
+    """D38, D39 end to end on the slalom: from states near the gates, the targets of random actions lie outside
+    every enlarged obstacle, and a fresh projection leaves them where they are."""
+    _, _, problem = _setup("slalom", d_bar=d_bar)
+    rng = np.random.default_rng(8)
+    states = np.array([[3.4, 1.0, 1.0, 0.0], [6.4, 0.2, 0.8, -0.7], [1.0, 0.0, 0.0, 0.0]])
+    with _licence():
+        targets = reachable_targets(problem, H, 16)
+        checker = MPCWorker(problem)
+        actions = rng.uniform(-1.0, 1.0, size=(len(states), 2))
+        actions[0] = [1.0, -0.2]  # toward the obstacle below the first gate
+        g = targets(actions, states[:, :2], states[:, 2:])
+        for x, target in zip(states, g, strict=True):
+            for obstacle in problem.obstacles:  # beyond one face, to what a mixed-integer plan may leave
+                assert np.max(obstacle.normals @ target - obstacle.bounds) >= -problem.face_slack - 1e-9
+            again, _ = checker.project(x, target, H)
+            assert again is not None and np.linalg.norm(again - target) <= _effort_bound(problem)
+        stats = targets.pop_stats()
+        targets.close()
+        targets.close()
+    assert stats["projection_failed"].sum() == 0 and stats["support_failures"].sum() == 0
+    assert stats["hull_fallback"].sum() == 0 and np.all(stats["hull_area"] > 0.5)

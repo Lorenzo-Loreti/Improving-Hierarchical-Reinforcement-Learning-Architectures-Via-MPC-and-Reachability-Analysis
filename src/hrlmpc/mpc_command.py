@@ -1,4 +1,4 @@
-"""The MPC Worker's interface to the common loop, and its statistics, without solvers (decision log D34).
+"""The MPC Worker's interface to the common loop, and its statistics, without solvers (decision log D34, D37).
 
 :class:`MPCCommand` turns any :class:`StepActor` -- the solver-based
 :class:`hrlmpc.mpc_worker.MPCWorker`, or a stand-in in tests -- into the
@@ -21,6 +21,7 @@ from hrlmpc.env import ObservationMap
 from hrlmpc.hierarchy import CommandWorker
 
 FloatArray = NDArray[np.float64]
+IntArray = NDArray[np.int64]
 BoolArray = NDArray[np.bool_]
 
 SOLVER, CANDIDATE, EMERGENCY, KEPT = 0, 1, 2, 3
@@ -69,8 +70,9 @@ class StepActor(Protocol):
         """The number of agents it can steer."""
         ...
 
-    def act(self, x: ArrayLike, target: ArrayLike, slot: int = 0) -> tuple[FloatArray, WorkerStep]:
-        """The input at state ``x`` toward rest at ``target``, and the step's report."""
+    def act(self, x: ArrayLike, target: ArrayLike, steps_left: int, slot: int = 0) -> tuple[FloatArray, WorkerStep]:
+        """The input at state ``x`` through ``target`` when the segment ends, ``steps_left`` steps ahead (D37),
+        and the step's report."""
         ...
 
     def reset(self, slot: int | None = None) -> None:
@@ -98,17 +100,23 @@ class MPCCommand:
         self.obs_map = obs_map
         self._stats: dict[str, list[FloatArray]] = {key: [] for key in STAT_KEYS}
 
-    def command(self, obs: FloatArray, positions: FloatArray, targets: FloatArray) -> FloatArray:
-        """The commanded accelerations of every agent, ``(B, 2)``."""
+    def command(
+        self, obs: FloatArray, positions: FloatArray, targets: FloatArray, steps_left: ArrayLike
+    ) -> FloatArray:
+        """The commanded accelerations of every agent, ``(B, 2)``; ``steps_left`` ``(B,)`` counts the steps to the
+        end of each agent's segment, the stage of its waypoint (D37)."""
         velocities = self.obs_map.velocities(obs)
         n = len(positions)
         if n > self.worker.num_slots:
             raise ValueError(f"{n} agents but only {self.worker.num_slots} slots")
+        left = np.asarray(steps_left)
+        if left.shape != (n,) or not np.issubdtype(left.dtype, np.integer):
+            raise ValueError(f"steps_left must be integers of shape ({n},), got {left.dtype} {left.shape}")
         u = np.empty((n, 2))
         row = {key: np.empty(n) for key in STAT_KEYS}
         for i in range(n):
             x = np.concatenate([positions[i], velocities[i]])
-            u[i], info = self.worker.act(x, targets[i], slot=i)
+            u[i], info = self.worker.act(x, targets[i], int(left[i]), slot=i)
             for key in STAT_KEYS:
                 row[key][i] = getattr(info, key)
         for key in STAT_KEYS:
