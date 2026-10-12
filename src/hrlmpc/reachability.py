@@ -1,4 +1,5 @@
-"""Targets of PPO_MPC_reachability: the reachable set and the Manager's action map (decision log D38-D40, D47).
+"""Targets of PPO_MPC_reachability: the reachable set and the Manager's action map (decision log D38-D40, D47,
+D49).
 
 At a decision the Manager's action ``x`` in ``[-1, 1]^2`` sets a target in the
 set ``R_H`` of the positions at stage ``H`` of the plans that the MPC Worker
@@ -21,6 +22,9 @@ sense of the tube, contact-free, and able to stop by the end of the horizon.
    trade-off with the effort (D37: millimetres at the edge of the set), and
    reachable by construction (D39). If no plan is found the target is ``q``,
    and the failure is counted, with how the projection's search ended (D47).
+   A search whose rounds run out returns the point of the cheapest exact plan
+   it found: reachable all the same, though not certified the nearest (R1 of
+   D49).
 
 The Worker of architecture 3 treats an unreachable target in the same way
 (D37), so architectures 3 and 4 differ only in the map of the Manager's
@@ -82,12 +86,15 @@ REACH_KEYS = (
     "projection_exact_inaccurate",
     "projection_exact_infeasible",
     "projection_exact_uncertified",
+    "projection_exact_accepted",
+    "projection_plan_accepted",
 )
 """Statistics of every decision: the solve times [ms]; the hull's area [m^2]; the distance [m] by which the
 projection moved the point of the hull; the directions whose solve failed; whether the hull was degenerate,
 so that the point was the support points' mean or the position; whether the projection found no plan; the
 solver failures during the projection; how its search ended, a code of :data:`~hrlmpc.mpc_command.EXITS`; its
-exact solves that were inaccurate or infeasible; and its exact plans not certified within the MIP gap (D47)."""
+exact solves that were inaccurate or infeasible; its exact plans not certified within the MIP gap (D47); its
+inaccurate exact plans accepted by the checker; and whether its plan was one of those (D49)."""
 
 
 def support_directions(count: int) -> FloatArray:
@@ -287,6 +294,8 @@ class ReachableTargets:
                 "projection_exact_inaccurate": float(report.exact_inaccurate),
                 "projection_exact_infeasible": float(report.exact_infeasible),
                 "projection_exact_uncertified": float(report.exact_uncertified),
+                "projection_exact_accepted": float(report.exact_accepted),
+                "projection_plan_accepted": float(report.plan_accepted),
             }
             for key in REACH_KEYS:
                 self._stats[key].append(row[key])
@@ -334,8 +343,12 @@ def reach_metrics(stats: dict[str, FloatArray], prefix: str, mask: ArrayLike | N
     :data:`~hrlmpc.mpc_command.EXITS`, the projections whose search ended
     there, ``projection_exit_<name>_count``; the projections' exact solves
     without a plan, ``projection_exact_inaccurate_count`` and
-    ``projection_exact_infeasible_count``; and their exact plans not certified
-    within the MIP gap, ``projection_exact_uncertified_count`` (D47).
+    ``projection_exact_infeasible_count``; their exact plans not certified
+    within the MIP gap, ``projection_exact_uncertified_count`` (D47); their
+    inaccurate exact plans accepted by the checker,
+    ``projection_exact_accepted_count``; and the projections whose point came
+    from such a plan, ``projection_plan_accepted_count`` (D49). Those whose
+    point came from the cheapest uncertified plan are ``projection_exit_best_count``.
 
     Args:
         stats: Arrays ``(decisions,)``.
@@ -363,6 +376,12 @@ def reach_metrics(stats: dict[str, FloatArray], prefix: str, mask: ArrayLike | N
     exits = stats["projection_exit"][keep]
     for code, name in enumerate(EXITS):
         result[f"{prefix}/projection_exit_{name}_count"] = float(np.sum(exits == code))
-    for key in ("projection_exact_inaccurate", "projection_exact_infeasible", "projection_exact_uncertified"):
+    for key in (
+        "projection_exact_inaccurate",
+        "projection_exact_infeasible",
+        "projection_exact_uncertified",
+        "projection_exact_accepted",
+        "projection_plan_accepted",
+    ):
         result[f"{prefix}/{key}_count"] = float(stats[key][keep].sum())
     return result

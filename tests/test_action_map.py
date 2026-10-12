@@ -1,11 +1,11 @@
-"""Tests of the action map of decision log D15 (row AM1)."""
+"""Tests of the action map of decision log D15 (row AM1) and of the Beta's mode of D43."""
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from hrlmpc.action_map import disk_to_square, square_to_disk
+from hrlmpc.action_map import beta_mode, disk_to_square, square_to_disk
 
 A_MAX = 2.5
 SEED = 0
@@ -55,3 +55,31 @@ def test_the_area_distortion_lies_between_one_half_and_one_times_a_max_squared()
 def test_the_map_is_continuous_at_zero() -> None:
     x = np.array([[1e-12, -3e-12], [0.0, 1e-300]])
     assert np.all(np.linalg.norm(square_to_disk(x, A_MAX), axis=1) <= A_MAX * np.max(np.abs(x), axis=1) + 1e-300)
+
+
+def test_the_mode_of_a_beta_is_its_densest_point() -> None:
+    """D43: ``(alpha - 1) / (alpha + beta - 2)`` for concentrations of at least 1, the point of largest density."""
+    stats = pytest.importorskip("scipy.stats")
+    rng = np.random.default_rng(SEED)
+    alpha, beta = 1.5 + rng.exponential(3.0, 20), 1.5 + rng.exponential(3.0, 20)
+    grid = np.linspace(0.0, 1.0, 200001)
+    for a, b, m in zip(alpha, beta, beta_mode(alpha, beta), strict=True):
+        assert m == pytest.approx(grid[np.argmax(stats.beta.pdf(grid, a, b))], abs=1e-5)
+    np.testing.assert_allclose(beta_mode(alpha, beta), (alpha - 1.0) / (alpha + beta - 2.0), rtol=1e-12)
+
+
+def test_the_mode_reaches_the_edge_where_the_mean_cannot() -> None:
+    """D43: a concentration of 1 puts the mode on the edge; both 1, the uniform density, give the mean, 1/2; and
+    the mode always lies beyond the mean, on its side of 1/2."""
+    np.testing.assert_array_equal(beta_mode([1.0, 3.0, 1.0], [2.0, 1.0, 1.0]), [0.0, 1.0, 0.5])
+    rng = np.random.default_rng(SEED)
+    alpha, beta = 1.0 + rng.exponential(2.0, (500, 2)), 1.0 + rng.exponential(2.0, (500, 2))
+    mode, mean = beta_mode(alpha, beta), alpha / (alpha + beta)
+    assert mode.shape == (500, 2) and np.all((mode >= 0.0) & (mode <= 1.0))
+    assert np.all(np.abs(mode - 0.5) >= np.abs(mean - 0.5) - 1e-15) and np.all((mode - 0.5) * (mean - 0.5) >= 0.0)
+
+
+@pytest.mark.parametrize(("alpha", "beta"), [(0.5, 2.0), (2.0, 0.999), (float("nan"), 2.0), (2.0, float("inf"))])
+def test_the_mode_needs_concentrations_of_at_least_one(alpha: float, beta: float) -> None:
+    with pytest.raises(ValueError, match="at least 1"):
+        beta_mode(alpha, beta)

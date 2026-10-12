@@ -1,10 +1,29 @@
-"""Evaluation of a deterministic controller from fixed starts, and a minimum-time bound (decision log D6, D20, F7).
+"""Evaluation of a deterministic controller from fixed starts, and a minimum-time bound (decision log D6, D20, F7,
+D43, D50).
 
 Protocol (D20). A controller is evaluated from the points of a grid on the
 spawn box, at rest, one episode per start, in an environment of its own:
 evaluation steps are not samples (D6) and never influence training. The
 evaluation environment is seeded by the configuration, the same seed for every
 run, so that every evaluation of every run meets the same disturbances.
+
+Actions (D43, D50). At every evaluation point the training loops evaluate the
+policy twice, with the mean of each Beta and then with its mode
+(:data:`EVAL_ACTIONS`). The evaluation with the mean keeps the names of steps
+7-10 (``eval/``, ``eval_mpc/``, ...); the one with the mode adds ``_mode``
+(``eval_mode/``, ``eval_mode_mpc/``, ...; :func:`evaluation_name`). The
+run's ``evaluations.jsonl`` holds one line per evaluation and action
+(:func:`append_details`).
+
+Compute (D50). :func:`evaluate` times every call of the controller, which
+acts for all the agents at once, and divides it by their number: the
+controller's time per agent and step, under ``time/`` with the evaluation's
+duration (:meth:`Evaluation.timing`), apart from the metrics of the outcome,
+which stay reproducible. For the MPC Workers, which solve agent by agent, it
+is the mean time of an agent's decision; for the networks, which act on the
+whole batch at once, it is less than the latency of a single agent's decision.
+The largest is that of the slowest step, a mean over the agents; the slowest
+single decision of an MPC Worker is its own ``eval_mpc/solve_ms_max``.
 
 Minimum-time bound (F7). Let ``A = a_max + d_bar`` and
 
@@ -31,13 +50,18 @@ thesis; the tests check both statements numerically.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass, fields
+import json
+import math
+import time
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, fields
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
+from hrlmpc.action_map import EVAL_ACTIONS as EVAL_ACTIONS
 from hrlmpc.config import Box, EnvConfig
 from hrlmpc.env import EpisodeStats, NavigationEnv
 from hrlmpc.geometry import TOL, Layout
@@ -236,12 +260,17 @@ class Evaluation:
             episode from each start (:func:`arrival_lower_bound`); the
             minimum time in the tunnel without disturbance.
         path_lengths: ``(N,)`` lengths of the shortest free paths to the goal region.
+        step_ms: The controller's wall-clock time [ms] at every step, per agent: each call, for all the
+            agents, divided by their number (D50); empty if not measured.
+        duration_s: Wall-clock time [s] of the whole evaluation; NaN if not measured.
     """
 
     starts: FloatArray
     episodes: tuple[EpisodeStats, ...]
     lower_bounds: IntArray
     path_lengths: FloatArray
+    step_ms: FloatArray = field(default_factory=lambda: np.zeros(0))
+    duration_s: float = math.nan
 
     def metrics(self, prefix: str = "eval/") -> dict[str, float]:
         """Means over the episodes, the success rate and the arrival-time gap.
@@ -268,6 +297,17 @@ class Evaluation:
             result[name] = float(np.mean([getattr(ep, name) for ep in eps]))
         return {prefix + key: value for key, value in result.items()}
 
+    def timing(self, name: str) -> dict[str, float]:
+        """The compute of the evaluation ``name`` (e.g. ``"eval_mode"``) under ``time/`` (D50): the controller's
+        mean and largest time per agent and step [ms], and the evaluation's duration [s]; NaN where not measured.
+        """
+        measured = self.step_ms.size > 0
+        return {
+            f"time/{name}_s": self.duration_s,
+            f"time/{name}_step_ms_mean": float(self.step_ms.mean()) if measured else math.nan,
+            f"time/{name}_step_ms_max": float(self.step_ms.max()) if measured else math.nan,
+        }
+
     def details(self) -> dict[str, Any]:
         """Per-start results as plain JSON values, for the run's ``evaluations.jsonl``."""
         result: dict[str, Any] = {
@@ -275,9 +315,9 @@ class Evaluation:
             "path_length": self.path_lengths.tolist(),
             "lower_bound": [int(n) for n in self.lower_bounds],
         }
-        for field in fields(EpisodeStats):
-            if field.name != "env":
-                result[field.name] = [getattr(ep, field.name) for ep in self.episodes]
+        for entry in fields(EpisodeStats):
+            if entry.name != "env":
+                result[entry.name] = [getattr(ep, entry.name) for ep in self.episodes]
         return result
 
 
@@ -293,7 +333,8 @@ def evaluate(
     All the agents start together, and agents that have finished keep being
     stepped (in new episodes, ignored) until the last one finishes. A
     controller with memory is reset first, so it sees the episodes it is
-    evaluated on from their first step, in step with each other (D29).
+    evaluated on from their first step, in step with each other (D29). Every
+    call of the controller is timed (D50).
 
     Args:
         controller: Deterministic map from observations to commands.
@@ -306,12 +347,13 @@ def evaluate(
             attribute, if it has one, and ``False`` otherwise.
 
     Returns:
-        The episodes and the bounds of F7 for each start.
+        The episodes, the bounds of F7 for each start and the compute.
 
     Raises:
         ValueError: If ``starts`` is not ``(N, 2)`` or a start is not
             admissible, or ``inputs`` contradicts the controller's ``inputs`` attribute.
     """
+    started = time.perf_counter()
     points = np.asarray(starts, dtype=np.float64)
     if points.ndim != 2 or points.shape[1] != 2 or len(points) == 0:
         raise ValueError(f"starts must have shape (N, 2) with N >= 1, got {points.shape}")
@@ -326,12 +368,63 @@ def evaluate(
     if callable(reset):
         reset(len(points))
     first: dict[int, EpisodeStats] = {}
+    step_ms: list[float] = []
     while len(first) < len(points):
+        tick = time.perf_counter()
         commands = controller(obs)
+        step_ms.append(1e3 * (time.perf_counter() - tick) / len(points))
         out = env.step_input(commands) if inputs else env.step(commands)
         for episode in out.episodes:
             first.setdefault(episode.env, episode)
         obs = out.obs
     lengths = free_path_distance(env.layout, points)
     bounds = arrival_lower_bound(env.layout, points, config.physics, distance=lengths)
-    return Evaluation(points.copy(), tuple(first[i] for i in range(len(points))), bounds, lengths)
+    episodes = tuple(first[i] for i in range(len(points)))
+    duration = time.perf_counter() - started
+    return Evaluation(points.copy(), episodes, bounds, lengths, np.array(step_ms), duration)
+
+
+def evaluation_name(action: str, group: str = "") -> str:
+    """The name under which an evaluation with ``action`` logs the metrics of ``group`` (D50): ``eval`` and
+    ``eval_<group>`` for the mean, as in steps 7-10; ``eval_mode`` and ``eval_mode_<group>`` for the mode.
+
+    Raises:
+        ValueError: If ``action`` is not one of :data:`EVAL_ACTIONS`.
+    """
+    if action not in EVAL_ACTIONS:
+        raise ValueError(f"an evaluation's action is one of {EVAL_ACTIONS}, got {action!r}")
+    name = "eval" if action == "mean" else f"eval_{action}"
+    return f"{name}_{group}" if group else name
+
+
+def append_details(path: str | Path, evaluation: Evaluation, *, env_steps: int, action: str) -> None:
+    """Append the per-start results of ``evaluation`` with ``action`` to a run's ``evaluations.jsonl`` as one line,
+    with the sample counter and the action (D50).
+
+    Raises:
+        ValueError: If ``action`` is not one of :data:`EVAL_ACTIONS`; nothing is written then.
+    """
+    evaluation_name(action)  # checks the action
+    line = json.dumps({"env_steps": env_steps, "action": action, **evaluation.details()})
+    with Path(path).open("a", encoding="utf-8") as f:
+        f.write(line + "\n")
+
+
+def _gap(value: float) -> str:
+    return "  -  " if math.isnan(value) else f"{value:5.3f}"
+
+
+def console_line(metrics: Mapping[str, Any]) -> str:
+    """The outcome of the evaluations of both actions in one line, ``mean/mode`` (D50): success rate, unshaped
+    return, mean arrival gap and contact fraction."""
+    mean, mode = (f"{evaluation_name(action)}/" for action in EVAL_ACTIONS)
+
+    def pair(key: str, form: Callable[[float], str]) -> str:
+        return f"{form(float(metrics[mean + key]))}/{form(float(metrics[mode + key]))}"
+
+    return (
+        f"mean/mode: success {pair('success_rate', lambda v: f'{v:4.2f}')}"
+        f" | unshaped return {pair('unshaped_return', lambda v: f'{v:.1f}')}"
+        f" | gap {pair('arrival_gap_mean', _gap)}"
+        f" | contact {pair('contact_fraction', lambda v: f'{v:4.2f}')}"
+    )

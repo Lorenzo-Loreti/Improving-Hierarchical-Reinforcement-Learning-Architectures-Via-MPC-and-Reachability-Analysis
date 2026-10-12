@@ -1,4 +1,4 @@
-"""Data of the MPC Worker's problem, without the solvers (decision log D31-D34, D37, D45, D46).
+"""Data of the MPC Worker's problem, without the solvers (decision log D31-D34, D37, D45, D46, D49).
 
 The Worker of PPO_MPC and PPO_MPC_reachability (architectures 3 and 4) solves
 at every step the robust tube-MPC problem of the tube-MPC note, specialised to
@@ -64,7 +64,8 @@ grows by at most ``eps (r_p^2 + r_v^2)`` per step with one (3.2e-3 at
 This module holds what does not need a solver: the matrices, the tube, the
 tightened sets, the obstacles and their big-M constants, the binaries that the
 reachable positions fix in advance, the shifted candidate, the cost and a
-checker of plans. :mod:`hrlmpc.mpc_worker` solves the problem.
+checker of plans (:meth:`MPCProblem.violations`, and :meth:`MPCProblem.plan_within`
+with the tolerances of D49). :mod:`hrlmpc.mpc_worker` solves the problem.
 """
 
 from __future__ import annotations
@@ -425,6 +426,20 @@ class MPCProblem:
         velocity = np.asarray(x, dtype=np.float64)[2:]
         return project_disk(-(1.0 - self.params.gamma * self.dt) * velocity / self.dt, self.params.a_max)
 
+    def _plan(self, z: ArrayLike, v: ArrayLike) -> tuple[FloatArray, FloatArray]:
+        """A plan as arrays, checked to have the shapes ``(N+1, 4)`` and ``(N, 2)``.
+
+        Raises:
+            ValueError: If it has other shapes.
+        """
+        z_arr = np.asarray(z, dtype=np.float64)
+        v_arr = np.asarray(v, dtype=np.float64)
+        if z_arr.shape != (self.N + 1, 4) or v_arr.shape != (self.N, 2):
+            raise ValueError(
+                f"a plan has shapes ({self.N + 1}, 4) and ({self.N}, 2), got {z_arr.shape} and {v_arr.shape}"
+            )
+        return z_arr, v_arr
+
     def violations(self, x: ArrayLike, z: ArrayLike, v: ArrayLike) -> dict[str, float]:
         """How far a plan violates each group of constraints (0 when it satisfies them).
 
@@ -438,12 +453,7 @@ class MPCProblem:
             of the larger one of its two ends).
         """
         x_arr = np.asarray(x, dtype=np.float64)
-        z_arr = np.asarray(z, dtype=np.float64)
-        v_arr = np.asarray(v, dtype=np.float64)
-        if z_arr.shape != (self.N + 1, 4) or v_arr.shape != (self.N, 2):
-            raise ValueError(
-                f"a plan has shapes ({self.N + 1}, 4) and ({self.N}, 2), got {z_arr.shape} and {v_arr.shape}"
-            )
+        z_arr, v_arr = self._plan(z, v)
         p = z_arr[:, :2]
         result = {
             "dynamics": float(np.abs(z_arr[1:] - z_arr[:-1] @ self.A.T - v_arr @ self.B.T).max()),
@@ -460,6 +470,36 @@ class MPCProblem:
             worst = max(worst, float(np.maximum(per_face.min(axis=1), 0.0).max()))
         result["obstacles"] = worst
         return result
+
+    def plan_within(self, x: ArrayLike, z: ArrayLike, v: ArrayLike, tol: float = FEAS_TOL) -> bool:
+        """Whether a plan meets every constraint but the tube's within the tolerances accepted for the relaxation's
+        own plan (R2 of D49; module docstring of :mod:`hrlmpc.mpc_worker`).
+
+        The dynamics, the initial state (without a tube), the terminal rest and
+        the arena to ``tol``, Gurobi's feasibility tolerance; the speed and
+        thrust disks to ``tol (1 + radius)``, what the cuts of the relaxation
+        leave; every segment beyond some face of each obstacle to
+        :attr:`face_slack`, which the margin ``rho`` covers. The tube
+        constraint ``x - z_0 in Z`` needs the gauge of ``Z``, a solver: the
+        Worker checks it.
+
+        Raises:
+            ValueError: If the plan's shapes are not ``(N+1, 4)`` and ``(N, 2)``.
+        """
+        z_arr, v_arr = self._plan(z, v)
+        if not (np.all(np.isfinite(z_arr)) and np.all(np.isfinite(v_arr))):
+            return False
+        worst = self.violations(x, z_arr, v_arr)
+        bounds = {
+            "dynamics": tol,
+            "initial": tol,
+            "terminal": tol,
+            "speed": tol * (1.0 + self.v_bar),
+            "input": tol * (1.0 + self.u_bar),
+            "arena": tol,
+            "obstacles": self.face_slack,
+        }
+        return all(worst[key] <= bound for key, bound in bounds.items())
 
     def summary(self) -> str:
         """A one-paragraph description of the tube, the tightened sets and the cost."""

@@ -1,5 +1,5 @@
-"""Tests of the PPO_MPC training loop and its command line (decision log D6, D24-D35, D37-D40, D45, D47); they
-need PyTorch.
+"""Tests of the PPO_MPC training loop and its command line (decision log D6, D24-D35, D37-D40, D43, D45, D47,
+D49, D50); they need PyTorch.
 
 The Worker is a NumPy stand-in with the interface of :class:`hrlmpc.mpc_worker.MPCWorker`
 (a PD law toward the target), so the loop is tested without the solvers;
@@ -21,6 +21,7 @@ torch = pytest.importorskip("torch")
 
 import hrlmpc.train_ppo_mpc as train_ppo_mpc  # noqa: E402
 from hrlmpc.config import EnvConfig, env_config_from_dict  # noqa: E402
+from hrlmpc.evaluation import EVAL_ACTIONS  # noqa: E402
 from hrlmpc.mpc_command import CANDIDATE, EMERGENCY, EXITS, KEPT, SOLVER, SearchReport, WorkerStep  # noqa: E402
 from hrlmpc.mpc_problem import MPCProblem, project_disk  # noqa: E402
 from hrlmpc.ppo_mpc_config import PPOMPCConfig, ppo_mpc_config_from_dict  # noqa: E402
@@ -151,7 +152,8 @@ def _details(run_dir: Path) -> list[dict[str, Any]]:
 
 
 def _without_time(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [{k: v for k, v in r.items() if not k.startswith("time/") and "solve_ms" not in k} for r in records]
+    """The records without the wall-clock times: under ``time/``, and the solvers' times ``*_ms_*``."""
+    return [{k: v for k, v in r.items() if not k.startswith("time/") and "_ms_" not in k} for r in records]
 
 
 def _recomputed(steps: list[tuple[int, int, float]], agents: int, prefix: str, lengths: Any = None) -> dict[str, Any]:
@@ -210,8 +212,24 @@ def test_a_short_run_writes_its_directory(tmp_path: Path) -> None:
         assert record["mpc/exit_converged_count"] == 40.0
         assert all(record[f"mpc/exit_{name}_count"] == 0.0 for name in EXITS[1:])
         assert record["mpc/exact_inaccurate_count"] == record["mpc/exact_infeasible_count"] == 0.0
-        assert record["mpc/exact_uncertified_count"] == 0.0
+        assert record["mpc/exact_uncertified_count"] == record["mpc/exact_accepted_count"] == 0.0  # D49
+        assert record["mpc/best_applied_count"] == record["mpc/accepted_applied_count"] == 0.0
         assert not any(k.startswith("worker/") and not k.startswith("worker/reward") for k in record)  # no learning
+        assert record["time/rollout_s"] > 0.0 and record["time/update_s"] > 0.0  # D50
+    np.testing.assert_allclose(
+        [r["time/train_s"] for r in updates], np.cumsum([r["time/rollout_s"] + r["time/update_s"] for r in updates]),
+        rtol=1e-12,
+    )
+    for record in evaluations:  # D43, D50: the evaluation with the mode under its own names, and the compute
+        assert {"eval_mode/success_rate", "eval_mode_mpc/steps", "eval_mode_mpc/solve_ms_mean",
+                "eval_mode_mpc/exit_best_count", "eval_mode_hierarchy/reached_rate"} <= set(record)
+        assert record["eval_mpc/steps"] == record["eval_mode_mpc/steps"] == 60.0  # 4 agents, episodes of 15 steps
+        for name in ("eval", "eval_mode"):
+            assert record[f"time/{name}_s"] > 0.0
+            assert record[f"time/{name}_step_ms_max"] >= record[f"time/{name}_step_ms_mean"] > 0.0
+    assert [(d["env_steps"], d["action"]) for d in _details(run_dir)] == [
+        (n, a) for n in (0, 40, 80) for a in EVAL_ACTIONS
+    ]
     config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
     assert rollout_worker.problem.N == 15 == eval_worker.problem.N  # the automatic horizon at d_bar = 0 (D45)
     assert config["algorithm"] == "ppo_mpc" and config["agent"]["mpc"]["horizon"] == 15  # stated in the run
@@ -227,18 +245,37 @@ def test_the_evaluation_counts_only_the_steps_of_the_evaluated_episodes(tmp_path
     env = _env(geometry={"goal_x": 3.0})  # the starts at x = 2 arrive, those at x = 0 do not
     run_dir = train(env, _config(), budget=40, seed=2, run_dir=tmp_path / "run", worker_factory=PushWorker, echo=None)
     evaluations = [r for r in _records(run_dir) if "eval/success_rate" in r]
+    details = _details(run_dir)
+    assert [d["action"] for d in details] == list(EVAL_ACTIONS) * len(evaluations)
     eval_worker = PDWorker.instances[1]
     calls = 0
-    for record, detail in zip(evaluations, _details(run_dir), strict=True):
-        lengths = detail["length"]
-        assert lengths == [15, 15, 11, 11]
-        steps = eval_worker.steps[calls : calls + 4 * max(lengths)]
-        calls += len(steps)
-        expected = _recomputed(steps, 4, "eval_mpc", lengths)
-        assert {key: record[key] for key in expected} == pytest.approx(expected)
-        assert record["eval_mpc/steps"] == float(sum(lengths)) < 4 * max(lengths)
-        assert record["eval_mpc/tube_ratio_max"] == pytest.approx(0.33)  # slot 3 for its 11 steps, not 15
+    for k, record in enumerate(evaluations):  # the mean's steps, then the mode's (D43)
+        for prefix, detail in (("eval_mpc", details[2 * k]), ("eval_mode_mpc", details[2 * k + 1])):
+            lengths = detail["length"]
+            assert lengths == [15, 15, 11, 11]
+            steps = eval_worker.steps[calls : calls + 4 * max(lengths)]
+            calls += len(steps)
+            expected = _recomputed(steps, 4, prefix, lengths)
+            assert {key: record[key] for key in expected} == pytest.approx(expected)
+            assert record[f"{prefix}/steps"] == float(sum(lengths)) < 4 * max(lengths)
+            assert record[f"{prefix}/tube_ratio_max"] == pytest.approx(0.33)  # slot 3 for its 11 steps, not 15
     assert calls == len(eval_worker.steps)
+
+
+def test_every_evaluation_runs_the_mean_and_then_the_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """D43: the Manager's mean and then its mode, with the same Worker, every slot of which is reset before each."""
+    seen: list[str] = []
+    original = train_ppo_mpc.evaluate
+
+    def spy(controller: Any, config: Any, starts: Any, **kwargs: Any) -> Any:
+        seen.append(controller.manager.__name__)
+        return original(controller, config, starts, **kwargs)
+
+    monkeypatch.setattr(train_ppo_mpc, "evaluate", spy)
+    PDWorker.instances.clear()
+    train(_env(), _config(), budget=40, seed=1, run_dir=tmp_path / "run", worker_factory=PDWorker, echo=None)
+    assert seen == ["deterministic_action", "mode_action"] * 2
+    assert PDWorker.instances[1].resets == [0, 1, 2, 3] * 4  # two points, two actions
 
 
 def test_a_run_is_repeatable_and_depends_on_its_seed(tmp_path: Path) -> None:
@@ -288,7 +325,7 @@ def test_the_worker_gets_the_steps_left_in_each_segment(tmp_path: Path) -> None:
     first = np.array(rollout_worker.left[:20]).reshape(10, 2)  # both agents decide at the start: 10, 9, ..., 1
     np.testing.assert_array_equal(first, np.repeat(np.arange(10, 0, -1)[:, None], 2, axis=1))
     calls = np.array(eval_worker.left).reshape(-1, 4)  # 4 agents per call
-    assert np.all(calls == calls[:, :1]) and len(calls) % 15 == 0  # two evaluations of episodes of 15 steps
+    assert np.all(calls == calls[:, :1]) and len(calls) == 4 * 15  # two points, two actions, episodes of 15 steps
     np.testing.assert_array_equal(calls[:15, 0], [10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 10, 9, 8, 7, 6])
 
 
@@ -355,11 +392,13 @@ def test_the_saved_manager_reproduces_the_last_evaluation(tmp_path: Path) -> Non
     from hrlmpc.mpc_command import MPCCommand
 
     command = MPCCommand(PDWorker(problem, 4), ObservationMap.from_config(env))
-    controller = HierarchicalController(hierarchy, manager.deterministic_action, command.as_worker())
-    result = evaluate(controller, env, spawn_grid(env.task.spawn, (2, 2)), seed=99)
-    last = _details(run_dir)[-1]
-    assert [ep.length for ep in result.episodes] == last["length"]
-    np.testing.assert_allclose([ep.episode_return for ep in result.episodes], last["episode_return"])
+    details = _details(run_dir)
+    for action in EVAL_ACTIONS:  # D43
+        controller = HierarchicalController(hierarchy, manager.deterministic_policy(action), command.as_worker())
+        result = evaluate(controller, env, spawn_grid(env.task.spawn, (2, 2)), seed=99)
+        last = [d for d in details if d["action"] == action][-1]
+        assert [ep.length for ep in result.episodes] == last["length"]
+        np.testing.assert_allclose([ep.episode_return for ep in result.episodes], last["episode_return"])
 
 
 def test_a_run_from_before_the_regularizer_is_loaded_without_it(tmp_path: Path) -> None:
@@ -497,7 +536,8 @@ def test_the_command_line_trains_every_seed(tmp_path: Path, capsys: pytest.Captu
     assert [p.name.split("-")[0] for p in runs] == ["seed1", "seed2"]
     config = yaml.safe_load((runs[0] / "config.yaml").read_text(encoding="utf-8"))
     assert config["env_file"] == str(env) and config["agent_file"] == str(agent)
-    assert "run written to" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "run written to" in out and "mean/mode: success" in out and "| solve" in out  # D50
     with pytest.raises(SystemExit):
         main(["--env", str(env), "--agent", str(agent), "--budget", "40", "--seeds", "1", "1"])
     with pytest.raises(SystemExit):
@@ -529,18 +569,22 @@ def test_architecture_4_trains_on_its_projected_targets(tmp_path: Path) -> None:
     evaluations = [r for r in records if "eval/success_rate" in r]
     assert all({"reach/decisions", "reach/support_ms_mean", "reach/projection_mean", "reach/hull_area_mean",
                 "reach/projection_failure_count", "hierarchy/reached_rate"} <= set(r) for r in updates)
-    assert all({"eval_reach/decisions", "eval_hierarchy/reached_rate"} <= set(r) for r in evaluations)
+    assert all({"eval_reach/decisions", "eval_hierarchy/reached_rate", "eval_mode_reach/decisions",
+                "eval_mode_hierarchy/reached_rate", "eval_mode_reach/projection_exit_best_count"} <= set(r)
+               for r in evaluations)  # D43, D50
     for record in updates:
         assert record["reach/projection_mean"] == pytest.approx(0.01)  # the stand-in's shift
         assert record["reach/projection_failure_count"] == 0.0
         assert record["reach/projection_exit_converged_count"] == record["reach/decisions"]  # D47
+        assert record["reach/projection_exact_accepted_count"] == 0.0  # D49
     # the decisions of training: one per segment, those of the first update included
     assert sum(r["reach/decisions"] for r in updates) == sum(r["hierarchy/segments"] for r in updates) + 2
     # every target the Worker steered to was a projected one, held for its whole segment
     rollout_worker = PDWorker.instances[0]
     projected = {tuple(np.round(g, 12)) for g in DiskTargetsStandIn.projected}
     assert all(tuple(np.round(g, 12)) in projected for g in rollout_worker.targets)
-    assert all(r["eval_reach/projection_mean"] == pytest.approx(0.01) for r in evaluations)
+    assert all(r[f"{prefix}/projection_mean"] == pytest.approx(0.01)
+               for r in evaluations for prefix in ("eval_reach", "eval_mode_reach"))
 
 
 @pytest.mark.parametrize("d_bar", [0.0, 0.5])
@@ -582,11 +626,14 @@ def test_the_evaluation_counts_the_segments_and_decisions_of_the_evaluated_episo
     finally:
         DiskTargetsStandIn.by_side = False
     evaluations = [r for r in _records(run_dir) if "eval/success_rate" in r]
-    for record, detail in zip(evaluations, _details(run_dir), strict=True):
-        assert detail["length"] == [15, 15, 10, 10]  # starts (0, -1), (0, 1), (2, -1), (2, 1)
-        assert record["eval_reach/decisions"] == 4 + 2  # all four at step 0, only the two from x = 0 at step 10
-        assert record["eval_reach/projection_mean"] == pytest.approx(0.01)  # (0 + 2 + 0 + 2 + 0 + 2) cm / 6
-        assert record["eval_hierarchy/full_segments"] == 2.0  # the segments of the agents from x = 0, ended at 10
+    details = _details(run_dir)
+    assert len(details) == 2 * len(evaluations)
+    for k, record in enumerate(evaluations):  # both actions (D43)
+        for prefix, detail in (("eval", details[2 * k]), ("eval_mode", details[2 * k + 1])):
+            assert detail["length"] == [15, 15, 10, 10]  # starts (0, -1), (0, 1), (2, -1), (2, 1)
+            assert record[f"{prefix}_reach/decisions"] == 4 + 2  # all four at step 0, the two from x = 0 at step 10
+            assert record[f"{prefix}_reach/projection_mean"] == pytest.approx(0.01)  # (0 + 2 + 0 + 2 + 0 + 2) cm / 6
+            assert record[f"{prefix}_hierarchy/full_segments"] == 2.0  # the agents from x = 0, ended at step 10
 
 
 def test_targets_that_cannot_be_built_leave_nothing_on_disk(tmp_path: Path) -> None:

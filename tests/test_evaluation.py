@@ -1,10 +1,11 @@
-"""Tests of the evaluation protocol and of the minimum-time bound (decision log D6, D20, F7)."""
+"""Tests of the evaluation protocol and of the minimum-time bound (decision log D6, D20, F7, D43, D50)."""
 
 from __future__ import annotations
 
 import copy
 import json
 import math
+import time
 from pathlib import Path
 from typing import Any
 
@@ -16,9 +17,13 @@ from hrlmpc.action_map import square_to_disk
 from hrlmpc.config import Box, EnvConfig, env_config_from_dict
 from hrlmpc.env import EpisodeStats, NavigationEnv
 from hrlmpc.evaluation import (
+    EVAL_ACTIONS,
     Evaluation,
+    append_details,
     arrival_lower_bound,
+    console_line,
     evaluate,
+    evaluation_name,
     min_steps_lower_bound,
     progress_bound,
     spawn_grid,
@@ -310,4 +315,74 @@ def test_the_evaluation_measures_against_the_free_path_bound() -> None:
     np.testing.assert_array_equal(result.lower_bounds, [73, 78])
     detour = math.hypot(2.0, 1.25) + 1.0 + math.hypot(2.0, 0.5) + 1.0 + 2.0
     assert result.path_lengths[0] == pytest.approx(detour, rel=1e-12)
+
+
+# --------------------------------------------------------------------------
+# Both actions and the compute (D43, D50)
+# --------------------------------------------------------------------------
+
+
+def test_the_evaluation_times_the_controller_per_step_and_agent() -> None:
+    """D50: the controller's wall-clock time per call, divided by the agents it steers, at every step; its mean and
+    largest under ``time/``, with the evaluation's duration, apart from the metrics of the outcome."""
+
+    def slow(obs: np.ndarray) -> np.ndarray:
+        until = time.perf_counter() + 0.004  # busy: a sleep may end early on Windows
+        while time.perf_counter() < until:
+            pass
+        return np.zeros((len(obs), 2))
+
+    result = evaluate(slow, _config(task={"horizon": 6}), [[0.0, 0.0], [1.0, 0.5]], seed=0)
+    assert result.step_ms.shape == (6,) and np.all(result.step_ms >= 2.0)  # 4 ms per call for two agents
+    assert result.duration_s >= 6 * 0.004
+    timing = result.timing("eval_mode")
+    assert set(timing) == {"time/eval_mode_s", "time/eval_mode_step_ms_mean", "time/eval_mode_step_ms_max"}
+    assert timing["time/eval_mode_step_ms_mean"] == pytest.approx(float(result.step_ms.mean()), rel=1e-12)
+    assert timing["time/eval_mode_step_ms_max"] == float(result.step_ms.max())
+    assert timing["time/eval_mode_s"] == result.duration_s
+    assert not any(key.startswith("time/") for key in result.metrics())  # the outcome stays comparable bit for bit
+
+
+def test_an_evaluation_built_without_its_times_has_none() -> None:
+    result = Evaluation(np.zeros((1, 2)), (_stats(0, 10, True),), np.array([10]), np.full(1, 1.0))
+    assert result.step_ms.shape == (0,) and math.isnan(result.duration_s)
+    assert all(math.isnan(value) for value in result.timing("eval").values())
+
+
+def test_the_evaluations_are_named_by_their_action() -> None:
+    """D50: the evaluation with the mean keeps the names of steps 7-10; the one with the mode adds ``_mode``."""
+    assert EVAL_ACTIONS == ("mean", "mode")
+    assert [evaluation_name(action) for action in EVAL_ACTIONS] == ["eval", "eval_mode"]
+    assert [evaluation_name(action, "mpc") for action in EVAL_ACTIONS] == ["eval_mpc", "eval_mode_mpc"]
+    assert evaluation_name("mode", "hierarchy") == "eval_mode_hierarchy"
+    assert evaluation_name("mean", "reach") == "eval_reach"
+    with pytest.raises(ValueError, match="action"):
+        evaluation_name("median")
+
+
+def test_the_details_of_each_action_are_appended_as_one_line(tmp_path: Path) -> None:
+    """D50: ``evaluations.jsonl`` holds one line per evaluation and action, marked with its action."""
+    result = evaluate(_full_thrust, _config(), [[0.0, 0.0], [2.0, 1.0]], seed=0)
+    path = tmp_path / "evaluations.jsonl"
+    append_details(path, result, env_steps=0, action="mean")
+    append_details(path, result, env_steps=16, action="mode")
+    lines = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert [(line["env_steps"], line["action"]) for line in lines] == [(0, "mean"), (16, "mode")]
+    for line in lines:
+        assert {k: v for k, v in line.items() if k not in ("env_steps", "action")} == result.details()
+    with pytest.raises(ValueError, match="action"):
+        append_details(path, result, env_steps=32, action="median")
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 2
+
+
+def test_the_console_line_shows_both_actions() -> None:
+    metrics = {
+        "eval/success_rate": 1.0, "eval_mode/success_rate": 0.75,
+        "eval/unshaped_return": 950.3, "eval_mode/unshaped_return": -12.0,
+        "eval/arrival_gap_mean": 0.05, "eval_mode/arrival_gap_mean": float("nan"),
+        "eval/contact_fraction": 0.0, "eval_mode/contact_fraction": 0.25,
+    }
+    assert console_line(metrics) == (
+        "mean/mode: success 1.00/0.75 | unshaped return 950.3/-12.0 | gap 0.050/  -   | contact 0.00/0.25"
+    )
 

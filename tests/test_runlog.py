@@ -1,15 +1,17 @@
-"""Tests of the run directory and the learning-curve log (code rules C3, C4; decision log D6)."""
+"""Tests of the run directory and the learning-curve log (code rules C3, C4; decision log D6, D50)."""
 
 from __future__ import annotations
 
 import json
+import os
+import platform
 from pathlib import Path
 
 import numpy as np
 import pytest
 import yaml
 
-from hrlmpc.utils.runlog import RunLogger, SampleCounter, package_versions
+from hrlmpc.utils.runlog import SLURM_VARIABLES, RunLogger, SampleCounter, machine_info, package_versions
 
 
 def test_counter_accumulates() -> None:
@@ -45,6 +47,7 @@ def test_run_directory_layout(tmp_path: Path) -> None:
     assert meta["seed"] == 7
     assert meta["git"] == {"commit": None, "dirty": None}  # tmp_path is not a git checkout
     assert meta["packages"]["numpy"] == np.__version__
+    assert meta["machine"]["host"] == platform.node()  # D50
 
     records = [json.loads(line) for line in (run_dir / "metrics.jsonl").read_text(encoding="utf-8").splitlines()]
     assert records == [
@@ -82,3 +85,30 @@ def test_package_versions_reports_missing_packages() -> None:
     versions = package_versions(["numpy", "surely-not-an-installed-distribution"])
     assert versions["numpy"] == np.__version__
     assert versions["surely-not-an-installed-distribution"] is None
+
+
+def test_the_machine_is_described(monkeypatch: pytest.MonkeyPatch) -> None:
+    """D50: processor, cores, host, the load when the run starts and the threads' variables; the Slurm job only
+    inside one."""
+    for name in SLURM_VARIABLES.values():
+        monkeypatch.delenv(name, raising=False)
+    machine = machine_info()
+    assert set(machine) == {"host", "processor", "cores", "usable_cores", "load", "threads", "slurm"}
+    assert machine["host"] == platform.node() and machine["cores"] == os.cpu_count()
+    assert machine["processor"] is None or (isinstance(machine["processor"], str) and machine["processor"])
+    assert 1 <= machine["usable_cores"] <= machine["cores"]
+    assert machine["load"] is None or (len(machine["load"]) == 3 and min(machine["load"]) >= 0.0)
+    assert set(machine["threads"]) == {"OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"}
+    assert machine["slurm"] is None
+    assert json.loads(json.dumps(machine)) == machine  # plain JSON
+    monkeypatch.setenv("SLURM_JOB_ID", "4242")
+    monkeypatch.setenv("SLURM_JOB_PARTITION", "cpu")
+    monkeypatch.setenv("SLURMD_NODENAME", "wolfgang-cpu03")
+    monkeypatch.setenv("OMP_NUM_THREADS", "1")
+    machine = machine_info()
+    assert machine["slurm"] == {
+        "job_id": "4242", "array_job_id": None, "array_task_id": None, "partition": "cpu",
+        "node": "wolfgang-cpu03", "cpus_per_task": None,
+    }
+    assert machine["threads"]["OMP_NUM_THREADS"] == "1"
+

@@ -1,4 +1,4 @@
-"""Training of hPPO on the navigation environment (architecture 2; decision log D6, D20, D24-D29).
+"""Training of hPPO on the navigation environment (architecture 2; decision log D6, D20, D24-D29, D43, D50).
 
 Usage, from the repository root::
 
@@ -15,23 +15,26 @@ every end of an episode, D25), then the Manager on the segments that ended
 Each seed writes the run directory ``<runs-dir>/<layout>/hppo/seed<seed>-<UTC time>`` with:
 
     config.yaml        resolved configuration: environment, agent, budget, seed
-    meta.json          provenance (hrlmpc.utils.runlog)
-    metrics.jsonl      one record per update and per evaluation, keyed by the sample counters
-    evaluations.jsonl  per-start results of every evaluation
+    meta.json          provenance and machine (hrlmpc.utils.runlog)
+    metrics.jsonl      one record per update and per evaluation point, keyed by the sample counters
+    evaluations.jsonl  per-start results of every evaluation, one line per action
     final.pt           both levels' weights, optimizer states and target statistics
 
 The budget counts samples, physical steps during training summed over the
 agents (D6); the Manager's decisions are counted alongside. It must be a whole
 number of updates and of evaluation intervals. Evaluations run the
 deterministic hierarchy in an environment of their own, draw no random number
-of the training and are not samples (D20, D29).
+of the training and are not samples (D20, D29). Every evaluation point runs it
+with the means of both policies and then with their modes (D43), logged under
+``eval/`` and ``eval_mode/`` (D50). The compute is logged under ``time/``: per
+update the time of the rollout and that of both levels' updates, per evaluation
+its duration and the hierarchy's time per agent and step.
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime
-import json
 import os
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -44,7 +47,7 @@ import yaml
 
 from hrlmpc.config import EnvConfig, env_config_from_dict, env_config_to_dict, load_env_config
 from hrlmpc.env import NavigationEnv
-from hrlmpc.evaluation import evaluate, spawn_grid
+from hrlmpc.evaluation import EVAL_ACTIONS, append_details, console_line, evaluate, evaluation_name, spawn_grid
 from hrlmpc.hierarchy import (
     HierarchicalController,
     HierarchicalRollout,
@@ -75,9 +78,16 @@ def hierarchy_of(env_config: EnvConfig, hppo_config: HPPOConfig) -> Hierarchy:
     )
 
 
-def deterministic_controller(manager: PPOAgent, worker: PPOAgent, hierarchy: Hierarchy) -> HierarchicalController:
-    """The hierarchy with the means of both policies, for the evaluation (D29); fresh for each evaluation."""
-    return HierarchicalController(hierarchy, manager.deterministic_action, worker.deterministic_action)
+def deterministic_controller(
+    manager: PPOAgent, worker: PPOAgent, hierarchy: Hierarchy, action: str = "mean"
+) -> HierarchicalController:
+    """The deterministic hierarchy of an evaluation (D29, D43): both policies with the same statistic, their means
+    or their modes; fresh for each evaluation.
+
+    Raises:
+        ValueError: If ``action`` is neither ``"mean"`` nor ``"mode"``.
+    """
+    return HierarchicalController(hierarchy, manager.deterministic_policy(action), worker.deterministic_policy(action))
 
 
 def _renamed(metrics: Mapping[str, float], level: str) -> dict[str, float]:
@@ -115,10 +125,6 @@ def _hierarchy_metrics(rollout: HierarchicalRollout) -> dict[str, float]:
         result["hierarchy/segment_steps"] = float(seg.steps.mean())
         result["hierarchy/target_distance"] = float(seg.end_distances.mean())
     return result
-
-
-def _format_gap(value: float) -> str:
-    return "  -  " if np.isnan(value) else f"{value:5.3f}"
 
 
 def train(
@@ -213,19 +219,17 @@ def _train(
     with RunLogger(path, config, seed=seed, repo_dir=source) as logger:
 
         def evaluate_now() -> None:
-            controller = deterministic_controller(manager, worker, hierarchy)
-            result = evaluate(controller, env_config, starts, seed=hppo_config.evaluation.seed)
-            metrics = result.metrics()
+            metrics: dict[str, float] = {}
+            for action in EVAL_ACTIONS:  # the means, then the modes (D43)
+                name = evaluation_name(action)
+                controller = deterministic_controller(manager, worker, hierarchy, action)
+                result = evaluate(controller, env_config, starts, seed=hppo_config.evaluation.seed)
+                metrics.update(result.metrics(prefix=f"{name}/"))
+                metrics.update(result.timing(name))
+                append_details(path / "evaluations.jsonl", result, env_steps=env.counter.env_steps, action=action)
             logger.log(metrics, env.counter)
-            with (path / "evaluations.jsonl").open("a", encoding="utf-8") as f:
-                f.write(json.dumps({"env_steps": env.counter.env_steps, **result.details()}) + "\n")
             if echo is not None:
-                echo(
-                    f"{path.name}: {env.counter.env_steps:>8} samples | success {metrics['eval/success_rate']:4.2f}"
-                    f" | unshaped return {metrics['eval/unshaped_return']:8.1f}"
-                    f" | gap {_format_gap(metrics['eval/arrival_gap_mean'])}"
-                    f" | contact {metrics['eval/contact_fraction']:4.2f}"
-                )
+                echo(f"{path.name}: {env.counter.env_steps:>8} samples | {console_line(metrics)}")
 
         evaluate_now()
         state = start_segments(env, hierarchy, manager.act, manager.value)
@@ -233,14 +237,16 @@ def _train(
         started = time.perf_counter()
         training_time = 0.0
         for k in range(num_updates):
-            tick = time.perf_counter()
             for agent, settings in ((manager, m_cfg), (worker, w_cfg)):
                 if settings.update.anneal_learning_rate:
                     agent.set_learning_rate_fraction(1.0 - k / num_updates)
             rates = {"manager": manager.learning_rates, "worker": worker.learning_rates}
+            tick = time.perf_counter()
             rollout, state = collect_hierarchical_rollout(
                 env, state, hppo_config.rollout.num_steps, hierarchy, manager.act, manager.value, learned
             )
+            rollout_s = time.perf_counter() - tick
+            tick = time.perf_counter()
             transitions = rollout.worker
             assert transitions is not None  # a LearnedWorker records its transitions
             advantages, returns = compute_gae(
@@ -256,7 +262,8 @@ def _train(
             metrics: dict[str, Any] = _renamed(worker.update(worker_batch), "worker")
             batch = _manager_batch(rollout, m_cfg.update.gae_lambda, manager.device)
             metrics.update(_renamed(manager.update(batch), "manager"))
-            training_time += time.perf_counter() - tick
+            update_s = time.perf_counter() - tick
+            training_time += rollout_s + update_s
             metrics.update(episode_metrics(rollout.episodes))
             metrics.update(_hierarchy_metrics(rollout))
             for level, (actor_rate, critic_rate) in rates.items():
@@ -265,6 +272,8 @@ def _train(
             metrics.update(
                 {
                     "train/updates": k + 1,
+                    "time/rollout_s": rollout_s,
+                    "time/update_s": update_s,
                     "time/train_s": training_time,
                     "time/elapsed_s": time.perf_counter() - started,
                     "time/sps": env.counter.env_steps / training_time,
