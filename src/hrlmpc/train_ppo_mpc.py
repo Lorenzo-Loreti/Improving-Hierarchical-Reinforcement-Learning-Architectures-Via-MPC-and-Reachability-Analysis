@@ -1,11 +1,15 @@
-"""Training of PPO_MPC and PPO_MPC_reachability (architectures 3 and 4; decision log D6, D20, D24-D35, D37-D40).
+"""Training of PPO_MPC and PPO_MPC_reachability (architectures 3 and 4; decision log D6, D20, D24-D35, D37-D40,
+D45-D47).
 
 Usage, from the repository root::
 
     python -m hrlmpc.train_ppo_mpc --env configs/env/tunnel.yaml --agent configs/agent/ppo_mpc.yaml \
         --budget 204800 --seeds 1 2 3 4 5
 
-and ``--agent configs/agent/ppo_mpc_reachability.yaml`` for architecture 4.
+and ``--agent configs/agent/ppo_mpc_reachability.yaml`` for architecture 4. The
+disturbance comes with the environment's file, one per level (D45), e.g.
+``--env configs/env/slalom_d05.yaml``; the Worker's tube and, unless the agent's
+file sets one, its horizon follow it.
 
 A PPO Manager sets a target every ``H`` steps on the common loop of
 :mod:`hrlmpc.hierarchy`, exactly as in hPPO; the Worker is the tube MPC of
@@ -17,10 +21,12 @@ that ended (GAE at ``gamma^tau``, D27). The architectures differ only in the
 targets: on the disk of D24 (architecture 3), or in the reachable set of D38,
 projected onto it by a Worker of their own (D39, :mod:`hrlmpc.reachability`).
 
-Each seed writes the run directory ``<runs-dir>/<layout>/<algorithm>/seed<seed>-<UTC time>``,
-``<algorithm>`` being ``ppo_mpc`` or ``ppo_mpc_reachability``, with:
+Each seed writes the run directory ``<runs-dir>/<env>/<algorithm>/seed<seed>-<UTC time>``,
+``<env>`` being the stem of the environment's file (``slalom``, ``slalom_d05``, ...) and ``<algorithm>``
+``ppo_mpc`` or ``ppo_mpc_reachability``, with:
 
-    config.yaml        resolved configuration: environment, agent, budget, seed
+    config.yaml        resolved configuration: environment, agent (with the horizon the Worker used), budget,
+                       seed
     meta.json          provenance (hrlmpc.utils.runlog)
     metrics.jsonl      one record per update and per evaluation, keyed by the sample counters
     evaluations.jsonl  per-start results of every evaluation
@@ -31,7 +37,8 @@ Worker's steps under ``mpc/`` and every evaluation under ``eval_mpc/``
 (:func:`hrlmpc.mpc_command.mpc_metrics`): mean and largest solve time, the
 rates of the steps on the shifted plan (the fallback when the solvers found
 nothing, or kept because cheaper), the counts of emergencies, of shifted plans
-outside their tube and of solver failures, the free binaries, the cut rounds
+outside their tube and of solver failures, the free binaries, the cut rounds,
+how each search for a plan ended and the exact solves without a plan (D47)
 and, with a tube, the largest tube ratio. Both log how close the agents end
 their full segments to the targets (D40) under ``hierarchy/`` and
 ``eval_hierarchy/`` (:func:`hrlmpc.reachability.reached_metrics`), and
@@ -133,14 +140,24 @@ def hierarchy_of(env_config: EnvConfig, config: PPOMPCConfig) -> Hierarchy:
 
 
 def problem_of(env_config: EnvConfig, config: PPOMPCConfig) -> MPCProblem:
-    """The Worker's problem: the environment's plant, map and disturbance, and the settings of D34 and D37.
+    """The Worker's problem: the environment's plant, map and disturbance, and the settings of D34, D37 and D46;
+    without a horizon in the settings, the smallest that leaves room to stop after a segment (D45).
 
     Raises:
         ValueError: If the horizon leaves no room to stop after a segment (D37).
     """
-    problem = MPCProblem(env_config.physics, Layout.from_config(env_config.geometry), config.mpc)
-    problem.check_segments(config.hierarchy.segment_steps)
+    segment_steps = config.hierarchy.segment_steps
+    problem = MPCProblem(
+        env_config.physics, Layout.from_config(env_config.geometry), config.mpc, segment_steps=segment_steps
+    )
+    problem.check_segments(segment_steps)
     return problem
+
+
+def _with_horizon(config: PPOMPCConfig, problem: MPCProblem) -> PPOMPCConfig:
+    """The configuration with the horizon the Worker's problem uses, for ``config.yaml``: a run states its ``N``
+    even when the agent's file leaves it to the problem (D45), and is rebuilt with it."""
+    return dataclasses.replace(config, mpc=dataclasses.replace(config.mpc, horizon=problem.N))
 
 
 def _close(worker: Any) -> None:
@@ -249,7 +266,7 @@ def _train(
         "budget": budget,
         **dict(provenance or {}),
         "env": env_config_to_dict(env_config),
-        "agent": ppo_mpc_config_to_dict(config),
+        "agent": ppo_mpc_config_to_dict(_with_horizon(config, problem)),
     }
     num_updates = budget // per_update
     source = Path(__file__).resolve().parent if repo_dir is None else repo_dir
@@ -345,12 +362,17 @@ def load_manager(
 
     The Worker itself is built from the problem by the caller (it needs the solvers). For architecture 4 the
     hierarchy's targets are built by ``targets_factory`` (:func:`solver_targets` by default, which needs the
-    solvers); the caller closes them.
+    solvers); the caller closes them. A run from before the regularizer of D46 has no ``mpc.start_weight`` in
+    its ``config.yaml``; its Worker had no regularizer, so it is rebuilt with ``start_weight = 0``.
     """
     path = Path(run_dir)
     raw = yaml.safe_load((path / "config.yaml").read_text(encoding="utf-8"))
     env_config = env_config_from_dict(raw["env"])
-    config = ppo_mpc_config_from_dict(raw["agent"])
+    agent = raw["agent"]
+    mpc = agent.get("mpc") if isinstance(agent, dict) else None
+    if isinstance(mpc, dict) and "start_weight" not in mpc:  # a run of steps 9 and 10 (D46)
+        agent = {**agent, "mpc": {**mpc, "start_weight": 0.0}}
+    config = ppo_mpc_config_from_dict(agent)
     m_cfg = config.manager
     manager = PPOAgent(
         NavigationEnv.observation_size, NavigationEnv.action_size, m_cfg.network, m_cfg.update, config.runtime.device

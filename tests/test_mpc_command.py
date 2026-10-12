@@ -1,4 +1,4 @@
-"""Tests of the MPC Worker's adapter to the common loop and of its statistics, without solvers (D34, D37)."""
+"""Tests of the MPC Worker's adapter to the common loop and of its statistics, without solvers (D34, D37, D47)."""
 
 from __future__ import annotations
 
@@ -12,11 +12,21 @@ from hrlmpc.env import ObservationMap
 from hrlmpc.hierarchy import CommandWorker
 from hrlmpc.mpc_command import (
     CANDIDATE,
+    CONVERGED,
     EMERGENCY,
+    EMPTY,
+    ERROR,
+    EXITS,
+    FIXED,
+    FOUND,
     KEPT,
+    RELAXATION,
+    ROUNDS,
     SOLVER,
     STAT_KEYS,
+    UNSOLVED,
     MPCCommand,
+    SearchReport,
     WorkerStep,
     episode_mask,
     mpc_metrics,
@@ -40,7 +50,8 @@ class Recorder:
         info = WorkerStep(outcome=(SOLVER, CANDIDATE, KEPT, EMERGENCY)[slot % 4], solve_ms=1.0 + slot,
                           free_binaries=2 * slot, tube_ratio=float("nan") if slot == 0 else 0.1 * slot,
                           cost=1.0, cut_rounds=slot, plan=None, invalid_candidate=int(slot == 1),
-                          solver_errors=int(slot == 3))
+                          solver_errors=int(slot == 3), exit=(CONVERGED, FIXED, ROUNDS, ERROR)[slot % 4],
+                          exact_inaccurate=slot, exact_infeasible=int(slot == 2), exact_uncertified=2 * slot)
         return x[2:] + target, info
 
     def reset(self, slot: int | None = None) -> None:
@@ -79,6 +90,10 @@ def test_the_statistics_are_kept_per_step_and_agent_until_popped() -> None:
     np.testing.assert_array_equal(stats["free_binaries"][2], [0, 2, 4, 6])
     np.testing.assert_array_equal(stats["invalid_candidate"][1], [0, 1, 0, 0])
     np.testing.assert_array_equal(stats["solver_errors"][1], [0, 0, 0, 1])
+    np.testing.assert_array_equal(stats["exit"][0], [CONVERGED, FIXED, ROUNDS, ERROR])  # D47
+    np.testing.assert_array_equal(stats["exact_inaccurate"][2], [0, 1, 2, 3])
+    np.testing.assert_array_equal(stats["exact_infeasible"][2], [0, 0, 1, 0])
+    np.testing.assert_array_equal(stats["exact_uncertified"][1], [0, 2, 4, 6])
     assert np.isnan(stats["tube_ratio"][:, 0]).all()
     assert all(values.size == 0 for values in command.pop_stats().values())
 
@@ -104,7 +119,9 @@ def test_a_reset_reaches_the_slots_of_the_finished_agents_only() -> None:
     assert worker.resets == [0, 2]
 
 
-def _stats(outcome: list[list[int]], ratio: list[list[float]]) -> dict[str, np.ndarray]:
+def _stats(outcome: list[list[int]], ratio: list[list[float]], exits: list[list[int]] | None = None,
+           inaccurate: list[list[int]] | None = None, infeasible: list[list[int]] | None = None,
+           uncertified: list[list[int]] | None = None) -> dict[str, np.ndarray]:
     out = np.array(outcome, dtype=np.float64)
     return {
         "outcome": out,
@@ -114,17 +131,38 @@ def _stats(outcome: list[list[int]], ratio: list[list[float]]) -> dict[str, np.n
         "cut_rounds": np.ones(out.shape),
         "invalid_candidate": (out == CANDIDATE).astype(np.float64),
         "solver_errors": (out == EMERGENCY).astype(np.float64),
+        "exit": np.zeros(out.shape) if exits is None else np.array(exits, dtype=np.float64),
+        "exact_inaccurate": np.zeros(out.shape) if inaccurate is None else np.array(inaccurate, dtype=np.float64),
+        "exact_infeasible": np.zeros(out.shape) if infeasible is None else np.array(infeasible, dtype=np.float64),
+        "exact_uncertified": np.zeros(out.shape) if uncertified is None else np.array(uncertified, dtype=np.float64),
     }
+
+
+def test_the_exits_of_a_search_are_named() -> None:
+    """D47: every code names one way a search can end, and a report of a search defaults to a clean one."""
+    codes = (CONVERGED, RELAXATION, FIXED, ROUNDS, EMPTY, UNSOLVED, ERROR)
+    assert sorted(codes) == list(range(len(EXITS))) and len(set(EXITS)) == len(EXITS)
+    assert EXITS[UNSOLVED] == "unsolved" and EXITS[CONVERGED] == "converged"
+    assert FOUND == (CONVERGED, RELAXATION, FIXED)  # the exits with a plan
+    assert SearchReport() == SearchReport(errors=0, exit=CONVERGED, exact_inaccurate=0, exact_infeasible=0,
+                                          exact_uncertified=0)
 
 
 def test_the_metrics_summarise_the_counted_steps() -> None:
     nan = float("nan")
-    stats = _stats([[SOLVER, CANDIDATE], [KEPT, EMERGENCY], [SOLVER, EMERGENCY]], [[nan, 0.4], [0.2, 0.9], [nan, 0.7]])
+    stats = _stats([[SOLVER, CANDIDATE], [KEPT, EMERGENCY], [SOLVER, EMERGENCY]], [[nan, 0.4], [0.2, 0.9], [nan, 0.7]],
+                   exits=[[CONVERGED, ROUNDS], [RELAXATION, ERROR], [FIXED, EMPTY]],
+                   inaccurate=[[0, 2], [0, 0], [1, 0]], infeasible=[[0, 0], [1, 0], [0, 3]],
+                   uncertified=[[1, 0], [2, 0], [0, 5]])
     metrics = mpc_metrics(stats, "mpc")
     assert metrics == pytest.approx({
         "mpc/solve_ms_mean": 2.5, "mpc/solve_ms_max": 5.0, "mpc/candidate_rate": 1 / 6, "mpc/kept_rate": 1 / 6,
         "mpc/emergency_count": 2.0, "mpc/invalid_candidate_count": 1.0, "mpc/solver_error_count": 2.0,
         "mpc/free_binaries_mean": 3.0, "mpc/cut_rounds_mean": 1.0, "mpc/steps": 6.0, "mpc/tube_ratio_max": 0.9,
+        "mpc/exit_converged_count": 1.0, "mpc/exit_relaxation_count": 1.0, "mpc/exit_fixed_count": 1.0,
+        "mpc/exit_rounds_count": 1.0, "mpc/exit_empty_count": 1.0, "mpc/exit_unsolved_count": 0.0,
+        "mpc/exit_error_count": 1.0, "mpc/exact_inaccurate_count": 3.0, "mpc/exact_infeasible_count": 4.0,
+        "mpc/exact_uncertified_count": 8.0,
     })
     # only the first two steps of agent 0 and the first step of agent 1
     mask = np.array([[True, True], [True, False], [False, False]])
@@ -133,6 +171,10 @@ def test_the_metrics_summarise_the_counted_steps() -> None:
     assert masked["eval_mpc/candidate_rate"] == pytest.approx(1 / 3)
     assert masked["eval_mpc/kept_rate"] == pytest.approx(1 / 3)
     assert masked["eval_mpc/tube_ratio_max"] == pytest.approx(0.4) and masked["eval_mpc/solve_ms_max"] == 2.0
+    assert (masked["eval_mpc/exit_converged_count"], masked["eval_mpc/exit_rounds_count"],
+            masked["eval_mpc/exit_relaxation_count"], masked["eval_mpc/exit_error_count"]) == (1.0, 1.0, 1.0, 0.0)
+    assert (masked["eval_mpc/exact_inaccurate_count"], masked["eval_mpc/exact_infeasible_count"],
+            masked["eval_mpc/exact_uncertified_count"]) == (2.0, 1.0, 3.0)
 
 
 def test_the_tube_ratio_is_logged_only_when_some_step_has_one() -> None:

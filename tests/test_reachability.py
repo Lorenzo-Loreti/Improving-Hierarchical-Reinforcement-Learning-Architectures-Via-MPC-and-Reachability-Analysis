@@ -1,4 +1,4 @@
-"""Tests of the targets of PPO_MPC_reachability without solvers (decision log D38-D40)."""
+"""Tests of the targets of PPO_MPC_reachability without solvers (decision log D38-D40, D47)."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from hrlmpc.action_map import disk_to_square
+from hrlmpc.mpc_command import CONVERGED, ROUNDS, UNSOLVED, SearchReport
 from hrlmpc.reachability import (
     AREA_TOL,
     MOVED,
@@ -125,7 +126,8 @@ class _Disk:
 
 def _targets(support: Any = None, project: Any = None) -> ReachableTargets:
     return ReachableTargets(support=_Disk() if support is None else support,
-                            project=(lambda x, q: (q.copy(), 0)) if project is None else project, radius=1.2)
+                            project=(lambda x, q: (q.copy(), SearchReport())) if project is None else project,
+                            radius=1.2)
 
 
 def test_the_targets_map_the_square_onto_the_hull_about_its_centroid() -> None:
@@ -153,8 +155,11 @@ def test_the_targets_map_the_square_onto_the_hull_about_its_centroid() -> None:
 
 
 def test_the_projection_gives_the_target_and_its_distance_is_recorded() -> None:
-    def project(x: np.ndarray, q: np.ndarray) -> tuple[np.ndarray, int]:
-        return np.array([min(q[0], 0.5), q[1]]), 1  # a wall at x = 0.5, and a solver failure survived
+    def project(x: np.ndarray, q: np.ndarray) -> tuple[np.ndarray, SearchReport]:
+        # a wall at x = 0.5, a solver failure survived, an inaccurate exact solve and an uncertified exact plan on
+        # the way (D47)
+        report = SearchReport(errors=1, exit=CONVERGED, exact_inaccurate=1, exact_uncertified=1)
+        return np.array([min(q[0], 0.5), q[1]]), report
 
     targets = _targets(project=project)
     g = targets(np.array([[1.0, 0.0], [-1.0, 0.0]]), np.zeros((2, 2)), np.zeros((2, 2)))
@@ -165,6 +170,10 @@ def test_the_projection_gives_the_target_and_its_distance_is_recorded() -> None:
     np.testing.assert_allclose(stats["hull_area"], 8 * math.sin(math.pi / 8))  # the 16-gon of radius 1
     np.testing.assert_array_equal(stats["projection_failed"], [0.0, 0.0])
     np.testing.assert_array_equal(stats["projection_errors"], [1.0, 1.0])
+    np.testing.assert_array_equal(stats["projection_exit"], [CONVERGED, CONVERGED])
+    np.testing.assert_array_equal(stats["projection_exact_inaccurate"], [1.0, 1.0])
+    np.testing.assert_array_equal(stats["projection_exact_infeasible"], [0.0, 0.0])
+    np.testing.assert_array_equal(stats["projection_exact_uncertified"], [1.0, 1.0])
     np.testing.assert_array_equal(stats["hull_fallback"], [0.0, 0.0])
     assert all(values.size == 0 for values in targets.pop_stats().values())
 
@@ -172,7 +181,8 @@ def test_the_projection_gives_the_target_and_its_distance_is_recorded() -> None:
 def test_failures_are_counted_and_fall_back() -> None:
     """A failed projection keeps the point of the hull; failed directions are skipped; with no direction left
     the position is held, and with too few for an area the points' mean is taken."""
-    targets = _targets(support=_Disk(fail=(3, 7)), project=lambda x, q: (None, 2))
+    targets = _targets(support=_Disk(fail=(3, 7)),
+                       project=lambda x, q: (None, SearchReport(errors=2, exit=UNSOLVED, exact_infeasible=1)))
     g = targets(np.array([[1.0, 0.0]]), np.zeros((1, 2)), np.zeros((1, 2)))
     left = np.delete(support_directions(16), [3, 7], axis=0)
     hull = convex_hull(left)
@@ -180,6 +190,7 @@ def test_failures_are_counted_and_fall_back() -> None:
     stats = targets.pop_stats()
     assert stats["support_failures"][0] == 2.0 and stats["projection_failed"][0] == 1.0
     assert stats["projection"][0] == 0.0 and stats["projection_errors"][0] == 2.0 and stats["hull_fallback"][0] == 0.0
+    assert stats["projection_exit"][0] == UNSOLVED and stats["projection_exact_infeasible"][0] == 1.0
     nothing = _targets(support=_Disk(fail=tuple(range(16))))
     np.testing.assert_allclose(nothing(np.array([[1.0, 1.0]]), np.array([[2.0, 3.0]]), np.zeros((1, 2))), [[2.0, 3.0]])
     stats = nothing.pop_stats()
@@ -197,7 +208,7 @@ def test_failures_are_counted_and_fall_back() -> None:
 
 def test_invalid_inputs_are_refused_and_close_releases_once() -> None:
     released: list[int] = []
-    targets = ReachableTargets(support=_Disk(), project=lambda x, q: (q, 0), radius=1.2,
+    targets = ReachableTargets(support=_Disk(), project=lambda x, q: (q, SearchReport()), radius=1.2,
                                release=lambda: released.append(1))
     with pytest.raises(ValueError, match="square"):
         targets(np.array([[1.5, 0.0]]), np.zeros((1, 2)), np.zeros((1, 2)))
@@ -208,7 +219,7 @@ def test_invalid_inputs_are_refused_and_close_releases_once() -> None:
     with pytest.raises(ValueError, match="support points"):
         _targets(support=lambda x: np.zeros(16))(np.zeros((1, 2)), np.zeros((1, 2)), np.zeros((1, 2)))
     with pytest.raises(ValueError, match="radius"):
-        ReachableTargets(support=_Disk(), project=lambda x, q: (q, 0), radius=0.0)
+        ReachableTargets(support=_Disk(), project=lambda x, q: (q, SearchReport()), radius=0.0)
     targets.close()
     targets.close()
     assert released == [1]
@@ -224,6 +235,10 @@ def test_the_metrics_of_the_decisions() -> None:
         "hull_fallback": np.array([0.0, 0.0, 1.0]),
         "projection_failed": np.array([1.0, 0.0, 0.0]),
         "projection_errors": np.array([0.0, 3.0, 0.0]),
+        "projection_exit": np.array([ROUNDS, CONVERGED, CONVERGED], dtype=np.float64),
+        "projection_exact_inaccurate": np.array([2.0, 0.0, 1.0]),
+        "projection_exact_infeasible": np.array([0.0, 1.0, 0.0]),
+        "projection_exact_uncertified": np.array([4.0, 0.0, 1.0]),
     }
     assert MOVED == 1e-2
     assert reach_metrics(stats, "reach") == pytest.approx({
@@ -231,9 +246,17 @@ def test_the_metrics_of_the_decisions() -> None:
         "reach/projection_mean": (0.5 + 5e-3) / 3, "reach/projection_max": 0.5, "reach/projected_rate": 1 / 3,
         "reach/support_failure_count": 3.0, "reach/hull_fallback_count": 1.0, "reach/projection_failure_count": 1.0,
         "reach/projection_error_count": 3.0, "reach/decisions": 3.0,
+        "reach/projection_exit_converged_count": 2.0, "reach/projection_exit_relaxation_count": 0.0,
+        "reach/projection_exit_fixed_count": 0.0, "reach/projection_exit_rounds_count": 1.0,
+        "reach/projection_exit_empty_count": 0.0, "reach/projection_exit_unsolved_count": 0.0,
+        "reach/projection_exit_error_count": 0.0, "reach/projection_exact_inaccurate_count": 3.0,
+        "reach/projection_exact_infeasible_count": 1.0, "reach/projection_exact_uncertified_count": 5.0,
     })
     masked = reach_metrics(stats, "eval_reach", np.array([True, False, True]))
     assert masked["eval_reach/decisions"] == 2.0 and masked["eval_reach/projected_rate"] == 0.0
+    assert masked["eval_reach/projection_exit_rounds_count"] == 1.0
+    assert masked["eval_reach/projection_exact_infeasible_count"] == 0.0
+    assert masked["eval_reach/projection_exact_uncertified_count"] == 5.0
     assert reach_metrics(stats, "eval_reach", np.zeros(3, dtype=bool)) == {}
 
 

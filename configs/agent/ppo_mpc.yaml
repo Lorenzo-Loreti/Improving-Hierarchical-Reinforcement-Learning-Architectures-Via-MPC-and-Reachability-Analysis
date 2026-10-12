@@ -1,9 +1,11 @@
-# PPO_MPC (decision log D24-D28, D31-D35, D37): hPPO's Manager and hierarchy with
-# the tube-MPC Worker of the pre-alignment PPO_MPC (algorithms/tube_mpc.py at tag
-# pre-alignment), ported onto the model of the specification, with the waypoint
-# cost of D37: the target is where the agent should be when the segment ends.
-# The Worker's tube is designed for the disturbance d_bar of the environment's
-# configuration. The values are provisional until the tuning protocol (Q13).
+# PPO_MPC (decision log D24-D28, D31-D35, D37, D45, D46): hPPO's Manager and
+# hierarchy with the tube-MPC Worker of the pre-alignment PPO_MPC
+# (algorithms/tube_mpc.py at tag pre-alignment), ported onto the model of the
+# specification, with the waypoint cost of D37: the target is where the agent
+# should be when the segment ends. The Worker's tube and horizon follow the
+# disturbance d_bar of the environment's configuration (one file per level:
+# configs/env/<layout>_d05.yaml and _d10.yaml, D45), so this file serves every
+# level. The values are provisional until the tuning protocol (Q13).
 # Write floats with a dot and a signed exponent (3.0e-4, 1.0e+5): YAML 1.1 reads 3e-4 and 1.0e5 as strings.
 
 hierarchy:                     # D24, D27
@@ -31,14 +33,17 @@ manager:                       # hPPO's Manager (D28)
     max_grad_norm: 0.5         # per network
     value_norm_horizon: 10     # updates in the running statistics of the critic's targets
 
-mpc:                           # the tube-MPC Worker (D31-D34, D37)
-  horizon: 15                  # N, fixed and receding; every plan comes to rest by its end. N >= H + the
-                               #   steps to stop from the planned speed: 15 at d_bar = 0, 16 at 0.5, 17 at 1.0
+mpc:                           # the tube-MPC Worker (D31-D34, D37, D45, D46)
+  horizon: null                # N, fixed and receding; every plan comes to rest by its end, so N >= H + the
+                               #   steps to stop from the planned speed. null: that smallest N, which depends
+                               #   on d_bar: 15 at d_bar = 0, 16 at 0.5, 17 at 1.0 (D45)
   q_pos: 10.0                  # Q = diag(q_pos, q_pos, q_vel, q_vel) and R = r I give the ancillary gain K
   q_vel: 1.0                   #   by LQR (D31), hence the tube, the tightened sets and the steps to stop;
   r: 0.1                       #   they are not in the plan's cost
   target_weight: 1.0e+4        # q_g: weight of the squared distance from the target when the segment ends (D37)
   effort_weight: 0.1           # r_e: weight of each nominal input until the end of the segment (D37)
+  start_weight: 0.1            # eps: weight of ||x - z_0||^2 with a tube, so the applied input is unique (D46);
+                               #   left out at d_bar = 0, where z_0 = x
   rho: 1.0e-3                  # margin [m] on the walls and the obstacles
   tail_tolerance: 1.0e-3       # Z within this of the minimal RPI set along the axes (D31)
   mip_gap: 1.0e-4              # relative MIP gap

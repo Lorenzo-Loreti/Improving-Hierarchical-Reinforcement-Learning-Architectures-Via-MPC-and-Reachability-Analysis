@@ -1,4 +1,4 @@
-"""Tests of the MPC Worker's problem data, without solvers (decision log D31-D34, D37)."""
+"""Tests of the MPC Worker's problem data, without solvers (decision log D31-D34, D37, D45, D46)."""
 
 from __future__ import annotations
 
@@ -13,11 +13,16 @@ from hrlmpc.geometry import Layout
 from hrlmpc.mpc_problem import MPCProblem, MPCSettings, project_disk
 
 
-def _setup(name: str, d_bar: float = 0.0, **settings: float) -> tuple[EnvConfig, Layout, MPCProblem]:
+def _setup(
+    name: str, d_bar: float = 0.0, segment_steps: int | None = None, **settings: float | None
+) -> tuple[EnvConfig, Layout, MPCProblem]:
+    """The problem of a layout; the horizon is 15 unless given (``None``: automatic, D45)."""
     cfg = load_env_config(f"configs/env/{name}.yaml")
     params = dataclasses.replace(cfg.physics, d_bar=d_bar)
     layout = Layout.from_config(cfg.geometry)
-    return cfg, layout, MPCProblem(params, layout, MPCSettings(**settings))  # type: ignore[arg-type]
+    settings.setdefault("horizon", 15)
+    problem = MPCProblem(params, layout, MPCSettings(**settings), segment_steps=segment_steps)  # type: ignore[arg-type]
+    return cfg, layout, problem
 
 
 def _random_plan(problem: MPCProblem, x: np.ndarray, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
@@ -44,15 +49,42 @@ def _brake(problem: MPCProblem, speed: float, steps: int) -> float:
 
 
 def test_settings_are_validated() -> None:
-    MPCSettings()
     defaults = MPCSettings()
-    assert (defaults.horizon, defaults.target_weight, defaults.effort_weight, defaults.r) == (15, 1e4, 0.1, 0.1)  # D37
-    for bad in ({"horizon": 0}, {"horizon": 2.5}, {"horizon": True}, {"q_pos": 0.0}, {"r": -1.0}, {"rho": 0.0},
-                {"target_weight": 0.0}, {"target_weight": float("inf")}, {"effort_weight": -0.1},
-                {"effort_weight": 0.0}, {"tail_tolerance": float("nan")}, {"mip_gap": -1e-4}, {"mip_gap": 1.0},
-                {"work_limit": 0.0}):
+    assert (defaults.target_weight, defaults.effort_weight, defaults.r) == (1e4, 0.1, 0.1)  # D37
+    assert defaults.horizon is None and defaults.start_weight == 0.1  # automatic horizon (D45), regularizer (D46)
+    assert MPCSettings(start_weight=0.0).start_weight == 0.0  # no regularizer
+    for bad in ({"horizon": 0}, {"horizon": 2.5}, {"horizon": True}, {"horizon": "auto"}, {"q_pos": 0.0},
+                {"r": -1.0}, {"rho": 0.0}, {"target_weight": 0.0}, {"target_weight": float("inf")},
+                {"effort_weight": -0.1}, {"effort_weight": 0.0}, {"start_weight": -0.1},
+                {"start_weight": float("nan")}, {"start_weight": float("inf")}, {"start_weight": True},
+                {"tail_tolerance": float("nan")}, {"mip_gap": -1e-4}, {"mip_gap": 1.0}, {"work_limit": 0.0}):
         with pytest.raises(ValueError):
             MPCSettings(**bad)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(("d_bar", "expected"), [(0.0, 15), (0.5, 16), (1.0, 17)])
+def test_an_automatic_horizon_leaves_just_room_to_stop_after_a_segment(d_bar: float, expected: int) -> None:
+    """D45: without a horizon in the settings, N = H + n_b, the smallest horizon that D37 accepts."""
+    _, _, problem = _setup("slalom", d_bar=d_bar, segment_steps=10, horizon=None)
+    assert problem.N == expected == 10 + problem.stopping_steps()
+    assert f"horizon N = {expected} (automatic, D45)" in problem.summary()
+    problem.check_segments(10)
+    with pytest.raises(ValueError, match="N >= "):
+        problem.check_segments(11)
+    _, _, longer = _setup("tunnel", d_bar=d_bar, segment_steps=12, horizon=None)
+    assert longer.N == expected + 2
+
+
+def test_an_automatic_horizon_needs_the_length_of_the_segments() -> None:
+    cfg = load_env_config("configs/env/tunnel.yaml")
+    layout = Layout.from_config(cfg.geometry)
+    with pytest.raises(ValueError, match="segment"):
+        MPCProblem(cfg.physics, layout, MPCSettings())
+    for bad in (0, -1, 2.5, True):
+        with pytest.raises(ValueError, match="segment"):
+            MPCProblem(cfg.physics, layout, MPCSettings(), segment_steps=bad)  # type: ignore[arg-type]
+    assert MPCProblem(cfg.physics, layout, MPCSettings(horizon=20), segment_steps=10).N == 20  # an explicit one stays
+    assert MPCProblem(cfg.physics, layout, MPCSettings(horizon=20)).N == 20
 
 
 def test_the_tightened_sets_follow_the_tube() -> None:
@@ -136,6 +168,25 @@ def test_the_cost_is_the_distance_at_the_waypoint_and_the_effort_before_it() -> 
     for bad in (0, N + 1, -1, 2.0, True):
         with pytest.raises(ValueError, match="steps_left"):
             problem.cost(z, v, g, bad)  # type: ignore[arg-type]
+    assert not problem.regularized
+    assert problem.cost(z, v, g, 4, x=rng.normal(size=4)) == pytest.approx(problem.cost(z, v, g, 4), rel=1e-12)
+
+
+def test_with_a_tube_the_cost_adds_the_distance_of_the_nominal_start() -> None:
+    """D46: with a tube the cost gains eps ||x - z_0||^2, which needs the measured state x; without a tube
+    (z_0 = x) or with eps = 0 the term is left out."""
+    _, _, problem = _setup("tunnel", d_bar=0.5, target_weight=100.0, effort_weight=0.5, start_weight=2.0)
+    N = problem.N
+    rng = np.random.default_rng(5)
+    z, v = rng.normal(size=(N + 1, 4)), rng.normal(size=(N, 2))
+    g, x = np.array([3.0, -1.0]), rng.normal(size=4)
+    base = 100.0 * np.sum((z[4, :2] - g) ** 2) + 0.5 * np.sum(v[:4] ** 2)
+    assert problem.regularized
+    assert problem.cost(z, v, g, 4, x=x) == pytest.approx(base + 2.0 * np.sum((x - z[0]) ** 2), rel=1e-12)
+    with pytest.raises(ValueError, match="measured state"):
+        problem.cost(z, v, g, 4)
+    _, _, off = _setup("tunnel", d_bar=0.5, target_weight=100.0, effort_weight=0.5, start_weight=0.0)
+    assert not off.regularized and off.cost(z, v, g, 4) == pytest.approx(base, rel=1e-12)
 
 
 @pytest.mark.parametrize("d_bar", [0.0, 0.5, 1.0])
@@ -339,9 +390,11 @@ def test_the_summary_and_the_stopping_time() -> None:
     _, _, problem = _setup("slalom", d_bar=0.5, horizon=16)
     text = problem.summary()
     assert "planned speed <= 1.083" in text and "4 obstacles, 192 binaries" in text and "q_g = 10000" in text
+    assert "eps = 0.1" in text  # the regularizer of D46, with a tube only
     assert problem.stopping_steps() == 6
     _, _, calm = _setup("tunnel")
-    assert calm.stopping_steps() == 5
+    assert calm.stopping_steps() == 5 and "eps =" not in calm.summary()  # no tube, no regularizer
+    assert "automatic" not in calm.summary()  # an explicit horizon
     _, _, rough = _setup("tunnel", d_bar=1.0, horizon=17)
     assert rough.stopping_steps() == 7
 

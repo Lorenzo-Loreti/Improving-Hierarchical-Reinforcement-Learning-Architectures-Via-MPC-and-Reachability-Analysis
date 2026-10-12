@@ -1,4 +1,5 @@
-"""Tests of the PPO_MPC training loop and its command line (decision log D6, D24-D35, D37); they need PyTorch.
+"""Tests of the PPO_MPC training loop and its command line (decision log D6, D24-D35, D37-D40, D45, D47); they
+need PyTorch.
 
 The Worker is a NumPy stand-in with the interface of :class:`hrlmpc.mpc_worker.MPCWorker`
 (a PD law toward the target), so the loop is tested without the solvers;
@@ -20,7 +21,7 @@ torch = pytest.importorskip("torch")
 
 import hrlmpc.train_ppo_mpc as train_ppo_mpc  # noqa: E402
 from hrlmpc.config import EnvConfig, env_config_from_dict  # noqa: E402
-from hrlmpc.mpc_command import CANDIDATE, EMERGENCY, KEPT, SOLVER, WorkerStep  # noqa: E402
+from hrlmpc.mpc_command import CANDIDATE, EMERGENCY, EXITS, KEPT, SOLVER, SearchReport, WorkerStep  # noqa: E402
 from hrlmpc.mpc_problem import MPCProblem, project_disk  # noqa: E402
 from hrlmpc.ppo_mpc_config import PPOMPCConfig, ppo_mpc_config_from_dict  # noqa: E402
 from hrlmpc.reachability import ReachableTargets, support_directions  # noqa: E402
@@ -99,11 +100,11 @@ class DiskTargetsStandIn:
         def support(x: np.ndarray) -> np.ndarray:
             return x[:2] + 0.5 * x[2:] + 0.8 * directions
 
-        def project(x: np.ndarray, q: np.ndarray) -> tuple[np.ndarray, int]:
+        def project(x: np.ndarray, q: np.ndarray) -> tuple[np.ndarray, SearchReport]:
             shift = (0.02 if x[1] > 0.0 else 0.0) if cls.by_side else 0.01
             g = q + np.array([0.0, shift])
             cls.projected.append(g.copy())
-            return g, 0
+            return g, SearchReport()
 
         targets = ReachableTargets(support=support, project=project, radius=1.2,
                                    release=lambda: setattr(targets, "released", True))
@@ -176,6 +177,17 @@ def _recomputed(steps: list[tuple[int, int, float]], agents: int, prefix: str, l
     }
 
 
+@pytest.mark.parametrize(("d_bar", "expected"), [(0.0, 15), (0.5, 16), (1.0, 17)])
+def test_the_horizon_follows_the_disturbance(d_bar: float, expected: int) -> None:
+    """D45: the shipped configuration leaves the horizon to the problem, H + the steps to stop; an explicit one
+    stays."""
+    env = _env(physics={"d_bar": d_bar})
+    assert train_ppo_mpc.problem_of(env, _config()).N == expected
+    assert train_ppo_mpc.problem_of(env, _config(mpc__horizon=20)).N == 20
+    with pytest.raises(ValueError, match="N >= "):
+        train_ppo_mpc.problem_of(env, _config(mpc__horizon=expected - 1))
+
+
 def test_a_short_run_writes_its_directory(tmp_path: Path) -> None:
     PDWorker.instances.clear()
     run_dir = train(_env(), _config(), budget=80, seed=1, run_dir=tmp_path / "run", worker_factory=PDWorker, echo=None)
@@ -194,9 +206,15 @@ def test_a_short_run_writes_its_directory(tmp_path: Path) -> None:
         expected = _recomputed(rollout_worker.steps[40 * k : 40 * (k + 1)], 2, "mpc")
         assert {key: record[key] for key in expected} == pytest.approx(expected)
         assert record["mpc/steps"] == 40.0  # every sample of the rollout, one Worker step each
+        # D47: how each search ended, here always the default of the stand-in
+        assert record["mpc/exit_converged_count"] == 40.0
+        assert all(record[f"mpc/exit_{name}_count"] == 0.0 for name in EXITS[1:])
+        assert record["mpc/exact_inaccurate_count"] == record["mpc/exact_infeasible_count"] == 0.0
+        assert record["mpc/exact_uncertified_count"] == 0.0
         assert not any(k.startswith("worker/") and not k.startswith("worker/reward") for k in record)  # no learning
     config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
-    assert config["algorithm"] == "ppo_mpc" and config["agent"]["mpc"]["horizon"] == 15
+    assert rollout_worker.problem.N == 15 == eval_worker.problem.N  # the automatic horizon at d_bar = 0 (D45)
+    assert config["algorithm"] == "ppo_mpc" and config["agent"]["mpc"]["horizon"] == 15  # stated in the run
     assert rollout_worker.num_slots == 2 and eval_worker.num_slots == 4
     assert rollout_worker.closed and eval_worker.closed
     assert any(slot is not None for slot in rollout_worker.resets)  # episodes ended and their slots were reset
@@ -248,14 +266,15 @@ def test_the_budget_must_end_on_an_update_and_an_evaluation(tmp_path: Path, budg
 
 
 def test_a_horizon_without_room_to_stop_after_a_segment_is_refused(tmp_path: Path) -> None:
-    """D37: N >= H + the steps to stop from the planned speed, 15 at d_bar = 0 and 16 at 0.5; checked before
-    any Worker is built or anything is written."""
+    """D37: an explicit horizon must satisfy N >= H + the steps to stop from the planned speed, 15 at d_bar = 0
+    and 16 at 0.5 (the automatic one of D45 always does); checked before any Worker is built or anything is
+    written."""
     PDWorker.instances.clear()
     with pytest.raises(ValueError, match="N >= 15"):
         train(_env(), _config(mpc__horizon=14), budget=40, seed=1, run_dir=tmp_path / "a", worker_factory=PDWorker,
               echo=None)
     with pytest.raises(ValueError, match="N >= 16"):
-        train(_env(physics={"d_bar": 0.5}), _config(), budget=40, seed=1, run_dir=tmp_path / "b",
+        train(_env(physics={"d_bar": 0.5}), _config(mpc__horizon=15), budget=40, seed=1, run_dir=tmp_path / "b",
               worker_factory=PDWorker, echo=None)
     assert not (tmp_path / "a").exists() and not (tmp_path / "b").exists() and not PDWorker.instances
 
@@ -327,10 +346,9 @@ def test_every_worker_is_closed_even_if_one_fails_to(tmp_path: Path) -> None:
 
 def test_the_saved_manager_reproduces_the_last_evaluation(tmp_path: Path) -> None:
     env = _env(physics={"d_bar": 0.5})
-    run_dir = train(env, _config(mpc__horizon=16), budget=80, seed=5, run_dir=tmp_path / "run",
-                    worker_factory=PDWorker, echo=None)
+    run_dir = train(env, _config(), budget=80, seed=5, run_dir=tmp_path / "run", worker_factory=PDWorker, echo=None)
     manager, hierarchy, problem = load_manager(run_dir)
-    assert hierarchy.segment_steps == 10 and problem.N == 16 and problem.tube.d_bar == 0.5
+    assert hierarchy.segment_steps == 10 and problem.N == 16 and problem.tube.d_bar == 0.5  # the run's horizon
     from hrlmpc.env import ObservationMap
     from hrlmpc.evaluation import evaluate, spawn_grid
     from hrlmpc.hierarchy import HierarchicalController
@@ -342,6 +360,20 @@ def test_the_saved_manager_reproduces_the_last_evaluation(tmp_path: Path) -> Non
     last = _details(run_dir)[-1]
     assert [ep.length for ep in result.episodes] == last["length"]
     np.testing.assert_allclose([ep.episode_return for ep in result.episodes], last["episode_return"])
+
+
+def test_a_run_from_before_the_regularizer_is_loaded_without_it(tmp_path: Path) -> None:
+    """D46: the ``config.yaml`` of a run of steps 9 and 10 has no ``mpc.start_weight``; its Worker had no
+    regularizer, so :func:`load_manager` rebuilds it with ``start_weight = 0``, at any disturbance."""
+    run_dir = train(_env(physics={"d_bar": 0.5}), _config(), budget=40, seed=2, run_dir=tmp_path / "run",
+                    worker_factory=PDWorker, echo=None)
+    path = run_dir / "config.yaml"
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert raw["agent"]["mpc"]["start_weight"] == 0.1 and raw["agent"]["mpc"]["horizon"] == 16
+    del raw["agent"]["mpc"]["start_weight"]
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    _, _, problem = load_manager(run_dir)
+    assert problem.settings.start_weight == 0.0 and not problem.regularized and problem.N == 16
 
 
 def test_the_learning_rates_are_constant_unless_annealed(tmp_path: Path) -> None:
@@ -501,6 +533,7 @@ def test_architecture_4_trains_on_its_projected_targets(tmp_path: Path) -> None:
     for record in updates:
         assert record["reach/projection_mean"] == pytest.approx(0.01)  # the stand-in's shift
         assert record["reach/projection_failure_count"] == 0.0
+        assert record["reach/projection_exit_converged_count"] == record["reach/decisions"]  # D47
     # the decisions of training: one per segment, those of the first update included
     assert sum(r["reach/decisions"] for r in updates) == sum(r["hierarchy/segments"] for r in updates) + 2
     # every target the Worker steered to was a projected one, held for its whole segment

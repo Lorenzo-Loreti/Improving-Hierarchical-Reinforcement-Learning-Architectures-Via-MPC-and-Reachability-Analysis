@@ -1,5 +1,5 @@
 """Typed configuration of PPO_MPC and PPO_MPC_reachability, loaded from YAML (code rule C2, decision log D24,
-D27, D28, D34, D37, D38).
+D27, D28, D34, D37, D38, D45, D46).
 
 ``configs/agent/ppo_mpc.yaml`` (architecture 3) and
 ``configs/agent/ppo_mpc_reachability.yaml`` (architecture 4) hold the hierarchy
@@ -10,10 +10,12 @@ of support directions of D38), the evaluation protocol and the runtime. The
 Manager and the hierarchy are hPPO's; the Worker is the tube MPC of D31-D34
 with the waypoint cost of D37, designed for the disturbance of the
 environment's configuration. The two architectures differ only in the
-targets. Unknown, missing or repeated keys are errors. Whether the
-horizon leaves room to stop after a segment depends on the environment's
-physics, so the training checks it (:meth:`hrlmpc.mpc_problem.MPCProblem.check_segments`).
-This module does not import PyTorch or the solvers.
+targets. Unknown, missing or repeated keys are errors. The horizon that
+leaves room to stop after a segment depends on the environment's physics:
+``mpc.horizon: null`` lets the Worker's problem take the smallest one (D45),
+and the training checks an explicit one
+(:meth:`hrlmpc.mpc_problem.MPCProblem.check_segments`). This module does not
+import PyTorch or the solvers.
 """
 
 from __future__ import annotations
@@ -99,7 +101,17 @@ class PPOMPCConfig:
 
 _TOP = ("hierarchy", "rollout", "manager", "mpc", "reachability", "evaluation", "runtime")
 _MPC = (
-    "horizon", "q_pos", "q_vel", "r", "target_weight", "effort_weight", "rho", "tail_tolerance", "mip_gap", "work_limit"
+    "horizon",
+    "q_pos",
+    "q_vel",
+    "r",
+    "target_weight",
+    "effort_weight",
+    "start_weight",
+    "rho",
+    "tail_tolerance",
+    "mip_gap",
+    "work_limit",
 )
 
 
@@ -114,8 +126,8 @@ def _number(value: Any, where: str) -> float:
 def _mpc(data: Any) -> MPCSettings:
     raw = check_keys(data, _MPC, "mpc")
     horizon = raw["horizon"]
-    if isinstance(horizon, bool) or not isinstance(horizon, int):
-        raise ValueError(f"mpc.horizon must be an integer, got {horizon!r}")
+    if horizon is not None and (isinstance(horizon, bool) or not isinstance(horizon, int)):
+        raise ValueError(f"mpc.horizon must be an integer or null, got {horizon!r}")
     limit = raw["work_limit"]
     return MPCSettings(
         horizon=horizon,
@@ -124,6 +136,7 @@ def _mpc(data: Any) -> MPCSettings:
         r=_number(raw["r"], "mpc.r"),
         target_weight=_number(raw["target_weight"], "mpc.target_weight"),
         effort_weight=_number(raw["effort_weight"], "mpc.effort_weight"),
+        start_weight=_number(raw["start_weight"], "mpc.start_weight"),
         rho=_number(raw["rho"], "mpc.rho"),
         tail_tolerance=_number(raw["tail_tolerance"], "mpc.tail_tolerance"),
         mip_gap=_number(raw["mip_gap"], "mpc.mip_gap"),

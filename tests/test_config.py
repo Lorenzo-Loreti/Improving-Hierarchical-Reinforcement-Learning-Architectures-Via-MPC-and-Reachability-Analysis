@@ -1,8 +1,9 @@
-"""Tests of the YAML environment configuration (code rule C2; decision log D9, D11-D14)."""
+"""Tests of the YAML environment configuration (code rule C2; decision log D9, D11-D14, D45)."""
 
 from __future__ import annotations
 
 import copy
+import dataclasses
 import math
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,18 @@ def test_tunnel_config_is_the_slalom_without_obstacles() -> None:
     assert tunnel.geometry.arena == slalom.geometry.arena
     assert tunnel.geometry.goal_x == slalom.geometry.goal_x
     assert (tunnel.physics, tunnel.task, tunnel.reward) == (slalom.physics, slalom.task, slalom.reward)
+
+
+@pytest.mark.parametrize(
+    ("layout", "level", "d_bar"), [("slalom", "d05", 0.5), ("slalom", "d10", 1.0), ("tunnel", "d05", 0.5),
+                                   ("tunnel", "d10", 1.0)]
+)
+def test_each_disturbance_level_has_its_own_files(layout: str, level: str, d_bar: float) -> None:
+    """D45: the file of a level is its layout's, with only the radius of the disturbance set changed."""
+    base = load_env_config(CONFIG_DIR / f"{layout}.yaml")
+    cfg = load_env_config(CONFIG_DIR / f"{layout}_{level}.yaml")
+    assert base.physics.d_bar == 0.0
+    assert cfg == dataclasses.replace(base, physics=dataclasses.replace(base.physics, d_bar=d_bar))
 
 
 @pytest.mark.parametrize("d_bar", [0.0, 0.5, 1.0])
