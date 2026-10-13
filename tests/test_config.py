@@ -1,4 +1,4 @@
-"""Tests of the YAML environment configuration (code rule C2; decision log D9, D11-D14, D45)."""
+"""Tests of the YAML environment configuration (code rule C2; decision log D9, D11-D14, D45, D51)."""
 
 from __future__ import annotations
 
@@ -66,6 +66,18 @@ def test_each_disturbance_level_has_its_own_files(layout: str, level: str, d_bar
     cfg = load_env_config(CONFIG_DIR / f"{layout}_{level}.yaml")
     assert base.physics.d_bar == 0.0
     assert cfg == dataclasses.replace(base, physics=dataclasses.replace(base.physics, d_bar=d_bar))
+
+
+@pytest.mark.parametrize(
+    ("layout", "level"),
+    [("slalom", ""), ("slalom", "_d05"), ("slalom", "_d10"), ("tunnel", ""), ("tunnel", "_d05"), ("tunnel", "_d10")],
+)
+def test_sparse_reward_files_drop_only_the_progress_term(layout: str, level: str) -> None:
+    """D51: the sparse file of a layout and level is its shaped file with the progress coefficient set to 0."""
+    shaped = load_env_config(CONFIG_DIR / f"{layout}{level}.yaml")
+    sparse = load_env_config(CONFIG_DIR / f"{layout}_sparse{level}.yaml")
+    assert shaped.reward.progress_coef == 10.0
+    assert sparse == dataclasses.replace(shaped, reward=dataclasses.replace(shaped.reward, progress_coef=0.0))
 
 
 @pytest.mark.parametrize("d_bar", [0.0, 0.5, 1.0])

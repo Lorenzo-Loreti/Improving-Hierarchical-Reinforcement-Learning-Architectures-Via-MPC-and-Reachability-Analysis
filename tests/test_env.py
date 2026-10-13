@@ -179,6 +179,17 @@ def test_reward_of_free_motion_with_full_thrust(s: float) -> None:
     assert not out.info.contact.any()
 
 
+def test_sparse_reward_has_no_progress_term() -> None:
+    """D51: with the sparse reward (progress_coef 0) every reward equals the unshaped reward of D13."""
+    config = _config("slalom_sparse", physics={"d_bar": 0.0})
+    assert config.reward.progress_coef == 0.0
+    env = NavigationEnv(config, num_envs=2, seed=SEED)
+    env.reset(positions=[[2.0, 0.0], [2.0, -1.95]], velocities=[[0.0, 0.0], [0.0, -1.2]])
+    out = env.step([[1.0, 0.0], [0.0, 0.0]])
+    np.testing.assert_allclose(out.reward, out.info.reward_unshaped, atol=1e-12)
+    np.testing.assert_allclose(out.reward, [-1.0 - 0.01, -1.0 - 50.0 * 0.64 - 1.0], atol=1e-10)
+
+
 def test_effort_is_charged_on_the_saturated_input() -> None:
     """D13: a command of 5 m/s^2 is saturated to a_max, so the effort term is 0.01, not 0.04."""
     config = _config(physics={"d_bar": 0.0})
@@ -301,14 +312,18 @@ def test_reset_with_given_states_is_validated() -> None:
     np.testing.assert_array_equal(env.positions, [before[0], [3.0, 1.0]])
 
 
-@pytest.mark.parametrize("name", ["slalom", "tunnel"])
-def test_shipped_configs_meet_the_criterion_of_the_contact_penalty(name: str) -> None:
-    """D18, D22: braking against a wall does not pay off.
+@pytest.mark.parametrize(
+    ("name", "expected_threshold"),
+    [("slalom", 48.44), ("tunnel", 48.44), ("slalom_sparse", 44.04), ("tunnel_sparse", 44.04)],
+)
+def test_shipped_configs_meet_the_criterion_of_the_contact_penalty(name: str, expected_threshold: float) -> None:
+    """D18, D22, D51: braking against a wall does not pay off.
 
     One saved step is worth at most c_t + (1 - gamma_RL) B + c_e, plus, when
     the shaping discount s exceeds gamma_RL, the step's share (s - gamma_RL)
     c_p d of the progress reward, with d at most the arena's length to the
-    goal line; c_n must exceed that worth divided by a_max dt.
+    goal line; c_n must exceed that worth divided by a_max dt. Without the
+    progress term (the sparse reward of D51) the bound is that of D18.
     """
     config = _config(name)
     r, p = config.reward, config.physics
@@ -318,7 +333,7 @@ def test_shipped_configs_meet_the_criterion_of_the_contact_penalty(name: str) ->
     step = r.time_penalty + (1.0 - gamma) * r.success_bonus + r.effort_coef
     step += max(r.shaping_discount - gamma, 0.0) * r.progress_coef * d_max
     threshold = step / (p.a_max * p.dt)
-    assert threshold == pytest.approx(48.44)  # 44.04 with exact shaping (D18)
+    assert threshold == pytest.approx(expected_threshold)  # 44.04 with exact shaping too (D18)
     assert r.contact_impulse_coef >= threshold
     assert r.contact_step_coef > 0.0
 
