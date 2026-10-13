@@ -189,6 +189,7 @@ def _train(
             update_s = time.perf_counter() - tick
             training_time += rollout_s + update_s
             metrics.update(episode_metrics(rollout.episodes))
+            metrics.update(env.curriculum_metrics())  # the stage of the spawn curriculum, if any (D62)
             metrics.update(
                 {
                     "train/updates": k + 1,

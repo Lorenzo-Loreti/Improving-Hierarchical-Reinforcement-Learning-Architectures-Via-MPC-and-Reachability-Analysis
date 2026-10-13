@@ -275,6 +275,7 @@ def _train(
             update_s = time.perf_counter() - tick
             training_time += rollout_s + update_s
             metrics.update(episode_metrics(rollout.episodes))
+            metrics.update(env.curriculum_metrics())  # the stage of the spawn curriculum, if any (D62)
             metrics.update(_hierarchy_metrics(rollout))
             for level, (actor_rate, critic_rate) in rates.items():
                 metrics[f"{level}/learning_rate"] = actor_rate

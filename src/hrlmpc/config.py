@@ -1,9 +1,10 @@
 """Typed configuration of the environment, loaded from YAML (code rule C2).
 
 A file under ``configs/env/`` describes one layout: the physical parameters
-(decision log D9), the geometry (D11), the task (D13) and the reward
-coefficients (D13, D14). Loading validates every value. Unknown or missing
-keys are errors, so a typo cannot silently fall back to a default.
+(decision log D9), the geometry (D11), the task (D13; with the optional
+reverse spawn curriculum of D62) and the reward coefficients (D13, D14).
+Loading validates every value. Unknown or missing keys are errors, so a typo
+cannot silently fall back to a default.
 """
 
 from __future__ import annotations
@@ -79,12 +80,49 @@ class GeometryConfig:
 
 
 @dataclass(frozen=True)
-class TaskConfig:
-    """Initial-state distribution and horizon (decision log D13).
+class CurriculumConfig:
+    """The reverse spawn curriculum of the training episodes (decision log D62).
+
+    Training starts are drawn from a band of the spawn box's shape that begins
+    at ``x_start`` and slides back by ``step`` whenever a block of ``window``
+    episodes started in the current band has a success rate of at least
+    ``threshold``, until it coincides with the spawn box. The evaluation keeps
+    its own starts (:mod:`hrlmpc.curriculum`).
 
     Attributes:
-        spawn: Initial positions are uniform on this box, with zero velocity.
+        x_start: Left end [m] of the first band.
+        step: By how much [m] the band slides back per stage; at most the spawn box's width.
+        window: Episodes of a block, over which the success rate is measured.
+        threshold: Success rate of a block that advances the stage, in ``(0, 1]``.
+
+    Raises:
+        ValueError: If the step is not positive, the window is below 1 or the
+            threshold is outside ``(0, 1]``.
+    """
+
+    x_start: float
+    step: float
+    window: int
+    threshold: float
+
+    def __post_init__(self) -> None:
+        if not self.step > 0.0:
+            raise ValueError(f"curriculum step must be positive, got {self.step}")
+        if self.window < 1:
+            raise ValueError(f"curriculum window must be at least 1, got {self.window}")
+        if not 0.0 < self.threshold <= 1.0:
+            raise ValueError(f"curriculum threshold must lie in (0, 1], got {self.threshold}")
+
+
+@dataclass(frozen=True)
+class TaskConfig:
+    """Initial-state distribution and horizon (decision log D13), and the curriculum of the training starts (D62).
+
+    Attributes:
+        spawn: Initial positions are uniform on this box, with zero velocity;
+            with a curriculum, the evaluation's starts and the last band.
         horizon: Episodes are truncated after this many steps.
+        curriculum: The reverse spawn curriculum, or ``None`` for starts uniform on ``spawn``.
 
     Raises:
         ValueError: If the horizon is not positive.
@@ -92,6 +130,7 @@ class TaskConfig:
 
     spawn: Box
     horizon: int
+    curriculum: CurriculumConfig | None = None
 
     def __post_init__(self) -> None:
         if self.horizon < 1:
@@ -147,7 +186,9 @@ class EnvConfig:
 
     Raises:
         ValueError: If the spawn box leaves the arena, overlaps an obstacle or
-            reaches the goal region.
+            reaches the goal region; or, with a curriculum, if its first band
+            starts behind the spawn box or crosses the goal line, or its step
+            exceeds the spawn box's width (the bands must overlap).
     """
 
     physics: PhysicsParams
@@ -164,6 +205,21 @@ class EnvConfig:
                 raise ValueError(f"spawn box {spawn} overlaps obstacle {i} {obstacle}")
         if not spawn.x[1] < self.geometry.goal_x:
             raise ValueError(f"spawn box {spawn} reaches the goal region p_x >= {self.geometry.goal_x}")
+        curriculum = self.task.curriculum
+        if curriculum is not None:
+            width = spawn.x[1] - spawn.x[0]
+            if curriculum.x_start < spawn.x[0]:
+                raise ValueError(f"the curriculum's x_start {curriculum.x_start} lies behind the spawn box {spawn}")
+            if curriculum.step > width:
+                raise ValueError(
+                    f"the curriculum's step {curriculum.step} exceeds the spawn box's width {width}: consecutive "
+                    "bands would leave a gap"
+                )
+            band = Box(x=(curriculum.x_start, curriculum.x_start + width), y=spawn.y)
+            if not band.x[1] <= self.geometry.goal_x:
+                raise ValueError(
+                    f"the curriculum's first band {band} crosses the goal line p_x = {self.geometry.goal_x}"
+                )
 
 
 _PHYSICS_KEYS = ("dt", "a_max", "v_max", "gamma", "gamma_w", "d_bar")
@@ -178,11 +234,13 @@ _REWARD_KEYS = (
 )
 
 
-def _section(data: Mapping[str, Any], keys: tuple[str, ...], where: str) -> dict[str, Any]:
-    """Return ``data`` as a dict after checking that its keys are exactly ``keys``."""
+def _section(
+    data: Mapping[str, Any], keys: tuple[str, ...], where: str, optional: tuple[str, ...] = ()
+) -> dict[str, Any]:
+    """Return ``data`` as a dict after checking that its keys are exactly ``keys``, apart from ``optional``."""
     if not isinstance(data, Mapping):
         raise ValueError(f"{where} must be a mapping, got {type(data).__name__}")
-    missing = [k for k in keys if k not in data]
+    missing = [k for k in keys if k not in data and k not in optional]
     unknown = [k for k in data if k not in keys]
     if missing or unknown:
         raise ValueError(f"{where}: missing keys {missing}, unknown keys {unknown}")
@@ -218,6 +276,19 @@ def _box(data: Any, where: str) -> Box:
     return Box(x=_interval(section["x"], f"{where}.x"), y=_interval(section["y"], f"{where}.y"))
 
 
+def _curriculum(data: Any, where: str) -> CurriculumConfig | None:
+    """Convert ``{x_start, step, window, threshold}`` to a :class:`CurriculumConfig`; ``None`` stays ``None``."""
+    if data is None:
+        return None
+    section = _section(data, ("x_start", "step", "window", "threshold"), where)
+    return CurriculumConfig(
+        x_start=_float(section["x_start"], f"{where}.x_start"),
+        step=_float(section["step"], f"{where}.step"),
+        window=_int(section["window"], f"{where}.window"),
+        threshold=_float(section["threshold"], f"{where}.threshold"),
+    )
+
+
 def env_config_from_dict(data: Mapping[str, Any]) -> EnvConfig:
     """Build and validate an :class:`EnvConfig` from a nested mapping.
 
@@ -246,10 +317,11 @@ def env_config_from_dict(data: Mapping[str, Any]) -> EnvConfig:
         goal_x=_float(geometry_raw["goal_x"], "geometry.goal_x"),
     )
 
-    task_raw = _section(top["task"], ("spawn", "horizon"), "task")
+    task_raw = _section(top["task"], ("spawn", "horizon", "curriculum"), "task", optional=("curriculum",))
     task = TaskConfig(
         spawn=_box(task_raw["spawn"], "task.spawn"),
         horizon=_int(task_raw["horizon"], "task.horizon"),
+        curriculum=_curriculum(task_raw.get("curriculum"), "task.curriculum"),
     )
 
     reward_raw = _section(top["reward"], _REWARD_KEYS, "reward")

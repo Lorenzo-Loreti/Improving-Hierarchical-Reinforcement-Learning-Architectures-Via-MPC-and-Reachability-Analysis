@@ -357,6 +357,7 @@ def _train(
             update_s = time.perf_counter() - tick
             training_time += rollout_s + update_s
             metrics.update(episode_metrics(rollout.episodes))
+            metrics.update(env.curriculum_metrics())  # the stage of the spawn curriculum, if any (D62)
             metrics.update(_hierarchy_metrics(rollout))
             full = rollout.segments.steps == segment_steps
             metrics.update(reached_metrics(rollout.segments.end_distances[full], reach_tolerance, "hierarchy"))

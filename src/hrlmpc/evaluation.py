@@ -56,6 +56,7 @@ thesis; the tests check both statements numerically.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 import time
@@ -389,7 +390,8 @@ def evaluate(
         inputs = bool(declared)
     elif declared is not None and bool(declared) != inputs:
         raise ValueError(f"inputs={inputs} contradicts the controller's inputs={declared}")
-    env = NavigationEnv(config, num_envs=len(points), seed=seed, autoreset=True)
+    plain = dataclasses.replace(config, task=dataclasses.replace(config.task, curriculum=None))  # explicit starts (D62)
+    env = NavigationEnv(plain, num_envs=len(points), seed=seed, autoreset=True)
     obs = env.reset(positions=points)
     reset = getattr(controller, "reset", None)
     if callable(reset):
