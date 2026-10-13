@@ -25,6 +25,12 @@ whole batch at once, it is less than the latency of a single agent's decision.
 The largest is that of the slowest step, a mean over the agents; the slowest
 single decision of an MPC Worker is its own ``eval_mpc/solve_ms_max``.
 
+Oracle (D44). Where a table of the minimum times of the starts exists
+(:mod:`hrlmpc.oracle`), the evaluation also measures each successful episode
+against the oracle's minimum time, as ``oracle_gap_mean`` and
+``oracle_gap_max``; the bound of F7 below stays as ``arrival_gap_*``, for
+continuity with the runs of steps 7-10. Without a table the oracle gaps are NaN.
+
 Minimum-time bound (F7). Let ``A = a_max + d_bar`` and
 
     s_0 = ||v_0||,    s_(k+1) = min((1 - gamma T_s) s_k + T_s A, v_max).
@@ -56,7 +62,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -67,6 +73,9 @@ from hrlmpc.env import EpisodeStats, NavigationEnv
 from hrlmpc.geometry import TOL, Layout
 from hrlmpc.model import PhysicsParams
 from hrlmpc.paths import free_path_distance
+
+if TYPE_CHECKING:
+    from hrlmpc.oracle import OracleTable
 
 FloatArray = NDArray[np.float64]
 IntArray = NDArray[np.int64]
@@ -263,6 +272,7 @@ class Evaluation:
         step_ms: The controller's wall-clock time [ms] at every step, per agent: each call, for all the
             agents, divided by their number (D50); empty if not measured.
         duration_s: Wall-clock time [s] of the whole evaluation; NaN if not measured.
+        oracle_steps: ``(N,)`` minimum times of the oracle (D44) from each start, or ``None`` without a table.
     """
 
     starts: FloatArray
@@ -271,19 +281,24 @@ class Evaluation:
     path_lengths: FloatArray
     step_ms: FloatArray = field(default_factory=lambda: np.zeros(0))
     duration_s: float = math.nan
+    oracle_steps: IntArray | None = None
 
     def metrics(self, prefix: str = "eval/") -> dict[str, float]:
         """Means over the episodes, the success rate and the arrival-time gap.
 
         The arrival gap of a successful episode is its length relative to the
         bound, minus one; its mean and maximum are over the successful
-        episodes only (NaN if there are none). ``contact_fraction`` is the
-        fraction of episodes with at least one contact step.
+        episodes only (NaN if there are none). The oracle gap is the same
+        against the oracle's minimum time (D44), NaN without a table.
+        ``contact_fraction`` is the fraction of episodes with at least one
+        contact step.
         """
         eps = self.episodes
         success = np.array([ep.success for ep in eps])
         lengths = np.array([ep.length for ep in eps], dtype=np.float64)
         gaps = lengths[success] / self.lower_bounds[success] - 1.0
+        oracle = self.oracle_steps
+        oracle_gaps = lengths[success] / oracle[success] - 1.0 if oracle is not None else np.zeros(0)
         result = {
             "success_rate": float(success.mean()),
             "return": float(np.mean([ep.episode_return for ep in eps])),
@@ -291,6 +306,8 @@ class Evaluation:
             "length": float(lengths.mean()),
             "arrival_gap_mean": float(gaps.mean()) if gaps.size else float("nan"),
             "arrival_gap_max": float(gaps.max()) if gaps.size else float("nan"),
+            "oracle_gap_mean": float(oracle_gaps.mean()) if oracle_gaps.size else float("nan"),
+            "oracle_gap_max": float(oracle_gaps.max()) if oracle_gaps.size else float("nan"),
             "contact_fraction": float(np.mean([ep.contact_steps > 0 for ep in eps])),
         }
         for name in _MEAN_FIELDS:
@@ -314,6 +331,7 @@ class Evaluation:
             "starts": self.starts.tolist(),
             "path_length": self.path_lengths.tolist(),
             "lower_bound": [int(n) for n in self.lower_bounds],
+            "oracle_steps": None if self.oracle_steps is None else [int(n) for n in self.oracle_steps],
         }
         for entry in fields(EpisodeStats):
             if entry.name != "env":
@@ -322,7 +340,13 @@ class Evaluation:
 
 
 def evaluate(
-    controller: Controller, config: EnvConfig, starts: ArrayLike, *, seed: int, inputs: bool | None = None
+    controller: Controller,
+    config: EnvConfig,
+    starts: ArrayLike,
+    *,
+    seed: int,
+    inputs: bool | None = None,
+    oracle: OracleTable | None = None,
 ) -> Evaluation:
     """Run one episode of ``controller`` from each start, at rest.
 
@@ -345,18 +369,21 @@ def evaluate(
             (:meth:`~hrlmpc.env.NavigationEnv.step_input`), instead of actions
             in the square mapped by D15; by default the controller's ``inputs``
             attribute, if it has one, and ``False`` otherwise.
+        oracle: The oracle table of the layout for these starts (D44), if there is one.
 
     Returns:
-        The episodes, the bounds of F7 for each start and the compute.
+        The episodes, the bounds of F7 and the oracle's minimum times for each start, and the compute.
 
     Raises:
         ValueError: If ``starts`` is not ``(N, 2)`` or a start is not
-            admissible, or ``inputs`` contradicts the controller's ``inputs`` attribute.
+            admissible, ``inputs`` contradicts the controller's ``inputs`` attribute,
+            or the oracle table is not that of these starts.
     """
     started = time.perf_counter()
     points = np.asarray(starts, dtype=np.float64)
     if points.ndim != 2 or points.shape[1] != 2 or len(points) == 0:
         raise ValueError(f"starts must have shape (N, 2) with N >= 1, got {points.shape}")
+    oracle_steps = None if oracle is None else oracle.steps_for(points)
     declared = getattr(controller, "inputs", None)
     if inputs is None:
         inputs = bool(declared)
@@ -381,7 +408,7 @@ def evaluate(
     bounds = arrival_lower_bound(env.layout, points, config.physics, distance=lengths)
     episodes = tuple(first[i] for i in range(len(points)))
     duration = time.perf_counter() - started
-    return Evaluation(points.copy(), episodes, bounds, lengths, np.array(step_ms), duration)
+    return Evaluation(points.copy(), episodes, bounds, lengths, np.array(step_ms), duration, oracle_steps)
 
 
 def evaluation_name(action: str, group: str = "") -> str:

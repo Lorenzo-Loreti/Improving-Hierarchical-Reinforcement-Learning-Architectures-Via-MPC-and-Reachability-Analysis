@@ -54,7 +54,7 @@ CURVE_KEYS: tuple[str, ...] = (
 """Evaluation metrics plotted by the command line, those of the mean (D20)."""
 
 _FRACTIONS = ("/success_rate", "/contact_fraction")
-_PROVENANCE = {"seed", "env_file", "agent_file"}
+_PROVENANCE = {"seed", "env_file", "agent_file", "oracle_file"}
 
 
 def curve_keys(action: str = "mean") -> tuple[str, ...]:
@@ -268,7 +268,8 @@ def _table(
             f"{extra[i] if extra else ''}"
         )
     lines.append("")
-    for key in curve_keys(action):
+    oracle_keys = (p + "oracle_gap_mean", p + "oracle_gap_max")  # reported where measured (D44)
+    for key in (*curve_keys(action), *oracle_keys):
         values = np.array([math.nan if f.get(key) is None else f[key] for f in finals], dtype=np.float64)
         values = values[~np.isnan(values)]
         if values.size:

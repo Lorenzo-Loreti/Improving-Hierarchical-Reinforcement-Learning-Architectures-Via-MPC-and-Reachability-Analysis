@@ -50,7 +50,7 @@ def _without_time(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def test_a_short_run_writes_its_directory(tmp_path: Path) -> None:
-    run_dir = train(_env(), _ppo(), budget=32, seed=1, run_dir=tmp_path / "run")
+    run_dir = train(_env(), _ppo(), budget=32, seed=1, run_dir=tmp_path / "run", oracle_dir=tmp_path / "none")
     names = sorted(p.name for p in run_dir.iterdir())
     assert names == ["config.yaml", "evaluations.jsonl", "final.pt", "meta.json", "metrics.jsonl"]
     records = _records(run_dir)
@@ -80,6 +80,30 @@ def test_a_short_run_writes_its_directory(tmp_path: Path) -> None:
     details = [json.loads(line) for line in (run_dir / "evaluations.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [(d["env_steps"], d["action"]) for d in details] == [(n, a) for n in (0, 16, 32) for a in EVAL_ACTIONS]
     assert details[0]["starts"] == details[1]["starts"] == spawn_grid(_env().task.spawn, (2, 2)).tolist()
+    assert config["oracle_file"] is None and details[0]["oracle_steps"] is None  # no table in oracle_dir (D44)
+    assert all(r["eval/oracle_gap_mean"] is None for r in evaluations)  # NaN is logged as null
+
+
+def test_the_oracle_table_of_the_layout_is_used_when_there_is_one(tmp_path: Path) -> None:
+    """D44: a table of the layout and starts in ``oracle_dir`` gives the oracle gaps and is recorded in the run."""
+    from hrlmpc.oracle import OracleEntry, OracleSettings, OracleTable, layout_signature
+
+    env, ppo = _env(), _ppo()
+    starts = spawn_grid(env.task.spawn, (2, 2))
+    physics, geometry = layout_signature(env)
+    entries = tuple(
+        OracleEntry((float(p[0]), float(p[1])), 9, 9, 0.0, (), 9, True, 0, 0, 0.0) for p in starts
+    )
+    folder = tmp_path / "oracle"
+    folder.mkdir()
+    OracleTable(physics, geometry, {"rho": OracleSettings.rho}, entries).save(folder / "tiny.json")
+    run_dir = train(env, ppo, budget=16, seed=1, run_dir=tmp_path / "run", echo=None, oracle_dir=folder)
+    config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    assert config["oracle_file"] == str((folder / "tiny.json").resolve())
+    details = [json.loads(line) for line in (run_dir / "evaluations.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert all(d["oracle_steps"] == [9, 9, 9, 9] for d in details)
+    for record in [r for r in _records(run_dir) if "eval/success_rate" in r]:
+        assert "eval/oracle_gap_mean" in record and "eval_mode/oracle_gap_max" in record
 
 
 def test_the_learning_rates_decay_linearly_over_the_budget(tmp_path: Path) -> None:
@@ -197,6 +221,8 @@ def test_inconsistent_settings_are_refused_before_anything_is_written(tmp_path: 
         train(_env(), _ppo(), budget=32, seed=99, run_dir=tmp_path / "run")  # _ppo() evaluates with seed 99
     with pytest.raises(ValueError, match="overwrite"):
         train(_env(), _ppo(), budget=32, seed=1, run_dir=tmp_path / "run", provenance={"seed": 5})
+    with pytest.raises(ValueError, match="overwrite"):  # D44: the table is found by content, not declared
+        train(_env(), _ppo(), budget=32, seed=1, run_dir=tmp_path / "run", provenance={"oracle_file": "x"})
     assert not (tmp_path / "run").exists()
     with pytest.raises(SystemExit):
         main(["--env", "x.yaml", "--agent", "y.yaml", "--budget", "32", "--seeds", "1", "1"])

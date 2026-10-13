@@ -59,6 +59,7 @@ from hrlmpc.hierarchy import (
     start_segments,
 )
 from hrlmpc.hppo_config import HPPOConfig, hppo_config_from_dict, hppo_config_to_dict, load_hppo_config
+from hrlmpc.oracle import find_oracle, oracle_line, oracle_record
 from hrlmpc.ppo import Batch, PPOAgent, make_batch
 from hrlmpc.rollout import compute_gae, episode_metrics
 from hrlmpc.utils.runlog import RunLogger
@@ -137,6 +138,7 @@ def train(
     provenance: Mapping[str, Any] | None = None,
     repo_dir: str | Path | None = None,
     echo: Callable[[str], None] | None = print,
+    oracle_dir: str | Path | None = None,
 ) -> Path:
     """Train hPPO for ``budget`` samples and write the run directory.
 
@@ -151,6 +153,8 @@ def train(
         repo_dir: Directory inside the git checkout, for ``meta.json``; by
             default the package's own directory.
         echo: Receives one line per evaluation; ``None`` keeps quiet.
+        oracle_dir: Where to look for the oracle table of the layout (D44); by default the repository's
+            ``configs/oracle/``. Without a table the oracle gaps are NaN.
 
     Returns:
         The run directory.
@@ -170,7 +174,7 @@ def train(
         )
     if seed == hppo_config.evaluation.seed:
         raise ValueError(f"the training seed {seed} must differ from the evaluation seed")
-    reserved = {"algorithm", "seed", "budget", "env", "agent"}
+    reserved = {"algorithm", "seed", "budget", "env", "agent", "oracle_file"}
     if reserved & set(provenance or {}):
         raise ValueError(f"provenance entries may not overwrite {sorted(reserved & set(provenance or {}))}")
     if hppo_config.runtime.device.startswith("cuda") and "CUBLAS_WORKSPACE_CONFIG" not in os.environ:
@@ -179,7 +183,7 @@ def train(
     warn_only = torch.is_deterministic_algorithms_warn_only_enabled()
     threads, benchmark = torch.get_num_threads(), torch.backends.cudnn.benchmark
     try:
-        return _train(env_config, hppo_config, budget, seed, Path(run_dir), provenance, repo_dir, echo)
+        return _train(env_config, hppo_config, budget, seed, Path(run_dir), provenance, repo_dir, echo, oracle_dir)
     finally:  # leave the process's global PyTorch settings as they were
         torch.use_deterministic_algorithms(deterministic, warn_only=warn_only)
         torch.set_num_threads(threads)
@@ -195,6 +199,7 @@ def _train(
     provenance: Mapping[str, Any] | None,
     repo_dir: str | Path | None,
     echo: Callable[[str], None] | None,
+    oracle_dir: str | Path | None,
 ) -> Path:
     per_update, every = hppo_config.batch_size, hppo_config.evaluation.every
     seed_everything(seed)
@@ -206,12 +211,15 @@ def _train(
     manager = PPOAgent(env.observation_size, env.action_size, m_cfg.network, m_cfg.update, device=device)
     worker = PPOAgent(WORKER_INPUT_SIZE, env.action_size, w_cfg.network, w_cfg.update, device=device)
     starts = spawn_grid(env_config.task.spawn, hppo_config.evaluation.grid)
+    found = find_oracle(env_config, starts, oracle_dir)
+    oracle = None if found is None else found[1]
     config: dict[str, Any] = {
         "algorithm": "hppo",
         "seed": seed,
         "budget": budget,
         **dict(provenance or {}),
         "env": env_config_to_dict(env_config),
+        "oracle_file": oracle_record(found),
         "agent": hppo_config_to_dict(hppo_config),
     }
     num_updates = budget // per_update
@@ -223,7 +231,7 @@ def _train(
             for action in EVAL_ACTIONS:  # the means, then the modes (D43)
                 name = evaluation_name(action)
                 controller = deterministic_controller(manager, worker, hierarchy, action)
-                result = evaluate(controller, env_config, starts, seed=hppo_config.evaluation.seed)
+                result = evaluate(controller, env_config, starts, seed=hppo_config.evaluation.seed, oracle=oracle)
                 metrics.update(result.metrics(prefix=f"{name}/"))
                 metrics.update(result.timing(name))
                 append_details(path / "evaluations.jsonl", result, env_steps=env.counter.env_steps, action=action)
@@ -231,6 +239,8 @@ def _train(
             if echo is not None:
                 echo(f"{path.name}: {env.counter.env_steps:>8} samples | {console_line(metrics)}")
 
+        if echo is not None:
+            echo(f"{path.name}: {oracle_line(found)}")
         evaluate_now()
         state = start_segments(env, hierarchy, manager.act, manager.value)
         learned = LearnedWorker(policy=worker.act, value=worker.value)
