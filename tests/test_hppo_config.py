@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 from pathlib import Path
 from typing import Any
 
@@ -136,3 +137,13 @@ def test_repeated_keys_are_rejected(tmp_path: Path) -> None:
     path.write_text(text, encoding="utf-8")
     with pytest.raises(ValueError, match="segment_steps"):
         load_hppo_config(path)
+
+
+@pytest.mark.parametrize("segment_steps", [6, 4])
+def test_the_sweep_files_differ_in_the_segment_length_only(segment_steps: int) -> None:
+    """D60: the agility sweep changes H alone; the target radius follows from it."""
+    base, sweep = load_hppo_config(SHIPPED), load_hppo_config(SHIPPED.with_name(f"hppo_h{segment_steps}.yaml"))
+    assert sweep == dataclasses.replace(
+        base, hierarchy=dataclasses.replace(base.hierarchy, segment_steps=segment_steps)
+    )
+    assert sweep.hierarchy.segment_steps == segment_steps and base.hierarchy.segment_steps == 10

@@ -1,0 +1,65 @@
+# PPO_MPC with segments of H = 4 steps: the agility sweep of D60 (alpha = v_max / (a_max H dt) = 1.20 against 0.48 at H = 10).
+# Identical to configs/agent/ppo_mpc.yaml apart from segment_steps (a test); the target radius, the
+# Worker's horizon N = H + n_b (D45) and the map of architecture 4 follow from H. Run with
+# --runs-dir runs/sweep_h4 so that the runs do not mix with those of H = 10.
+# PPO_MPC (decision log D24-D28, D31-D35, D37, D45, D46): hPPO's Manager and
+# hierarchy with the tube-MPC Worker of the pre-alignment PPO_MPC
+# (algorithms/tube_mpc.py at tag pre-alignment), ported onto the model of the
+# specification, with the waypoint cost of D37: the target is where the agent
+# should be when the segment ends. The Worker's tube and horizon follow the
+# disturbance d_bar of the environment's configuration (one file per level:
+# configs/env/<layout>_d05.yaml and _d10.yaml, D45), so this file serves every
+# level. The values are provisional until the tuning protocol (Q13).
+# Write floats with a dot and a signed exponent (3.0e-4, 1.0e+5): YAML 1.1 reads 3e-4 and 1.0e5 as strings.
+
+hierarchy:                     # D24, D27
+  segment_steps: 4             # H: one Manager decision per segment of 0.4 s (D60)
+  target_reach_factor: 1.5     # targets within R = 1.5 v_max H dt = 1.8 m of the position
+
+rollout:
+  num_envs: 8                  # parallel agents of NavigationEnv, one Worker slot each
+  num_steps: 256               # steps per agent and update: 2 048 samples per update
+
+manager:                       # hPPO's Manager (D28)
+  network:
+    hidden_sizes: [64, 64]     # separate tanh MLPs for the actor and the critic
+  update:
+    discount: 0.99             # gamma_RL per step; gamma_RL^tau between decisions (D27)
+    epochs: 10
+    minibatches: 4             # about 51 segments per minibatch
+    learning_rate: 3.0e-4      # actor
+    anneal_learning_rate: false
+    critic_lr_mult: 3.0        # critic learning rate = 3 x learning_rate
+    adam_eps: 1.0e-5
+    gae_lambda: 0.95           # per decision
+    clip_coef: 0.2
+    entropy_coef: 0.01
+    max_grad_norm: 0.5         # per network
+    value_norm_horizon: 10     # updates in the running statistics of the critic's targets
+
+mpc:                           # the tube-MPC Worker (D31-D34, D37, D45, D46)
+  horizon: null                # N, fixed and receding; every plan comes to rest by its end, so N >= H + the
+                               #   steps to stop from the planned speed. null: that smallest N, which depends
+                               #   on d_bar: 15 at d_bar = 0, 16 at 0.5, 17 at 1.0 (D45)
+  q_pos: 10.0                  # Q = diag(q_pos, q_pos, q_vel, q_vel) and R = r I give the ancillary gain K
+  q_vel: 1.0                   #   by LQR (D31), hence the tube, the tightened sets and the steps to stop;
+  r: 0.1                       #   they are not in the plan's cost
+  target_weight: 1.0e+4        # q_g: weight of the squared distance from the target when the segment ends (D37)
+  effort_weight: 0.1           # r_e: weight of each nominal input until the end of the segment (D37)
+  start_weight: 0.1            # eps: weight of ||x - z_0||^2 with a tube, so the applied input is unique (D46);
+                               #   left out at d_bar = 0, where z_0 = x
+  rho: 1.0e-3                  # margin [m] on the walls and the obstacles
+  tail_tolerance: 1.0e-3       # Z within this of the minimal RPI set along the axes (D31)
+  mip_gap: 1.0e-4              # relative MIP gap
+  work_limit: null             # Gurobi's work limit per solve; none, so every solve is deterministic
+
+reachability: null             # architecture 3: the targets of D24 (configs/agent/ppo_mpc_reachability.yaml: D38)
+
+evaluation:                    # decision log D20, D29
+  every: 10240                 # samples between evaluations (5 updates); the first is at 0
+  grid: [5, 5]                 # starts on the spawn box, at rest
+  seed: 12345                  # evaluation environment: the same for every run, distinct from the training seeds
+
+runtime:
+  device: cpu
+  torch_threads: 1

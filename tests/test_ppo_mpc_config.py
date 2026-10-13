@@ -139,3 +139,15 @@ def test_a_repeated_key_is_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         load_ppo_mpc_config(path)
     assert isinstance(load_ppo_mpc_config(SHIPPED), PPOMPCConfig)
+
+
+@pytest.mark.parametrize("segment_steps", [6, 4])
+def test_the_sweep_files_differ_in_the_segment_length_only(segment_steps: int) -> None:
+    """D60: the agility sweep changes H alone, for both MPC architectures; the Worker's horizon follows (D45)."""
+    for path in (SHIPPED, REACHABILITY):
+        base = load_ppo_mpc_config(path)
+        sweep = load_ppo_mpc_config(path.with_name(f"{path.stem}_h{segment_steps}.yaml"))
+        assert sweep == dataclasses.replace(
+        base, hierarchy=dataclasses.replace(base.hierarchy, segment_steps=segment_steps)
+    )
+        assert sweep.hierarchy.segment_steps == segment_steps and base.hierarchy.segment_steps == 10
