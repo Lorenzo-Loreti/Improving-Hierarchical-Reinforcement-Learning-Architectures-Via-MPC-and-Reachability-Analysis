@@ -1,4 +1,5 @@
-"""The MPC Worker of PPO_MPC: the tube MPC of D31-D34 with the waypoint cost of D37, solved by Gurobi and Clarabel.
+"""The MPC Worker of PPO_MPC: the tube MPC of D31-D34 with the waypoint cost of D37, solved by Gurobi and Clarabel
+(decision log D31-D35, D37-D39, D45-D47, D49).
 
 :mod:`hrlmpc.mpc_problem` defines the problem; this module solves it, at every
 step and for every agent, with the scheme of the pre-alignment Worker
@@ -29,6 +30,22 @@ F3 covers. When the reachable positions fix every binary
 (:meth:`~hrlmpc.mpc_problem.MPCProblem.fixed_binaries`), as on the tunnel, the
 problem is convex and Clarabel solves it alone.
 
+Two remedies keep the plans the search finds (D49):
+
+- R1: a search whose rounds run out after it found exact plans, none within
+  the gap, returns the cheapest of them (:data:`~hrlmpc.mpc_command.BEST`),
+  feasible for its binaries. It is the solvers' plan of the step, which
+  algorithm 3 below still compares with the shifted plan. A relaxation without
+  a solution or a solver failure still ends the search without a plan.
+- R2: an exact solve that Clarabel ends inaccurate, or at its iteration
+  limit, with a plan counts as a plan if the plan meets the constraints within
+  the tolerances of the relaxation's own plan
+  (:meth:`~hrlmpc.mpc_problem.MPCProblem.plan_within`, and the gauge of
+  ``x - z_0`` at most ``1 + CUT_TOL``).
+
+Both keep the guarantees of the relaxation's own plan; exceptions and
+infeasible verdicts still give no plan.
+
 The shifted previous plan (algorithm 3 of the tube-MPC note) is the benchmark
 of the solvers' plan and the fallback. Theorem 4.1 keeps it feasible after
 every disturbance in ``D``; of its constraints, only the tube constraint
@@ -53,14 +70,17 @@ rounds of cuts is survived: the round goes on with the relaxation's plan.
 Each search reports how it ended (D47, the exits of
 :data:`~hrlmpc.mpc_command.EXITS`): with every binary fixed, a plan
 (``FIXED``) or none (``UNSOLVED``); otherwise the exact plan within the gap
-(``CONVERGED``), the relaxation's own plan (``RELAXATION``), the rounds
-exhausted (``ROUNDS``) or a relaxation without a solution (``EMPTY``); and
-``ERROR`` when a solver failure ended it. It also counts the exact solves that
-gave no plan, inaccurate (an inaccurate optimum, or Clarabel's iteration limit:
-a plan may exist) or infeasible (certified or almost: the binaries admit no
-plan), and the exact plans that the relaxation's bound did not certify within
-the gap: feasible plans, lost if the rounds then run out. ``cut_rounds`` counts
-the mixed-integer solves the search started, whether or not it found a plan.
+(``CONVERGED``), the relaxation's own plan (``RELAXATION``), the cheapest
+uncertified exact plan when the rounds ran out (``BEST``, R1), the rounds
+exhausted without an exact plan (``ROUNDS``) or a relaxation without a
+solution (``EMPTY``); and ``ERROR`` when a solver failure ended it. It also
+counts the exact solves that gave no plan, inaccurate (an inaccurate optimum,
+or Clarabel's iteration limit, whose plan the checker refused: a plan may
+exist) or infeasible (certified or almost: the binaries admit no plan); the
+exact plans that the relaxation's bound did not certify within the gap; the
+inaccurate exact plans that the checker accepted (R2); and whether the plan it
+returns is one of those. ``cut_rounds`` counts the mixed-integer solves the
+search started, whether or not it found a plan.
 
 Every solve depends only on its inputs and on the slot's earlier solves in the
 same episode (the shifted plan, and the cuts of ``Z`` it keeps): Gurobi runs
@@ -94,6 +114,7 @@ from gurobipy import GRB
 from numpy.typing import ArrayLike, NDArray
 
 from hrlmpc.mpc_command import (
+    BEST,
     CANDIDATE,
     CONVERGED,
     EMERGENCY,
@@ -122,7 +143,8 @@ CUT_TOL = 1e-6
 """How far past the edge of a disk, or outside ``Z``, a plan's point must lie to get a cut."""
 
 MAX_CUT_ROUNDS = 25
-"""Largest number of mixed-integer solves per step before the shifted plan takes over."""
+"""Largest number of mixed-integer solves per search; then the cheapest exact plan found takes over (R1 of D49),
+or, without one, the shifted plan."""
 
 Z_SEED_KEEP = 32
 """How many of the slot's latest cuts of ``Z`` each solve starts with."""
@@ -142,7 +164,17 @@ GAUGE_ZERO = 1e-12
 LICENCE_ERRORS = (GRB.ERROR_NO_LICENSE, GRB.ERROR_SIZE_LIMIT_EXCEEDED)
 """Gurobi's errors that propagate: no licence, or a model beyond the licence's size."""
 
+PLAN_STATUSES = ("optimal", "optimal_inaccurate", "user_limit")
+"""cvxpy's statuses of an exact solve that come with a plan: Clarabel's optimum; an inaccurate optimum or its
+iteration limit, whose plan counts only if the checker accepts it (R2 of D49)."""
+
 _POLYGON = np.array([[np.cos(t), np.sin(t)] for t in 2.0 * np.pi * np.arange(BASE_SIDES) / BASE_SIDES])
+
+
+def _certified(cost: float, bound: float, gap: float) -> bool:
+    """Whether an exact plan of cost ``cost`` is optimal to the MIP gap: within ``gap`` of the relaxation's lower
+    bound ``bound`` on the exact optimum."""
+    return cost <= bound + gap * abs(cost) + 1e-9
 
 
 def z_directions() -> FloatArray:
@@ -247,13 +279,15 @@ class _ExactProblem:
     def __call__(
         self, x: FloatArray, target: FloatArray, steps_left: int, deltas: Binaries
     ) -> tuple[FloatArray, FloatArray, float] | None:
-        """``(z, v, J)`` of the exact optimum for these binaries, or ``None``; the status in :attr:`last_status`.
+        """``(z, v, J)`` of Clarabel's plan for these binaries, or ``None``; the status in :attr:`last_status`.
 
-        ``None`` when the binaries leave the exact problem infeasible, or
-        Clarabel reaches only an inaccurate solution or its iteration limit: a
-        plan whose constraints are not met to the solver's tolerance has no
-        place in a robust plan, and the step falls back on the relaxation's
-        cuts or on the shifted plan.
+        A plan comes with every status of :data:`PLAN_STATUSES`: the optimum,
+        or an inaccurate optimum or the iteration limit, whose plan the caller
+        must check before it uses it (R2 of D49), since a plan whose
+        constraints are not met to the solver's tolerance has no place in a
+        robust plan unless they are met to the tolerances of the relaxation's
+        own plan. ``None`` when the binaries leave the exact problem
+        infeasible, certified or almost, or Clarabel leaves no plan.
 
         Raises:
             SolverFailure: If Clarabel fails (cvxpy's ``SolverError``).
@@ -267,7 +301,7 @@ class _ExactProblem:
         except cp.SolverError as error:
             raise SolverFailure(f"Clarabel failed on the exact problem: {error}") from error
         self.last_status = self.prob.status
-        if self.prob.status != "optimal" or self.z.value is None or self.v.value is None:
+        if self.prob.status not in PLAN_STATUSES or self.z.value is None or self.v.value is None:
             return None
         z, v = np.array(self.z.value), np.array(self.v.value)
         return z, v, self.problem.cost(z, v, target, k, x=x)
@@ -417,6 +451,11 @@ class MPCWorker:
         self._inaccurate = 0
         self._infeasible = 0
         self._uncertified = 0
+        self._accepted = 0
+        self._last_accepted = False
+        self._best: tuple[FloatArray, FloatArray, float] | None = None
+        self._best_accepted = False
+        self._plan_accepted = False
         self._z_dirs = z_directions()
         self._z_h = problem.tube.support(self._z_dirs)
         self._gauge = None if problem.tube.is_zero else _GaugeOracle(problem)
@@ -506,12 +545,17 @@ class MPCWorker:
 
     # ---------------------------------------------------------------- helpers
     def _begin_search(self) -> None:
-        """Clear the report of the search that starts (D47)."""
+        """Clear the report and the best exact plan of the search that starts (D47, D49)."""
         self._errors = 0
         self._exit = CONVERGED
         self._inaccurate = 0
         self._infeasible = 0
         self._uncertified = 0
+        self._accepted = 0
+        self._last_accepted = False
+        self._best = None
+        self._best_accepted = False
+        self._plan_accepted = False
 
     def _report(self) -> SearchReport:
         """The report of the last search (D47)."""
@@ -521,6 +565,8 @@ class MPCWorker:
             exact_inaccurate=self._inaccurate,
             exact_infeasible=self._infeasible,
             exact_uncertified=self._uncertified,
+            exact_accepted=self._accepted,
+            plan_accepted=int(self._plan_accepted),
         )
 
     def _set_objective(self, slot: _Slot, target: FloatArray, steps_left: int, x: FloatArray) -> None:
@@ -562,19 +608,45 @@ class MPCWorker:
         """Solve the slot's relaxation (Gurobi)."""
         slot.m.optimize()
 
+    def _within(self, x: FloatArray, z: FloatArray, v: FloatArray) -> bool:
+        """R2 of D49: whether an inaccurate exact plan meets the constraints within the tolerances of the
+        relaxation's own plan: :meth:`~hrlmpc.mpc_problem.MPCProblem.plan_within` to :data:`CUT_TOL` and, with a
+        tube, the gauge of ``x - z_0`` at most ``1 + CUT_TOL``. A failure of the gauge rejects the plan and counts
+        as an error; an inaccurate gauge, infinite, rejects it too."""
+        if not self.problem.plan_within(x, z, v, CUT_TOL):
+            return False
+        if self._gauge is None:
+            return True
+        try:
+            gamma, _ = self._gauge(x - z[0])
+        except SolverFailure:
+            self._errors += 1
+            return False
+        return gamma <= 1.0 + CUT_TOL
+
     def _exact_solve(
         self, x: FloatArray, target: FloatArray, steps_left: int, deltas: Binaries
     ) -> tuple[FloatArray, FloatArray, float] | None:
-        """The exact problem for these binaries; a solve without a plan is counted by its status (D47).
+        """The exact problem for these binaries: Clarabel's optimum, or its inaccurate plan if the checker accepts
+        it (R2 of D49), which :attr:`_last_accepted` then marks; a solve without a plan is counted by its status
+        (D47).
 
         Raises:
             SolverFailure: If Clarabel fails.
         """
+        self._last_accepted = False
         exact = self._exact(x, target, steps_left, deltas)
+        status = self._exact.last_status
+        if exact is not None and status != "optimal":  # an inaccurate optimum, or the iteration limit
+            if self._within(x, exact[0], exact[1]):
+                self._accepted += 1
+                self._last_accepted = True
+                return exact
+            exact = None
         if exact is None:
-            if self._exact.last_status in ("infeasible", "infeasible_inaccurate"):
+            if status in ("infeasible", "infeasible_inaccurate"):
                 self._infeasible += 1
-            else:  # an inaccurate optimum, or the iteration limit
+            else:  # an inaccurate optimum or the iteration limit, without a plan the checker accepts
                 self._inaccurate += 1
         return exact
 
@@ -591,8 +663,9 @@ class MPCWorker:
     def _optimize(
         self, slot: _Slot, x: FloatArray, target: FloatArray, steps_left: int, bounds: Bounds
     ) -> Plan | None:
-        """The optimal plan, or ``None`` if there is none, the cuts did not converge or a solver failed; the exit
-        of the search is recorded (D47).
+        """The optimal plan; the cheapest exact plan found if the rounds ran out (R1 of D49); ``None`` if there is
+        no plan, the rounds ran out without an exact plan or a solver failed. The exit of the search is recorded
+        (D47), and whether its plan is an accepted inaccurate plan (D49).
 
         Raises:
             gurobipy.GurobiError: Gurobi's licence errors (:data:`LICENCE_ERRORS`).
@@ -601,6 +674,7 @@ class MPCWorker:
             if all(np.array_equal(lb, ub) for lb, ub in bounds):
                 exact = self._exact_solve(x, target, steps_left, [lb for lb, _ in bounds])
                 self._exit = UNSOLVED if exact is None else FIXED
+                self._plan_accepted = exact is not None and self._last_accepted
                 return None if exact is None else exact[:2]
             return self._cut_loop(slot, x, target, steps_left)
         except SolverFailure:
@@ -614,9 +688,20 @@ class MPCWorker:
             self._exit = ERROR
             return None
 
+    def _out_of_rounds(self) -> Plan | None:
+        """R1 of D49: when the rounds run out, the cheapest exact plan the search found, with the exit
+        :data:`~hrlmpc.mpc_command.BEST`; without one, nothing, with the exit :data:`~hrlmpc.mpc_command.ROUNDS`."""
+        if self._best is None:
+            self._exit = ROUNDS
+            return None
+        self._exit = BEST
+        self._plan_accepted = self._best_accepted
+        return self._best[0], self._best[1]
+
     def _cut_loop(self, slot: _Slot, x: FloatArray, target: FloatArray, steps_left: int) -> Plan | None:
-        """Relaxation, exact problem and cuts, until the exact plan is optimal to the gap (module docstring); the
-        exit is recorded, except a failure's, which :meth:`_optimize` records."""
+        """Relaxation, exact problem and cuts, until the exact plan is optimal to the gap (module docstring), or
+        the cheapest uncertified exact plan when the rounds run out (R1 of D49); the exit is recorded, except a
+        failure's, which :meth:`_optimize` records."""
         m = slot.m
         cuts: list[Any] = []
         gap = self.problem.settings.mip_gap
@@ -645,11 +730,14 @@ class MPCWorker:
                 deltas = self._one_face_each(slot)
                 bound = m.ObjBound
                 exact = self._exact_plan(x, target, steps_left, deltas)
-                if exact is not None and exact[2] <= bound + gap * abs(exact[2]) + 1e-9:
+                if exact is not None and _certified(exact[2], bound, gap):
                     self._exit = CONVERGED
+                    self._plan_accepted = self._last_accepted
                     return exact[0], exact[1]
-                if exact is not None:  # feasible, but not certified within the gap
+                if exact is not None:  # feasible, but not certified within the gap: the cheapest is kept (R1)
                     self._uncertified += 1
+                    if self._best is None or exact[2] < self._best[2]:
+                        self._best, self._best_accepted = exact, self._last_accepted
                 added = len(cuts)
                 plans: list[tuple[FloatArray, FloatArray, float]] = [(slot.z.X, slot.v.X, CUT_TOL)]
                 if exact is not None:
@@ -668,8 +756,7 @@ class MPCWorker:
                 if len(cuts) == added:  # the relaxation's plan already satisfies the exact sets
                     self._exit = RELAXATION
                     return slot.z.X.copy(), slot.v.X.copy()
-            self._exit = ROUNDS
-            return None
+            return self._out_of_rounds()
         finally:
             if cuts:
                 m.remove(cuts)
@@ -772,6 +859,8 @@ class MPCWorker:
             exact_inaccurate=report.exact_inaccurate,
             exact_infeasible=report.exact_infeasible,
             exact_uncertified=report.exact_uncertified,
+            exact_accepted=report.exact_accepted,
+            plan_accepted=report.plan_accepted,
         )
         return u, info
 

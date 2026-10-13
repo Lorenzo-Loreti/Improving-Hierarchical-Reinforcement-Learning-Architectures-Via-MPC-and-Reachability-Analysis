@@ -1,4 +1,4 @@
-"""Tests of the hPPO training loop and its command line (decision log D6, D24-D29); they need PyTorch."""
+"""Tests of the hPPO training loop and its command line (decision log D6, D24-D29, D43, D50); they need PyTorch."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import yaml
 torch = pytest.importorskip("torch")
 
 from hrlmpc.config import EnvConfig, env_config_from_dict, env_config_to_dict  # noqa: E402
-from hrlmpc.evaluation import evaluate, spawn_grid  # noqa: E402
+from hrlmpc.evaluation import EVAL_ACTIONS, evaluate, spawn_grid  # noqa: E402
 from hrlmpc.hppo_config import HPPOConfig, hppo_config_from_dict, hppo_config_to_dict  # noqa: E402
 from hrlmpc.train_hppo import deterministic_controller, load_hierarchy, main, train  # noqa: E402
 
@@ -73,13 +73,23 @@ def test_a_short_run_writes_its_directory(tmp_path: Path) -> None:
         for name in ("reward", "reward_progress", "reward_contact", "reward_effort"):
             assert f"worker/{name}" in record
         assert "hierarchy/target_distance" in record and record["rollout/episodes"] >= 1
+        assert record["time/rollout_s"] > 0.0 and record["time/update_s"] > 0.0  # D50: both levels' updates
+    np.testing.assert_allclose(
+        [r["time/train_s"] for r in updates], np.cumsum([r["time/rollout_s"] + r["time/update_s"] for r in updates]),
+        rtol=1e-12,
+    )
+    for record in evaluations:  # D43, D50: both actions in one record, each with the controller's time per step
+        assert {"eval_mode/success_rate", "eval_mode/arrival_gap_max", "eval_mode/contact_fraction"} <= set(record)
+        for name in ("eval", "eval_mode"):
+            assert record[f"time/{name}_s"] > 0.0
+            assert record[f"time/{name}_step_ms_max"] >= record[f"time/{name}_step_ms_mean"] > 0.0
     config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
     assert (config["algorithm"], config["budget"], config["seed"]) == ("hppo", 80, 1)
     assert env_config_from_dict(config["env"]) == _env()
     assert hppo_config_from_dict(config["agent"]) == _hppo()
     details = [json.loads(line) for line in (run_dir / "evaluations.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert [d["env_steps"] for d in details] == [0, 40, 80]
-    assert details[0]["starts"] == spawn_grid(_env().task.spawn, (2, 2)).tolist()
+    assert [(d["env_steps"], d["action"]) for d in details] == [(n, a) for n in (0, 40, 80) for a in EVAL_ACTIONS]
+    assert details[0]["starts"] == details[1]["starts"] == spawn_grid(_env().task.spawn, (2, 2)).tolist()
 
 
 def test_the_learning_rates_are_constant_unless_annealed(tmp_path: Path) -> None:
@@ -197,14 +207,41 @@ def test_the_updates_get_the_rollouts_transitions(tmp_path: Path, monkeypatch: p
 
 
 def test_the_final_checkpoint_reproduces_the_last_evaluation(tmp_path: Path) -> None:
+    """With either action (D43)."""
     env, hppo = _env(physics={"d_bar": 0.5}), _hppo()
     run_dir = train(env, hppo, budget=80, seed=2, run_dir=tmp_path / "run")
     manager, worker, hierarchy = load_hierarchy(run_dir)
-    controller = deterministic_controller(manager, worker, hierarchy)
-    result = evaluate(controller, env, spawn_grid(env.task.spawn, (2, 2)), seed=hppo.evaluation.seed)
-    last = json.loads((run_dir / "evaluations.jsonl").read_text(encoding="utf-8").splitlines()[-1])
-    assert result.details()["length"] == last["length"]
-    assert result.details()["unshaped_return"] == last["unshaped_return"]
+    lines = [json.loads(line) for line in (run_dir / "evaluations.jsonl").read_text(encoding="utf-8").splitlines()]
+    for action in EVAL_ACTIONS:
+        controller = deterministic_controller(manager, worker, hierarchy, action)
+        result = evaluate(controller, env, spawn_grid(env.task.spawn, (2, 2)), seed=hppo.evaluation.seed)
+        last = [line for line in lines if line["action"] == action][-1]
+        assert result.details()["length"] == last["length"]
+        assert result.details()["unshaped_return"] == last["unshaped_return"]
+
+
+def test_the_evaluations_take_the_same_statistic_at_both_levels(tmp_path: Path,
+                                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    """D43: the evaluation with the mean takes the means of both policies, the one with the mode their modes, at
+    every evaluation point and in this order."""
+    import hrlmpc.train_hppo as module
+
+    seen: list[tuple[str, str]] = []
+    original = module.evaluate
+
+    def spy(controller: Any, config: Any, starts: Any, **kwargs: Any) -> Any:
+        seen.append((controller.manager.__name__, controller.worker.__name__))
+        return original(controller, config, starts, **kwargs)
+
+    monkeypatch.setattr(module, "evaluate", spy)
+    run_dir = train(_env(), _hppo(), budget=40, seed=1, run_dir=tmp_path / "run", echo=None)
+    mean, mode = ("deterministic_action",) * 2, ("mode_action",) * 2
+    assert seen == [mean, mode, mean, mode]
+    manager, worker, hierarchy = load_hierarchy(run_dir)
+    controller = deterministic_controller(manager, worker, hierarchy, "mode")
+    assert controller.manager == manager.mode_action and controller.worker == worker.mode_action
+    with pytest.raises(ValueError, match="mean"):
+        deterministic_controller(manager, worker, hierarchy, "median")
 
 
 def test_the_command_line_trains_every_seed(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -217,7 +254,8 @@ def test_the_command_line_trains_every_seed(tmp_path: Path, capsys: pytest.Captu
     assert [p.name.split("-")[0] for p in runs] == ["seed1", "seed2"]
     config = yaml.safe_load((runs[0] / "config.yaml").read_text(encoding="utf-8"))
     assert config["env_file"] == str(env_file) and config["agent_file"] == str(agent_file)
-    assert str(runs[1]) in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert str(runs[1]) in out and "mean/mode: success" in out  # D50: both evaluations on the console
 
 
 def test_evaluations_do_not_change_the_training(tmp_path: Path) -> None:

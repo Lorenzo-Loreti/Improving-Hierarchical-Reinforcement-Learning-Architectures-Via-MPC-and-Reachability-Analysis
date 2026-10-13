@@ -1,5 +1,5 @@
 """Training of PPO_MPC and PPO_MPC_reachability (architectures 3 and 4; decision log D6, D20, D24-D35, D37-D40,
-D45-D47).
+D43, D45-D47, D49, D50).
 
 Usage, from the repository root::
 
@@ -27,9 +27,9 @@ Each seed writes the run directory ``<runs-dir>/<env>/<algorithm>/seed<seed>-<UT
 
     config.yaml        resolved configuration: environment, agent (with the horizon the Worker used), budget,
                        seed
-    meta.json          provenance (hrlmpc.utils.runlog)
-    metrics.jsonl      one record per update and per evaluation, keyed by the sample counters
-    evaluations.jsonl  per-start results of every evaluation
+    meta.json          provenance and machine (hrlmpc.utils.runlog)
+    metrics.jsonl      one record per update and per evaluation point, keyed by the sample counters
+    evaluations.jsonl  per-start results of every evaluation, one line per action
     final.pt           the Manager's weights, optimizer state and target statistics
 
 Besides the Manager's and the episodes' metrics, every update logs the
@@ -38,17 +38,24 @@ Worker's steps under ``mpc/`` and every evaluation under ``eval_mpc/``
 rates of the steps on the shifted plan (the fallback when the solvers found
 nothing, or kept because cheaper), the counts of emergencies, of shifted plans
 outside their tube and of solver failures, the free binaries, the cut rounds,
-how each search for a plan ended and the exact solves without a plan (D47)
-and, with a tube, the largest tube ratio. Both log how close the agents end
-their full segments to the targets (D40) under ``hierarchy/`` and
-``eval_hierarchy/`` (:func:`hrlmpc.reachability.reached_metrics`), and
+how each search for a plan ended, the exact solves without a plan (D47) and
+the plans of the remedies of D49 (the best uncertified plans and the accepted
+inaccurate ones) and, with a tube, the largest tube ratio. Both log how close
+the agents end their full segments to the targets (D40) under ``hierarchy/``
+and ``eval_hierarchy/`` (:func:`hrlmpc.reachability.reached_metrics`), and
 architecture 4 its targets under ``reach/`` and ``eval_reach/``
-(:func:`hrlmpc.reachability.reach_metrics`). An evaluation counts the steps,
-segments and decisions of the evaluated episodes only: agents that finished
-first keep being stepped, in ignored episodes (D29), and their solves cost
-time but no metric. The budget counts samples, physical steps during training
-summed over the agents (D6); the Worker's predictions are not samples, their
-cost is the solve time.
+(:func:`hrlmpc.reachability.reach_metrics`). Every evaluation point runs the
+Manager's mean and then its mode (D43) with the same Worker, reset before
+each; the evaluation with the mode logs under ``eval_mode/``,
+``eval_mode_mpc/``, ``eval_mode_hierarchy/`` and ``eval_mode_reach/`` (D50). An
+evaluation counts the steps, segments and decisions of the evaluated episodes
+only: agents that finished first keep being stepped, in ignored episodes
+(D29), and their solves cost time but no metric. The budget counts samples,
+physical steps during training summed over the agents (D6); the Worker's
+predictions are not samples, their cost is the solve time. The compute is
+logged under ``time/``: per update the rollout (with the Worker's solves) and
+the Manager's update apart, per evaluation its duration and the hierarchy's
+time per agent and step (D50).
 
 The Worker needs cvxpy, Clarabel and Gurobi (the extra ``mpc``), and so do the
 targets of architecture 4; tests pass stand-ins through ``worker_factory`` and
@@ -62,7 +69,6 @@ import argparse
 import contextlib
 import dataclasses
 import datetime
-import json
 import os
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -80,7 +86,7 @@ from hrlmpc.config import (
     load_env_config,
 )
 from hrlmpc.env import NavigationEnv, ObservationMap
-from hrlmpc.evaluation import evaluate, spawn_grid
+from hrlmpc.evaluation import EVAL_ACTIONS, append_details, console_line, evaluate, evaluation_name, spawn_grid
 from hrlmpc.geometry import Layout
 from hrlmpc.hierarchy import (
     HierarchicalController,
@@ -100,7 +106,7 @@ from hrlmpc.ppo_mpc_config import (
 )
 from hrlmpc.reachability import REACHED_MARGIN, ReachableTargets, reach_metrics, reached_metrics
 from hrlmpc.rollout import episode_metrics
-from hrlmpc.train_hppo import _format_gap, _hierarchy_metrics, _manager_batch, _renamed
+from hrlmpc.train_hppo import _hierarchy_metrics, _manager_batch, _renamed
 from hrlmpc.utils.runlog import RunLogger
 from hrlmpc.utils.seeding import seed_everything
 
@@ -286,51 +292,61 @@ def _train(
         if echo is not None:
             echo(problem.summary())
 
-        def evaluate_now() -> None:
+        def evaluate_once(action: str) -> dict[str, Any]:
+            """One evaluation of the hierarchy with ``action`` and its metrics, under the action's names (D50)."""
+            name = evaluation_name(action)
             if reach is not None:
                 reach.pop_stats()  # the training's decisions are logged with its updates
-            controller = HierarchicalController(hierarchy, manager.deterministic_action, eval_command.as_worker())
+            policy = manager.deterministic_policy(action)
+            controller = HierarchicalController(hierarchy, policy, eval_command.as_worker())
             result = evaluate(controller, env_config, starts, seed=config.evaluation.seed)
-            metrics: dict[str, Any] = result.metrics()
+            metrics: dict[str, Any] = result.metrics(prefix=f"{name}/")
+            metrics.update(result.timing(name))
             stats = eval_command.pop_stats()
             lengths = np.array([episode.length for episode in result.episodes])
             if len(stats["outcome"]) != lengths.max():  # one Worker call per step until the last episode ends
                 raise RuntimeError(f"{len(stats['outcome'])} Worker steps for episodes of up to {lengths.max()} steps")
-            metrics.update(mpc_metrics(stats, "eval_mpc", episode_mask(lengths, len(stats["outcome"]))))
+            mask = episode_mask(lengths, len(stats["outcome"]))
+            metrics.update(mpc_metrics(stats, evaluation_name(action, "mpc"), mask))
             ends = [d[t < lengths] for t, d in controller.segment_ends]  # segments within the evaluated episodes
-            metrics.update(reached_metrics(np.concatenate(ends) if ends else [], reach_tolerance, "eval_hierarchy"))
+            distances = np.concatenate(ends) if ends else np.zeros(0)
+            metrics.update(reached_metrics(distances, reach_tolerance, evaluation_name(action, "hierarchy")))
             if reach is not None:
                 decisions = reach.pop_stats()
                 calls = len(decisions["projection"]) // len(starts)  # every agent decides at every H-th call
                 within = (segment_steps * np.arange(calls))[:, None] < lengths[None, :]
-                metrics.update(reach_metrics(decisions, "eval_reach", within.reshape(-1)))
+                metrics.update(reach_metrics(decisions, evaluation_name(action, "reach"), within.reshape(-1)))
+            append_details(path / "evaluations.jsonl", result, env_steps=env.counter.env_steps, action=action)
+            return metrics
+
+        def evaluate_now() -> None:
+            metrics: dict[str, Any] = {}
+            for action in EVAL_ACTIONS:  # the mean, then the mode (D43)
+                metrics.update(evaluate_once(action))
             logger.log(metrics, env.counter)
-            with (path / "evaluations.jsonl").open("a", encoding="utf-8") as f:
-                f.write(json.dumps({"env_steps": env.counter.env_steps, **result.details()}) + "\n")
             if echo is not None:
-                echo(
-                    f"{path.name}: {env.counter.env_steps:>8} samples | success {metrics['eval/success_rate']:4.2f}"
-                    f" | unshaped return {metrics['eval/unshaped_return']:8.1f}"
-                    f" | gap {_format_gap(metrics['eval/arrival_gap_mean'])}"
-                    f" | contact {metrics['eval/contact_fraction']:4.2f}"
-                    f" | solve {metrics.get('eval_mpc/solve_ms_mean', float('nan')):6.1f} ms"
-                )
+                keys = [f"{evaluation_name(action, 'mpc')}/solve_ms_mean" for action in EVAL_ACTIONS]
+                solve = "/".join(f"{metrics.get(key, float('nan')):.1f}" for key in keys)
+                echo(f"{path.name}: {env.counter.env_steps:>8} samples | {console_line(metrics)} | solve {solve} ms")
 
         evaluate_now()
         state = start_segments(env, hierarchy, manager.act, manager.value)
         started = time.perf_counter()
         training_time = 0.0
         for k in range(num_updates):
-            tick = time.perf_counter()
             if m_cfg.update.anneal_learning_rate:
                 manager.set_learning_rate_fraction(1.0 - k / num_updates)
             actor_rate, critic_rate = manager.learning_rates
+            tick = time.perf_counter()
             rollout, state = collect_hierarchical_rollout(
                 env, state, config.rollout.num_steps, hierarchy, manager.act, manager.value, command.as_worker()
             )
+            rollout_s = time.perf_counter() - tick
+            tick = time.perf_counter()
             batch = _manager_batch(rollout, m_cfg.update.gae_lambda, manager.device)
             metrics: dict[str, Any] = _renamed(manager.update(batch), "manager")
-            training_time += time.perf_counter() - tick
+            update_s = time.perf_counter() - tick
+            training_time += rollout_s + update_s
             metrics.update(episode_metrics(rollout.episodes))
             metrics.update(_hierarchy_metrics(rollout))
             full = rollout.segments.steps == segment_steps
@@ -343,6 +359,8 @@ def _train(
                     "manager/learning_rate": actor_rate,
                     "manager/critic_learning_rate": critic_rate,
                     "train/updates": k + 1,
+                    "time/rollout_s": rollout_s,
+                    "time/update_s": update_s,
                     "time/train_s": training_time,
                     "time/elapsed_s": time.perf_counter() - started,
                     "time/sps": env.counter.env_steps / training_time,

@@ -23,6 +23,7 @@ import yaml
 torch = pytest.importorskip("torch")
 stats = pytest.importorskip("scipy.stats")
 
+from hrlmpc.action_map import beta_mode  # noqa: E402
 from hrlmpc.config import env_config_from_dict  # noqa: E402
 from hrlmpc.env import NavigationEnv  # noqa: E402
 from hrlmpc.ppo import LOG_PROB_EPS, Batch, PPOAgent, RunningMeanStd, make_batch  # noqa: E402
@@ -156,6 +157,32 @@ def test_the_deterministic_action_is_the_mean_mapped_to_the_square() -> None:
     alpha, beta = agent.concentrations(obs)
     expected = 2.0 * alpha / (alpha + beta) - 1.0
     np.testing.assert_allclose(agent.deterministic_action(obs), expected, rtol=1e-6, atol=1e-6)
+
+
+def test_the_mode_action_is_the_mode_mapped_to_the_square() -> None:
+    """D43: the second deterministic action, the mode of each Beta, reaches the edge of the square when a
+    concentration is 1, where the mean stays inside."""
+    agent = _agent(5)
+    obs = _obs(50, seed=3)
+    alpha, beta = agent.concentrations(obs)
+    np.testing.assert_allclose(agent.mode_action(obs), 2.0 * beta_mode(alpha, beta) - 1.0, rtol=1e-6, atol=1e-6)
+    with torch.no_grad():
+        last = agent.actor.net[-1]
+        last.weight.zero_()
+        last.bias.copy_(torch.tensor([5.0, -50.0, -50.0, 5.0]))  # alpha = (6.007, 1), beta = (1, 6.007)
+    np.testing.assert_array_equal(agent.mode_action(_obs(4)), np.tile([1.0, -1.0], (4, 1)))
+    assert np.all(np.abs(agent.deterministic_action(_obs(4))) < 0.72)  # 2 * 6.007 / 7.007 - 1 = 0.715
+
+
+def test_an_evaluation_names_its_deterministic_policy() -> None:
+    """D43, D50: the evaluations run the mean or the mode, by name."""
+    agent = _agent(5)
+    obs = _obs(8, seed=1)
+    np.testing.assert_array_equal(agent.deterministic_policy("mean")(obs), agent.deterministic_action(obs))
+    np.testing.assert_array_equal(agent.deterministic_policy("mode")(obs), agent.mode_action(obs))
+    assert agent.deterministic_policy("mode") == agent.mode_action
+    with pytest.raises(ValueError, match="mean"):
+        agent.deterministic_policy("median")
 
 
 def test_acting_draws_from_the_torch_generator() -> None:

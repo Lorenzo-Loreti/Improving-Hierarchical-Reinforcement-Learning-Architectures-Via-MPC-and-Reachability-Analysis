@@ -1,4 +1,5 @@
-"""Learning curves and summaries of training runs (code rule C4 and the analysis rules; decision log D6, D20).
+"""Learning curves and summaries of training runs (code rule C4 and the analysis rules; decision log D6, D20, D43,
+D50).
 
 Reads the run directories written by :class:`hrlmpc.utils.runlog.RunLogger`
 and aggregates them over seeds: means with Student-t confidence intervals,
@@ -11,9 +12,15 @@ F7, and no contact. The criterion applies to layouts without obstacles only,
 where the bound of F7 is the minimum time; with obstacles the gap is reported
 but measures the distance from a lower bound, not from the optimum.
 
+Since D43 every evaluation point evaluates the policy's mean and its mode,
+logged under ``eval/`` and ``eval_mode/`` (D50). The summary reports both, the
+mode in a table of its own; the criterion of D20 stays on the mean. The
+curves are plotted for one action (``--action``). Runs of steps 7-10 have the
+mean only.
+
 Usage::
 
-    python -m hrlmpc.analysis runs/tunnel/ppo runs/slalom/ppo [--plot curves.png]
+    python -m hrlmpc.analysis runs/tunnel/ppo runs/slalom/ppo [--plot curves.png] [--action mode]
 
 The statistical comparison between architectures belongs to step 11 (Q13).
 """
@@ -34,6 +41,8 @@ import yaml
 from numpy.typing import NDArray
 from scipy import stats
 
+from hrlmpc.evaluation import EVAL_ACTIONS, evaluation_name
+
 FloatArray = NDArray[np.float64]
 
 CURVE_KEYS: tuple[str, ...] = (
@@ -42,10 +51,20 @@ CURVE_KEYS: tuple[str, ...] = (
     "eval/arrival_gap_mean",
     "eval/contact_fraction",
 )
-"""Evaluation metrics plotted by the command line."""
+"""Evaluation metrics plotted by the command line, those of the mean (D20)."""
 
-_FRACTIONS = {"eval/success_rate", "eval/contact_fraction"}
+_FRACTIONS = ("/success_rate", "/contact_fraction")
 _PROVENANCE = {"seed", "env_file", "agent_file"}
+
+
+def curve_keys(action: str = "mean") -> tuple[str, ...]:
+    """:data:`CURVE_KEYS` for the evaluation with ``action``, ``"mean"`` or ``"mode"`` (D50).
+
+    Raises:
+        ValueError: For any other action.
+    """
+    prefix = evaluation_name(action)
+    return tuple(f"{prefix}/{key.split('/', 1)[1]}" for key in CURVE_KEYS)
 
 
 @dataclass(frozen=True)
@@ -226,35 +245,61 @@ def _fmt(value: Any, digits: int = 3) -> str:
     return "-" if value is None or (isinstance(value, float) and math.isnan(value)) else f"{value:.{digits}f}"
 
 
-def _summarize_group(label: str, runs: Sequence[Run], max_gap: float) -> list[str]:
-    applicable = not any(run.has_obstacles for run in runs)
+def _table(
+    runs: Sequence[Run],
+    finals: Sequence[Mapping[str, Any]],
+    action: str,
+    extra: Sequence[str] = (),
+    extra_header: str = "",
+) -> list[str]:
+    """The last evaluation of each run with ``action``, with ``extra`` columns per run, and the means over the runs
+    with their intervals."""
+    p = f"{evaluation_name(action)}/"
     header = (
-        f"{'run':<28} {'samples':>8} {'success':>8} {'return':>9} {'gap mean':>9} {'gap max':>8}"
-        f" {'contact':>8} {'accepted':>8} {'first':>8}"
+        f"{'run':<28} {'samples':>8} {'success':>8} {'return':>9} {'gap mean':>9} {'gap max':>8} {'contact':>8}"
+        f"{extra_header}"
     )
-    lines = [f"== {label} ({len(runs)} runs)", header, "-" * len(header)]
-    finals = [_last_evaluation(run) for run in runs]
-    for run, final in zip(runs, finals, strict=True):
-        first = first_accepted(run, max_gap) if applicable else None
-        verdict = ("yes" if accepted(final, max_gap) else "no") if applicable else "n/a"
+    lines = [header, "-" * len(header)]
+    for i, (run, final) in enumerate(zip(runs, finals, strict=True)):
         lines.append(
-            f"{run.name:<28} {final['env_steps']:>8} {_fmt(final['eval/success_rate'], 2):>8} "
-            f"{_fmt(final['eval/unshaped_return'], 1):>9} {_fmt(final['eval/arrival_gap_mean']):>9} "
-            f"{_fmt(final['eval/arrival_gap_max']):>8} {_fmt(final['eval/contact_fraction'], 2):>8} "
-            f"{verdict:>8} {'-' if first is None else first:>8}"
+            f"{run.name:<28} {final['env_steps']:>8} {_fmt(final.get(p + 'success_rate'), 2):>8} "
+            f"{_fmt(final.get(p + 'unshaped_return'), 1):>9} {_fmt(final.get(p + 'arrival_gap_mean')):>9} "
+            f"{_fmt(final.get(p + 'arrival_gap_max')):>8} {_fmt(final.get(p + 'contact_fraction'), 2):>8}"
+            f"{extra[i] if extra else ''}"
         )
     lines.append("")
-    for key in CURVE_KEYS:
-        values = np.array([math.nan if f[key] is None else f[key] for f in finals], dtype=np.float64)
+    for key in curve_keys(action):
+        values = np.array([math.nan if f.get(key) is None else f[key] for f in finals], dtype=np.float64)
         values = values[~np.isnan(values)]
         if values.size:
             mean, low, high = t_interval(values)
-            lines.append(f"{key:<24} mean {mean:.3f}  95% CI [{_fmt(low)}, {_fmt(high)}]  (n={values.size})")
+            lines.append(f"{key:<26} mean {mean:.3f}  95% CI [{_fmt(low)}, {_fmt(high)}]  (n={values.size})")
+    return lines
+
+
+def _summarize_group(label: str, runs: Sequence[Run], max_gap: float) -> list[str]:
+    applicable = not any(run.has_obstacles for run in runs)
+    finals = [_last_evaluation(run) for run in runs]
+    verdicts = []
+    for run, final in zip(runs, finals, strict=True):
+        first = first_accepted(run, max_gap) if applicable else None
+        verdict = ("yes" if accepted(final, max_gap) else "no") if applicable else "n/a"
+        verdicts.append(f" {verdict:>8} {'-' if first is None else first:>8}")
+    lines = [
+        f"== {label} ({len(runs)} runs)",
+        "action: mean (D20)",
+        *_table(runs, finals, "mean", verdicts, f" {'accepted':>8} {'first':>8}"),
+    ]
     if applicable:
         count = sum(accepted(f, max_gap) for f in finals)
         lines.append(f"accepted at the end: {count}/{len(runs)} (max gap {max_gap:g})")
     else:
         lines.append("acceptance not applicable: the layout has obstacles, so the bound of F7 is not the minimum time")
+    lines.append("")
+    if any(f"{evaluation_name('mode')}/success_rate" in final for final in finals):
+        lines += ["action: mode (D43; the acceptance of D20 is the mean's)", *_table(runs, finals, "mode")]
+    else:
+        lines.append("action: mode (D43): not evaluated in these runs")
     return lines
 
 
@@ -270,7 +315,9 @@ def summarize(runs: Sequence[Run], max_gap: float = 0.05) -> str:
 def plot_curves(runs: Sequence[Run], path: str | Path, keys: Sequence[str] = CURVE_KEYS) -> None:
     """Plot the mean curves of every group with their 95% intervals into an image file (needs matplotlib).
 
-    Points where some runs have no value (NaN) are drawn dashed.
+    Points where some runs have no value (NaN) are drawn dashed. ``keys`` are those of one action, e.g.
+    ``curve_keys("mode")``; a group's runs without a key (those before D43, for the mode) are left out of its
+    curve, and a group without any is left out.
     """
     import matplotlib
 
@@ -281,15 +328,20 @@ def plot_curves(runs: Sequence[Run], path: str | Path, keys: Sequence[str] = CUR
     fig, axes = plt.subplots(len(keys), 1, figsize=(6.5, 2.3 * len(keys)), sharex=True, squeeze=False)
     for ax, key in zip(axes[:, 0], keys, strict=True):
         for color, (label, members) in enumerate(groups.items()):
-            curve = mean_curve(members, key)
+            evaluated = [run for run in members if series(run, key)[0].size]
+            if not evaluated:
+                continue
+            if len(evaluated) < len(members):
+                label = f"{label} ({len(evaluated)} of {len(members)} runs)"
+            curve = mean_curve(evaluated, key)
             low, high = curve.low, curve.high
-            if key in _FRACTIONS:
+            if key.endswith(_FRACTIONS):
                 low, high = np.clip(low, 0.0, 1.0), np.clip(high, 0.0, 1.0)
             full = curve.count == curve.n
             ax.plot(curve.env_steps, np.where(full, curve.mean, np.nan), color=f"C{color}", lw=1.5, label=label)
             ax.plot(curve.env_steps, np.where(full, np.nan, curve.mean), color=f"C{color}", lw=1.0, ls="--")
             ax.fill_between(curve.env_steps, low, high, color=f"C{color}", alpha=0.2, lw=0)
-        ax.set_ylabel(key.removeprefix("eval/").replace("_", " "))
+        ax.set_ylabel(key.split("/", 1)[1].replace("_", " "))
         ax.grid(alpha=0.3)
     axes[-1, 0].set_xlabel("samples (environment steps, D6)")
     axes[0, 0].set_title("mean and 95% t-interval over seeds; dashed: some runs without a value")
@@ -305,12 +357,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("paths", nargs="+", type=Path, help="run directories or directories containing runs")
     parser.add_argument("--max-gap", type=float, default=0.05, help="largest accepted arrival gap (D20)")
     parser.add_argument("--plot", type=Path, default=None, help="image file for the learning curves")
+    parser.add_argument(
+        "--action", choices=EVAL_ACTIONS, default="mean", help="the evaluation whose curves are plotted (D43)"
+    )
     args = parser.parse_args(argv)
     runs = find_runs(args.paths)
     print(summarize(runs, args.max_gap))
     if args.plot is not None:
-        plot_curves(runs, args.plot)
-        print(f"curves written to {args.plot}")
+        plot_curves(runs, args.plot, curve_keys(args.action))
+        print(f"curves of the {args.action} written to {args.plot}")
     return 0
 
 

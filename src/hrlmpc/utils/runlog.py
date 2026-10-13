@@ -1,9 +1,10 @@
-"""Run directories and learning-curve logging (code rules C3 and C4, decision log D6).
+"""Run directories and learning-curve logging (code rules C3 and C4, decision log D6, D50).
 
 Every training run writes one directory:
 
     config.yaml      the resolved configuration of the run
-    meta.json        provenance: seed, time, Python and package versions, git commit
+    meta.json        provenance: seed, time, Python and package versions, git commit, and the machine
+                     (processor, cores, host, load at the start, threads' variables, Slurm job; D50)
     metrics.jsonl    one JSON object per call of :meth:`RunLogger.log`
 
 Each metrics record carries the two interaction counters of decision D6.
@@ -19,6 +20,7 @@ import datetime
 import json
 import math
 import numbers
+import os
 import platform
 import subprocess
 import sys
@@ -47,6 +49,19 @@ TRACKED_PACKAGES: tuple[str, ...] = (
 
 RESERVED_KEYS: tuple[str, ...] = ("env_steps", "manager_decisions")
 """Keys written by the logger itself; metrics may not use them."""
+
+SLURM_VARIABLES: dict[str, str] = {
+    "job_id": "SLURM_JOB_ID",
+    "array_job_id": "SLURM_ARRAY_JOB_ID",
+    "array_task_id": "SLURM_ARRAY_TASK_ID",
+    "partition": "SLURM_JOB_PARTITION",
+    "node": "SLURMD_NODENAME",
+    "cpus_per_task": "SLURM_CPUS_PER_TASK",
+}
+"""The Slurm job of a run on a cluster (D48, D50): the entries of ``meta.json`` and the variables they come from."""
+
+THREAD_VARIABLES: tuple[str, ...] = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
+"""Variables that set the threads of the numerical libraries, recorded with the machine (D50)."""
 
 
 @dataclass
@@ -129,8 +144,67 @@ def git_state(repo_dir: str | Path | None = None) -> dict[str, Any]:
     return {"commit": commit, "dirty": None if status is None else status != ""}
 
 
+def _processor() -> str | None:
+    """The processor's model name, as the operating system reports it; ``None`` if it reports none."""
+    if sys.platform.startswith("linux"):
+        try:
+            for line in Path("/proc/cpuinfo").read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.lower().startswith("model name") and ":" in line:
+                    return line.split(":", 1)[1].strip() or None
+        except OSError:
+            pass
+    elif sys.platform == "win32":
+        import winreg
+
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0") as key:
+                return str(winreg.QueryValueEx(key, "ProcessorNameString")[0]).strip() or None
+        except OSError:
+            pass
+    return platform.processor() or None
+
+
+def machine_info() -> dict[str, Any]:
+    """The machine a run starts on (D50), for the compute times.
+
+    Returns:
+        ``host``; ``processor``, its model name or ``None``; ``cores``, the
+        logical processors of the machine; ``usable_cores``, those the process
+        may run on (on a cluster, those of the job), where the platform says,
+        and ``cores`` otherwise; ``load``, the load averages over 1, 5 and 15
+        minutes when the run starts, ``None`` where the platform has none
+        (Windows); ``threads``, the variables of :data:`THREAD_VARIABLES`
+        (``None`` if unset); ``slurm``, the entries of :data:`SLURM_VARIABLES`
+        inside a Slurm job (``None`` for those unset), ``None`` outside one.
+    """
+    cores = os.cpu_count()
+    usable: int | None = None
+    load: list[float] | None = None
+    if sys.platform.startswith("linux"):
+        usable = len(os.sched_getaffinity(0))  # the cores of the process, of the job on a cluster
+    if sys.platform != "win32":  # Windows has no load average
+        try:
+            load = list(os.getloadavg())
+        except OSError:  # none obtainable
+            load = None
+    slurm = (
+        {key: os.environ.get(name) for key, name in SLURM_VARIABLES.items()}
+        if os.environ.get(SLURM_VARIABLES["job_id"])
+        else None
+    )
+    return {
+        "host": platform.node(),
+        "processor": _processor(),
+        "cores": cores,
+        "usable_cores": cores if usable is None else usable,
+        "load": load,
+        "threads": {name: os.environ.get(name) for name in THREAD_VARIABLES},
+        "slurm": slurm,
+    }
+
+
 def run_metadata(seed: int, repo_dir: str | Path | None = None) -> dict[str, Any]:
-    """Provenance of a run: seed, UTC start time, platform, package versions and git state."""
+    """Provenance of a run: seed, UTC start time, platform, package versions, git state and machine."""
     return {
         "seed": seed,
         "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
@@ -138,6 +212,7 @@ def run_metadata(seed: int, repo_dir: str | Path | None = None) -> dict[str, Any
         "platform": platform.platform(),
         "packages": package_versions(),
         "git": git_state(repo_dir),
+        "machine": machine_info(),
     }
 
 

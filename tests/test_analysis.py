@@ -1,4 +1,5 @@
-"""Tests of the run analysis: learning curves over seeds with confidence intervals (code rule C4, decision log D20)."""
+"""Tests of the run analysis: learning curves over seeds with confidence intervals (code rule C4, decision log D20,
+D43, D50)."""
 
 from __future__ import annotations
 
@@ -11,7 +12,9 @@ import pytest
 from scipy import stats
 
 from hrlmpc.analysis import (
+    CURVE_KEYS,
     accepted,
+    curve_keys,
     find_runs,
     first_accepted,
     group_runs,
@@ -28,14 +31,25 @@ TUNNEL: dict[str, Any] = {"geometry": {"obstacles": []}}
 SLALOM: dict[str, Any] = {"geometry": {"obstacles": [{"x": [4.0, 5.0], "y": [-2.0, 0.25]}]}}
 
 
-def _eval(success: float, gap: float, contact: float, ret: float) -> dict[str, Any]:
-    return {
+def _eval(success: float, gap: float, contact: float, ret: float, mode: tuple[float, ...] | None = None
+          ) -> dict[str, Any]:
+    """An evaluation record; with ``mode``, also that of the mode (D43): its success, gap, contact and return."""
+    record = {
         "eval/success_rate": success,
         "eval/arrival_gap_max": gap,
         "eval/arrival_gap_mean": gap / 2,
         "eval/contact_fraction": contact,
         "eval/unshaped_return": ret,
     }
+    if mode is not None:
+        record.update({
+            "eval_mode/success_rate": mode[0],
+            "eval_mode/arrival_gap_max": mode[1],
+            "eval_mode/arrival_gap_mean": mode[1] / 2,
+            "eval_mode/contact_fraction": mode[2],
+            "eval_mode/unshaped_return": mode[3],
+        })
+    return record
 
 
 def _make_run(
@@ -166,8 +180,11 @@ def test_the_first_accepted_evaluation(three_runs: list[Path]) -> None:
     assert [first_accepted(r, max_gap=0.025) for r in runs] == [None, 20480, None]
 
 
-def _rows(text: str) -> dict[str, list[str]]:
-    return {line.split()[0]: line.split() for line in text.splitlines() if line.startswith("seed")}
+def _rows(text: str, action: str = "mean") -> dict[str, list[str]]:
+    """The rows of the runs in the table of ``action``."""
+    mean, _, mode = text.partition("action: mode")
+    table = mean if action == "mean" else mode
+    return {line.split()[0]: line.split() for line in table.splitlines() if line.startswith("seed")}
 
 
 def test_the_summary_reports_every_run(three_runs: list[Path]) -> None:
@@ -196,3 +213,33 @@ def test_the_command_line_prints_and_plots(
     assert main([str(tmp_path), "--plot", str(figure)]) == 0
     assert "accepted at the end: 2/3" in capsys.readouterr().out
     assert figure.stat().st_size > 0
+
+
+def test_the_summary_reports_the_mode_beside_the_mean(tmp_path: Path) -> None:
+    """D43, D50: a table for each action; the criterion of D20 stays on the mean."""
+    run = load_run(_make_run(tmp_path, 1, [_eval(1.0, 0.04, 0.0, 905.0, mode=(0.75, 0.01, 0.25, 640.0))]))
+    text = summarize([run], max_gap=0.05)
+    assert _rows(text)["seed1"][2:8] == ["1.00", "905.0", "0.020", "0.040", "0.00", "yes"]
+    assert _rows(text, "mode")["seed1"][2:7] == ["0.75", "640.0", "0.005", "0.010", "0.25"]
+    assert "accepted at the end: 1/1 (max gap 0.05)" in text  # on the mean, whatever the mode did
+    assert "eval_mode/success_rate     mean 0.750" in text
+
+
+def test_runs_without_the_mode_say_so(three_runs: list[Path]) -> None:
+    """The runs of steps 7-10 were evaluated with the mean only."""
+    text = summarize([load_run(p) for p in three_runs])
+    assert "action: mode (D43): not evaluated in these runs" in text and not _rows(text, "mode")
+
+
+def test_the_curves_of_either_action(three_runs: list[Path], tmp_path: Path) -> None:
+    assert curve_keys("mean") == CURVE_KEYS
+    assert curve_keys("mode") == tuple(key.replace("eval/", "eval_mode/") for key in CURVE_KEYS)
+    with pytest.raises(ValueError, match="action"):
+        curve_keys("median")
+    pytest.importorskip("matplotlib")
+    _make_run(tmp_path / "mixed", 4, [_eval(0.5, 0.1, 0.0, 400.0, mode=(0.5, 0.2, 0.0, 380.0))] * 2)
+    _make_run(tmp_path / "mixed", 5, [_eval(0.5, 0.1, 0.0, 400.0)] * 2)  # before D43: the mean only
+    figure = tmp_path / "mode.png"
+    assert main([str(tmp_path / "mixed"), "--plot", str(figure), "--action", "mode"]) == 0
+    assert figure.stat().st_size > 0
+

@@ -1,5 +1,5 @@
-"""Tests of the tube-MPC Worker with its solvers (decision log D31-D35, D37-D39, D45-D47); they need cvxpy, Clarabel
-and Gurobi.
+"""Tests of the tube-MPC Worker with its solvers (decision log D31-D35, D37-D39, D45-D47, D49); they need cvxpy,
+Clarabel and Gurobi.
 
 The closed loops run on the environment's own physics (:func:`hrlmpc.physics.physics_step`),
 with scripted targets in place of a Manager, one per segment of ``H = 10``
@@ -10,13 +10,15 @@ saturation, the shifted plan stays feasible, the plans are optimal, a
 reachable target is passed when the segment ends and an unreachable one is
 projected onto the reachable set. Every search reports how it ended (D47),
 consistently with its outcome; the solvers minimise the problem's cost, the
-regularizer of D46 included. Gurobi's pip licence is size-limited: a test
+regularizer of D46 included. A search whose rounds run out applies the
+cheapest exact plan it found, and an inaccurate exact plan counts if the
+checker accepts it (D49). Gurobi's pip licence is size-limited: a test
 whose model exceeds it is skipped with that reason.
 
 The tolerances follow the solvers': a plan from Clarabel meets its constraints
 to about 1e-8, the relaxation's own plan (module docstring of
 :mod:`hrlmpc.mpc_worker`) the disks and ``Z`` to 1e-6 and the faces to
-``face_slack``.
+``face_slack``, and so does an inaccurate plan that the checker accepts (D49).
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ from hrlmpc.config import EnvConfig, load_env_config  # noqa: E402
 from hrlmpc.env import ObservationMap  # noqa: E402
 from hrlmpc.geometry import Layout  # noqa: E402
 from hrlmpc.mpc_command import (  # noqa: E402
+    BEST,
     CANDIDATE,
     CONVERGED,
     EMERGENCY,
@@ -125,8 +128,9 @@ def _run(
     """A closed loop with a target set every ``H`` steps; returns the trajectory and every check.
 
     Per step: what the Worker reported (outcome, tube ratio, free binaries,
-    cut rounds, invalid shifted plans, solver errors, cost, the search's exit and
-    its exact solves without a plan); the violations of the
+    cut rounds, invalid shifted plans, solver errors, cost, the search's exit,
+    its exact solves without a plan, its uncertified exact plans, its accepted
+    inaccurate ones and whether its plan was one); the violations of the
     applied plan; the norm of the input before its projection onto
     ``U``, at most ``a_max`` by D33 so that the saturation never acts; contact
     and the speed limiter in the physics; and, with a tube, the gauge of the
@@ -136,7 +140,7 @@ def _run(
     p, v = np.array(start, dtype=np.float64), np.zeros(2)
     target = targets(p)
     names = ("outcome", "ratio", "free", "rounds", "invalid", "errors", "cost", "exit", "inaccurate", "infeasible",
-             "uncertified", "violations", "thrust", "contact", "limited", "gauge")
+             "uncertified", "accepted", "plan_accepted", "violations", "thrust", "contact", "limited", "gauge")
     log: dict[str, Any] = {name: [] for name in names}
     log.update(p=[p.copy()], success=False)
     with _licence():
@@ -149,7 +153,8 @@ def _run(
                                 ("rounds", info.cut_rounds), ("invalid", info.invalid_candidate),
                                 ("errors", info.solver_errors), ("cost", info.cost), ("exit", info.exit),
                                 ("inaccurate", info.exact_inaccurate), ("infeasible", info.exact_infeasible),
-                                ("uncertified", info.exact_uncertified)):
+                                ("uncertified", info.exact_uncertified), ("accepted", info.exact_accepted),
+                                ("plan_accepted", info.plan_accepted)):
                 log[name].append(value)
             plan = worker._slots[0].plan  # the applied plan; None after a brake
             if plan is not None:
@@ -176,20 +181,24 @@ def _worst(log: dict[str, Any]) -> dict[str, float]:
 
 
 def _consistent(log: dict[str, Any]) -> None:
-    """D47: every step's exit agrees with its free binaries, its outcome, its solver failures, its rounds and its
-    exact solves."""
-    for free, end, outcome, errors, rounds, exact in zip(
+    """D47, D49: every step's exit agrees with its free binaries, its outcome, its solver failures, its rounds and
+    its exact solves."""
+    for free, end, outcome, errors, rounds, exact, accepted, plan_accepted in zip(
         log["free"], log["exit"], log["outcome"], log["errors"], log["rounds"],
-        zip(log["inaccurate"], log["infeasible"], log["uncertified"], strict=True), strict=True
+        zip(log["inaccurate"], log["infeasible"], log["uncertified"], strict=True), log["accepted"],
+        log["plan_accepted"], strict=True
     ):
-        assert end in ((FIXED, UNSOLVED, ERROR) if free == 0 else (CONVERGED, RELAXATION, ROUNDS, EMPTY, ERROR))
+        assert end in ((FIXED, UNSOLVED, ERROR) if free == 0 else (CONVERGED, RELAXATION, ROUNDS, EMPTY, ERROR, BEST))
         assert (end in FOUND) == (outcome in (SOLVER, KEPT))  # a plan from the solvers, applied or benchmarked
         assert end != ERROR or errors > 0
         assert (rounds == 0) == (free == 0)  # Gurobi solves exactly when some binary is free
-        if free == 0:  # one exact solve, certified by none: a plan, or a status
-            assert exact[2] == 0 and sum(exact) == (0 if end == FIXED else int(end == UNSOLVED))
+        assert plan_accepted <= min(accepted, int(end in (FIXED, CONVERGED, BEST)))  # an accepted exact plan (D49)
+        if free == 0:  # one exact solve, certified by none: a plan (an inaccurate one if accepted), or a status
+            assert exact[2] == 0 and sum(exact) == int(end == UNSOLVED) and accepted <= int(end == FIXED)
         else:  # at most one exact solve per round
-            assert sum(exact) <= rounds
+            assert sum(exact) <= rounds and accepted <= rounds
+            assert (end == BEST) <= (exact[2] > 0)  # the cheapest of the uncertified exact plans (D49)
+            assert end != ROUNDS or exact[2] == 0  # rounds run out without an exact plan, or BEST
 
 
 def _nominal(log: dict[str, Any], problem: MPCProblem) -> None:
@@ -210,7 +219,7 @@ def test_the_tunnel_is_convex_and_reaches_the_goal() -> None:
     assert set(log["outcome"]) == {SOLVER}
     assert max(log["free"]) == 0 and max(log["rounds"]) == 0  # no binaries: Clarabel alone
     assert set(log["exit"]) == {FIXED} and sum(log["inaccurate"]) == sum(log["infeasible"]) == 0  # D47
-    assert sum(log["uncertified"]) == 0
+    assert sum(log["uncertified"]) == sum(log["accepted"]) == 0  # D49: every plan Clarabel's optimum
     _nominal(log, problem)
     assert max(_worst(log).values()) <= 1e-6  # Clarabel's plans alone
     assert len(log["outcome"]) == 78  # the bound of F7 from (1, 0): the waypoint Worker drives at full speed (D37)
@@ -504,13 +513,29 @@ def test_a_state_that_cannot_avoid_the_tunnels_wall_has_no_plan() -> None:
 
 
 class _Status:
-    """Stands in for a cvxpy problem whose solve ends with a given status and without a plan."""
+    """Stands in for the exact problem's cvxpy problem: its solve ends with ``status`` and leaves ``plan``, or no
+    plan, in the exact problem's variables."""
 
-    def __init__(self, status: str) -> None:
-        self.status = status
+    def __init__(self, status: str, exact: Any, plan: tuple[np.ndarray, np.ndarray] | None = None) -> None:
+        self.status, self.exact, self.plan = status, exact, plan
 
     def solve(self, **kwargs: Any) -> None:
-        pass
+        z, v = (None, None) if self.plan is None else self.plan
+        self.exact.z.value, self.exact.v.value = z, v
+
+
+class _ReportedInaccurate:
+    """Wraps the exact problem's cvxpy problem: solves it, and reports every optimum as inaccurate (D49)."""
+
+    def __init__(self, prob: Any) -> None:
+        self.prob = prob
+
+    def solve(self, **kwargs: Any) -> None:
+        self.prob.solve(**kwargs)
+
+    @property
+    def status(self) -> str:
+        return "optimal_inaccurate" if self.prob.status == "optimal" else str(self.prob.status)
 
 
 @pytest.mark.parametrize(
@@ -520,15 +545,16 @@ class _Status:
 def test_an_exact_solve_without_a_plan_is_counted_by_its_status(status: str, inaccurate: int,
                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
     """D47: an exact solve that ends with an inaccurate optimum or at Clarabel's iteration limit (cvxpy's
-    ``user_limit``), where a plan may exist, counts as inaccurate; one that finds the binaries infeasible,
-    certified or almost, as infeasible; neither is a solver failure."""
+    ``user_limit``), where a plan may exist, counts as inaccurate when it leaves no plan; one that finds the
+    binaries infeasible, certified or almost, as infeasible; neither is a solver failure."""
     _, _, problem = _setup("tunnel")
     worker = MPCWorker(problem)
-    monkeypatch.setattr(worker._exact, "prob", _Status(status))
+    monkeypatch.setattr(worker._exact, "prob", _Status(status, worker._exact))
     with _licence():
         _, info = worker.act(np.array([1.0, 0.0, 0.3, 0.0]), [2.8, 0.0], H)
     assert info.outcome == EMERGENCY and info.exit == UNSOLVED and info.solver_errors == 0
     assert (info.exact_inaccurate, info.exact_infeasible, info.exact_uncertified) == (inaccurate, 1 - inaccurate, 0)
+    assert info.exact_accepted == 0
     worker.close()
 
 
@@ -543,6 +569,160 @@ def test_a_search_out_of_rounds_ends_as_such(monkeypatch: pytest.MonkeyPatch) ->
         _, info = MPCWorker(problem).act(NEAR_THE_GATE, [5.4, 1.2], 5)
     assert info.free_binaries > 0 and info.outcome == EMERGENCY  # a fresh Worker: no shifted plan
     assert info.exit == ROUNDS and info.cut_rounds == 0 and info.solver_errors == 0
+
+
+@pytest.mark.parametrize("d_bar", [0.0, 0.5])
+def test_an_inaccurate_exact_plan_within_the_tolerances_is_accepted(d_bar: float,
+                                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    """D49 (R2): a plan that Clarabel returns inaccurate, or at its iteration limit, is applied if the checker
+    accepts it, here Clarabel's own optimum; with every input 1e-3 off, the velocities miss the dynamics by 1e-4,
+    beyond the tolerance of 1e-6, and it is not."""
+    _, _, problem = _setup("tunnel", d_bar=d_bar)
+    x, target = np.array([1.0, 0.0, 0.3, 0.0]), [2.8, 0.0]
+    with _licence():
+        reference = MPCWorker(problem)
+        _, optimal = reference.act(x, target, H)
+    plan = reference._slots[0].plan
+    assert optimal.exit == FIXED and optimal.exact_accepted == 0 and plan is not None
+    broken = (plan[0], plan[1] + 1e-3)
+    for status, given, accepted in (("optimal_inaccurate", plan, True), ("user_limit", plan, True),
+                                    ("optimal_inaccurate", broken, False)):
+        worker = MPCWorker(problem)
+        monkeypatch.setattr(worker._exact, "prob", _Status(status, worker._exact, given))
+        u, info = worker.act(x, target, H)
+        if accepted:
+            assert info.exit == FIXED and info.outcome == SOLVER and info.exact_accepted == info.plan_accepted == 1
+            assert info.exact_inaccurate == 0 and info.solver_errors == 0
+            np.testing.assert_allclose(u, problem.input(x, *plan), rtol=0.0, atol=1e-12)
+        else:
+            assert info.exit == UNSOLVED and info.outcome == EMERGENCY  # a fresh Worker: no shifted plan
+            assert info.exact_accepted == info.plan_accepted == 0 and info.exact_inaccurate == 1
+        worker.close()
+    reference.close()
+
+
+def test_an_inaccurate_plan_whose_start_leaves_the_tube_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """D49 (R2): with a tube the checker also needs ``x - z_0`` in ``Z``, by its gauge. A plan made for the state
+    before a push of 0.5 m/s, far outside ``Z`` (``r_v`` is 0.17 m/s at most), meets every other constraint but is
+    no plan for the pushed state."""
+    _, _, problem = _setup("tunnel", d_bar=0.5)
+    x, target = np.array([1.0, 0.0, 0.3, 0.0]), [2.8, 0.0]
+    pushed = x + np.array([0.0, 0.0, 0.0, 0.5])
+    with _licence():
+        reference = MPCWorker(problem)
+        reference.act(x, target, H)
+    plan = reference._slots[0].plan
+    assert plan is not None and problem.plan_within(pushed, *plan)  # the tube is left to the gauge
+    worker = MPCWorker(problem)
+    monkeypatch.setattr(worker._exact, "prob", _Status("optimal_inaccurate", worker._exact, plan))
+    _, info = worker.act(pushed, target, H)
+    assert info.exit == UNSOLVED and info.exact_inaccurate == 1 and info.exact_accepted == 0
+    worker.close()
+    reference.close()
+
+
+@pytest.mark.parametrize(("name", "targets"), [("tunnel", _straight_ahead), ("slalom", _through_the_gates)])
+def test_the_checker_accepts_every_genuine_plan(name: str, targets: Callable[[np.ndarray], np.ndarray],
+                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    """D49 (R2): with every optimum of Clarabel reported inaccurate, the checker accepts each plan, so the closed
+    loop is the same step by step: on the tunnel with every binary fixed, on the slalom within the rounds of cuts."""
+    cfg, layout, problem = _setup(name)
+    plain = _run(problem, layout, cfg, (1.0, 0.0), targets, steps=60)
+    worker = MPCWorker(problem)
+    monkeypatch.setattr(worker._exact, "prob", _ReportedInaccurate(worker._exact.prob))
+    reported = _run(problem, layout, cfg, (1.0, 0.0), targets, steps=60, worker=worker)
+    np.testing.assert_array_equal(reported["p"], plain["p"])
+    assert reported["exit"] == plain["exit"] and reported["inaccurate"] == plain["inaccurate"]
+    assert sum(reported["accepted"]) > sum(plain["accepted"])
+    exact = [p for p, end in zip(reported["plan_accepted"], reported["exit"], strict=True) if end in (FIXED, CONVERGED)]
+    assert exact and all(exact)  # every plan Clarabel returned went through the checker
+    _nominal(reported, problem)
+
+
+def _rim_plans(problem: MPCProblem, x: np.ndarray, target: list[float], steps_left: int,
+               costs: tuple[float, ...]) -> list[tuple[np.ndarray, np.ndarray, float]]:
+    """Stand-ins for the exact plans of a search, one per round, told apart by their states: a fresh Worker's plan,
+    shifted by 1 mm per round, with its first input on the edge of the thrust disk, so that every round adds a
+    cut, and with costs far above any bound, so that none is certified within the gap."""
+    with _licence():
+        reference = MPCWorker(problem)
+        reference.act(x, target, steps_left)
+    plan = reference._slots[0].plan
+    assert plan is not None
+    reference.close()
+    rim = plan[1].copy()
+    rim[0] = [problem.u_bar, 0.0]
+    return [(plan[0] + 1e-3 * i, rim, cost) for i, cost in enumerate(costs)]
+
+
+def test_a_search_out_of_rounds_applies_the_cheapest_exact_plan_it_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    """D49 (R1): when the rounds run out, the cheapest of the exact plans the search found, none certified within
+    the gap, is applied (by a fresh Worker: instead of the brake), and a projection returns its point."""
+    import hrlmpc.mpc_worker as module
+
+    _, _, problem = _setup("slalom", d_bar=0.5, horizon=5)
+    x, target = NEAR_THE_GATE, [5.4, 1.2]
+    plans = _rim_plans(problem, x, target, 5, (2e9, 1e9, 3e9))
+    best = plans[1]
+    monkeypatch.setattr(module, "MAX_CUT_ROUNDS", 3)
+    worker = MPCWorker(problem)
+    returned = iter(plans)
+    monkeypatch.setattr(worker, "_exact_plan", lambda *args: next(returned))
+    with _licence():
+        u, info = worker.act(x, target, 5)
+        assert info.exit == BEST and info.outcome == SOLVER and info.free_binaries > 0
+        assert info.cut_rounds == 3 and info.exact_uncertified == 3 and info.solver_errors == 0
+        np.testing.assert_array_equal(worker._slots[0].plan[0], best[0])
+        np.testing.assert_allclose(u, problem.input(x, best[0], best[1]), rtol=0.0, atol=1e-12)
+        returned = iter(plans)
+        point, report = worker.project(x, target, 5)
+    assert report.exit == BEST and report.exact_uncertified == 3
+    np.testing.assert_array_equal(point, best[0][5, :2])
+    worker.close()
+
+
+@pytest.mark.parametrize("ending", ["error", "empty"])
+def test_a_search_ended_otherwise_gives_no_plan(ending: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """D49: R1 applies when the rounds run out only. A solver failure, or a relaxation without a solution, that ends
+    the search after an uncertified exact plan leaves the step without a plan from the solvers, as before; the
+    failure is counted."""
+    _, _, problem = _setup("slalom", d_bar=0.5, horizon=5)
+    x, target = NEAR_THE_GATE, [5.4, 1.2]
+    (plan,) = _rim_plans(problem, x, target, 5, (1e9,))
+    worker = MPCWorker(problem)
+    monkeypatch.setattr(worker, "_exact_plan", lambda *args: plan)
+    relax, calls = worker._relax, []
+
+    def second_fails(slot: Any) -> None:
+        calls.append(slot)
+        if len(calls) == 2:
+            if ending == "error":
+                _no_solution(slot)  # a genuine Gurobi error: no solution to read
+            slot.m.addConstr(slot.v[0] @ np.array([1.0, 0.0]) >= 2.0 * problem.u_bar)  # beyond v's bounds
+        relax(slot)
+
+    monkeypatch.setattr(worker, "_relax", second_fails)
+    with _licence():
+        u, info = worker.act(x, target, 5)
+    assert info.exit == (ERROR if ending == "error" else EMPTY) and info.cut_rounds == 2
+    assert info.exact_uncertified == 1 and info.solver_errors == int(ending == "error")
+    assert info.outcome == EMERGENCY and worker._slots[0].plan is None  # a fresh Worker: no shifted plan
+    np.testing.assert_allclose(u, problem.emergency_input(x))
+    worker.close()
+
+
+def test_with_no_exact_plan_certified_the_cheapest_ones_keep_every_guarantee(monkeypatch: pytest.MonkeyPatch) -> None:
+    """D49 (R1): with no exact plan ever certified and two rounds per search, the searches near the gates end with
+    the cheapest exact plan they found (or the relaxation's own plan, when a round adds no cut), and every guarantee
+    of the closed loop holds."""
+    import hrlmpc.mpc_worker as module
+
+    monkeypatch.setattr(module, "_certified", lambda cost, bound, gap: False)
+    monkeypatch.setattr(module, "MAX_CUT_ROUNDS", 2)
+    cfg, layout, problem = _setup("slalom")
+    log = _run(problem, layout, cfg, (1.0, 0.0), _through_the_gates)
+    _nominal(log, problem)
+    assert BEST in log["exit"] and CONVERGED not in log["exit"]
 
 
 def test_the_shifted_plan_takes_over_when_the_solvers_find_nothing(monkeypatch: pytest.MonkeyPatch) -> None:

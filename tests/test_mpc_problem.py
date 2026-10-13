@@ -1,4 +1,4 @@
-"""Tests of the MPC Worker's problem data, without solvers (decision log D31-D34, D37, D45, D46)."""
+"""Tests of the MPC Worker's problem data, without solvers (decision log D31-D34, D37, D45, D46, D49)."""
 
 from __future__ import annotations
 
@@ -369,6 +369,48 @@ def test_the_violations_of_plans() -> None:
     assert problem.violations(x, shifted, v)["initial"] == pytest.approx(0.01)
     with pytest.raises(ValueError, match="shapes"):
         problem.violations(x, z[:-1], v)
+
+
+def test_a_plan_within_the_tolerances_of_the_relaxations_own_plan(monkeypatch: pytest.MonkeyPatch) -> None:
+    """D49 (R2): the dynamics, the initial state (without a tube), the terminal rest and the arena to ``tol``; the
+    disks to ``tol (1 + radius)``, as the cuts of the relaxation; the faces to the face slack. The tube's
+    constraint is left to the gauge of ``Z`` (the Worker)."""
+    _, _, problem = _setup("slalom", d_bar=0.0)
+    N, tol = problem.N, mpc_problem.FEAS_TOL
+    x = np.array([3.0, 1.0, 0.0, 0.0])
+    z, v = np.tile(x, (N + 1, 1)), np.zeros((N, 2))
+    assert problem.plan_within(x, z, v)
+    inside = z.copy()
+    inside[4, :2] = [4.5, -1.0]  # inside O1
+    assert not problem.plan_within(x, inside, v)
+    for bad in (np.nan, np.inf):
+        broken = z.copy()
+        broken[3, 1] = bad
+        assert not problem.plan_within(x, broken, v)
+    off = z.copy()
+    off[0, 0] += 0.5 * tol  # the start, and with it the first step's dynamics, off by half the tolerance
+    assert problem.plan_within(x, off, v)
+    off[0, 0] += 2.0 * tol
+    assert not problem.plan_within(x, off, v)
+    _, _, tubed = _setup("slalom", d_bar=0.5)
+    away = np.tile(x + np.array([0.01, 0.0, 0.0, 0.0]), (tubed.N + 1, 1))  # a plan at rest 1 cm from the state
+    assert tubed.plan_within(x, away, np.zeros((tubed.N, 2)))
+
+    base = dict.fromkeys(("dynamics", "initial", "terminal", "speed", "input", "arena", "obstacles"), 0.0)
+
+    def within(**worst: float) -> bool:
+        monkeypatch.setattr(problem, "violations", lambda x, z, v: {**base, **worst})
+        return problem.plan_within(x, z, v)
+
+    for key in ("dynamics", "initial", "terminal", "arena"):
+        assert within(**{key: tol}) and not within(**{key: 1.01 * tol}), key
+    assert within(speed=tol * (1.0 + problem.v_bar)) and not within(speed=1.01 * tol * (1.0 + problem.v_bar))
+    assert within(input=tol * (1.0 + problem.u_bar)) and not within(input=1.01 * tol * (1.0 + problem.u_bar))
+    assert within(obstacles=problem.face_slack) and not within(obstacles=1.01 * problem.face_slack)
+    assert not within(dynamics=float("nan"))
+    assert not within(dynamics=2.0 * tol) and problem.plan_within(x, z, v, tol=2.0 * tol)  # a looser tolerance
+    monkeypatch.undo()
+    assert problem.plan_within(x, off, v, tol=3.0 * tol)
 
 
 def test_the_applied_inputs() -> None:

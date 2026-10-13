@@ -1,4 +1,4 @@
-"""In-house PPO, the one implementation shared by every learner (decision log D5, D15, D19).
+"""In-house PPO, the one implementation shared by every learner (decision log D5, D15, D19, D43).
 
 Flat PPO and both levels of hPPO use it (steps 7-8); the Managers of the MPC
 architectures will (steps 9-10). It is a faithful port of the pre-alignment
@@ -12,7 +12,9 @@ with concentrations ``softplus(.) + 1 >= 1``, mapped to the action
 ``x = 2 y - 1`` in the square; the environment maps ``x`` onto ``U``. The
 log-probability is the density of ``x``. Samples are kept in
 ``[LOG_PROB_EPS, 1 - LOG_PROB_EPS]``, so every log-probability is finite and
-every action is admissible; the deterministic action is the mean.
+every action is admissible. The evaluations run two deterministic actions
+(D20, D43): the mean of each Beta, and its mode, which reaches the edge of
+the square (:func:`hrlmpc.action_map.beta_mode`).
 
 Critic. A separate network regresses standardized returns. Running statistics
 of the returns, averaged over ``value_norm_horizon`` updates, map its output
@@ -28,6 +30,7 @@ their losses only lets one backward pass serve both.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -39,6 +42,7 @@ from numpy.typing import ArrayLike, NDArray
 from torch import nn
 from torch.distributions import Beta
 
+from hrlmpc.action_map import EVAL_ACTIONS, beta_mode
 from hrlmpc.ppo_config import NetworkConfig, UpdateConfig
 from hrlmpc.rollout import Rollout
 
@@ -267,6 +271,24 @@ class PPOAgent:
         alpha, beta = self.actor(self._tensor(obs))
         mean = alpha / (alpha + beta)
         return _numpy(mean * self._scale + self._low)
+
+    def mode_action(self, obs: ArrayLike) -> FloatArray:
+        """The mode of the policy, for evaluation (D43): the mode of each Beta mapped to the square; on its edge
+        where a concentration is 1."""
+        alpha, beta = self.concentrations(obs)
+        result: FloatArray = 2.0 * beta_mode(alpha, beta) - 1.0
+        return result
+
+    def deterministic_policy(self, action: str) -> Callable[[ArrayLike], FloatArray]:
+        """The deterministic action an evaluation names (D43, D50): :meth:`deterministic_action` for ``"mean"``,
+        :meth:`mode_action` for ``"mode"``.
+
+        Raises:
+            ValueError: For any other name.
+        """
+        if action not in EVAL_ACTIONS:
+            raise ValueError(f"the deterministic action is one of {EVAL_ACTIONS} ('mean' or 'mode'), got {action!r}")
+        return self.deterministic_action if action == "mean" else self.mode_action
 
     @torch.no_grad()
     def log_prob(self, obs: ArrayLike, actions: ArrayLike) -> FloatArray:

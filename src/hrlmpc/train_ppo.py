@@ -1,4 +1,5 @@
-"""Training of flat PPO on the navigation environment (architecture 1; decision log D5, D6, D13, D19, D20).
+"""Training of flat PPO on the navigation environment (architecture 1; decision log D5, D6, D13, D19, D20, D43,
+D50).
 
 Usage, from the repository root::
 
@@ -8,9 +9,9 @@ Usage, from the repository root::
 Each seed writes the run directory ``<runs-dir>/<layout>/ppo/seed<seed>-<UTC time>`` with:
 
     config.yaml        resolved configuration: environment, agent, budget, seed, discount
-    meta.json          provenance (hrlmpc.utils.runlog)
-    metrics.jsonl      one record per update and per evaluation, keyed by the sample counter
-    evaluations.jsonl  per-start results of every evaluation
+    meta.json          provenance and machine (hrlmpc.utils.runlog)
+    metrics.jsonl      one record per update and per evaluation point, keyed by the sample counter
+    evaluations.jsonl  per-start results of every evaluation, one line per action
     final.pt           weights, optimizer state and target statistics after the last update
 
 The budget counts samples: calls of the physical step during training, summed
@@ -18,36 +19,34 @@ over the parallel agents (D6). It must be a whole number of updates and of
 evaluation intervals, so the last evaluation scores the final policy. The
 discount is the agent configuration's ``update.discount`` (``gamma_RL``,
 D13, D22). Evaluations run in an environment of their own, draw no random
-number of the training and are not samples (D20).
+number of the training and are not samples (D20). Every evaluation point
+evaluates the policy's mean and then its mode (D43), logged under ``eval/``
+and ``eval_mode/`` (D50). The compute is logged under ``time/``: per update the
+rollout and the update apart, per evaluation its duration and the policy's time
+per agent and step (:meth:`hrlmpc.evaluation.Evaluation.timing`).
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime
-import json
 import os
 import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import torch
 import yaml
 
 from hrlmpc.config import EnvConfig, env_config_to_dict, load_env_config
 from hrlmpc.env import NavigationEnv
-from hrlmpc.evaluation import evaluate, spawn_grid
+from hrlmpc.evaluation import EVAL_ACTIONS, append_details, console_line, evaluate, evaluation_name, spawn_grid
 from hrlmpc.ppo import PPOAgent, make_batch
 from hrlmpc.ppo_config import PPOConfig, load_ppo_config, ppo_config_from_dict, ppo_config_to_dict
 from hrlmpc.rollout import collect_rollout, compute_gae, episode_metrics
 from hrlmpc.utils.runlog import RunLogger
 from hrlmpc.utils.seeding import seed_everything
-
-
-def _format_gap(value: float) -> str:
-    return "  -  " if np.isnan(value) else f"{value:5.3f}"
 
 
 def train(
@@ -143,29 +142,30 @@ def _train(
     with RunLogger(path, config, seed=seed, repo_dir=source) as logger:
 
         def evaluate_now() -> None:
-            result = evaluate(agent.deterministic_action, env_config, starts, seed=ppo_config.evaluation.seed)
-            metrics = result.metrics()
+            metrics: dict[str, float] = {}
+            for action in EVAL_ACTIONS:  # the mean, then the mode (D43)
+                name = evaluation_name(action)
+                policy = agent.deterministic_policy(action)
+                result = evaluate(policy, env_config, starts, seed=ppo_config.evaluation.seed)
+                metrics.update(result.metrics(prefix=f"{name}/"))
+                metrics.update(result.timing(name))
+                append_details(path / "evaluations.jsonl", result, env_steps=env.counter.env_steps, action=action)
             logger.log(metrics, env.counter)
-            with (path / "evaluations.jsonl").open("a", encoding="utf-8") as f:
-                f.write(json.dumps({"env_steps": env.counter.env_steps, **result.details()}) + "\n")
             if echo is not None:
-                echo(
-                    f"{path.name}: {env.counter.env_steps:>8} samples | success {metrics['eval/success_rate']:4.2f}"
-                    f" | unshaped return {metrics['eval/unshaped_return']:8.1f}"
-                    f" | gap {_format_gap(metrics['eval/arrival_gap_mean'])}"
-                    f" | contact {metrics['eval/contact_fraction']:4.2f}"
-                )
+                echo(f"{path.name}: {env.counter.env_steps:>8} samples | {console_line(metrics)}")
 
         evaluate_now()
         obs = env.reset()
         started = time.perf_counter()
         training_time = 0.0
         for k in range(num_updates):
-            tick = time.perf_counter()
             if settings.anneal_learning_rate:
                 agent.set_learning_rate_fraction(1.0 - k / num_updates)
             rates = agent.learning_rates
+            tick = time.perf_counter()
             rollout, obs = collect_rollout(env, obs, ppo_config.rollout.num_steps, agent.act, agent.value)
+            rollout_s = time.perf_counter() - tick
+            tick = time.perf_counter()
             advantages, returns = compute_gae(
                 rollout.rewards,
                 rollout.values,
@@ -176,13 +176,16 @@ def _train(
                 gae_lambda=settings.gae_lambda,
             )
             metrics: dict[str, Any] = agent.update(make_batch(rollout, advantages, returns, device=agent.device))
-            training_time += time.perf_counter() - tick
+            update_s = time.perf_counter() - tick
+            training_time += rollout_s + update_s
             metrics.update(episode_metrics(rollout.episodes))
             metrics.update(
                 {
                     "train/updates": k + 1,
                     "train/learning_rate": rates[0],
                     "train/critic_learning_rate": rates[1],
+                    "time/rollout_s": rollout_s,
+                    "time/update_s": update_s,
                     "time/train_s": training_time,
                     "time/elapsed_s": time.perf_counter() - started,
                     "time/sps": env.counter.env_steps / training_time,
