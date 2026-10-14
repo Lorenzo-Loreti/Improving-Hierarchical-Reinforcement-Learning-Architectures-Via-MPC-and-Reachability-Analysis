@@ -124,8 +124,9 @@ def _fingerprint(config: Mapping[str, Any]) -> str:
 def group_runs(runs: Sequence[Run]) -> dict[str, list[Run]]:
     """Runs grouped by their configuration without the seed and the source files.
 
-    The label of a group names the algorithm and the environment file; a
-    short hash of the configuration tells apart groups that share them.
+    The label of a group names the algorithm, the environment file and, when
+    it is not named after the algorithm, the agent file (tuning and sweep
+    files); a short hash of the configuration tells apart groups that share them.
 
     Raises:
         ValueError: If a seed appears twice in a group.
@@ -138,7 +139,13 @@ def group_runs(runs: Sequence[Run]) -> dict[str, list[Run]]:
         config = members[0].config
         env_file = config.get("env_file")
         layout = PureWindowsPath(env_file).stem if env_file else "env"  # accepts both / and \ separators
-        labels[fingerprint] = f"{config.get('algorithm', 'run')} {layout}"
+        algorithm = config.get("algorithm", "run")
+        agent_file = config.get("agent_file")
+        agent = PureWindowsPath(agent_file).stem if agent_file else algorithm
+        label = f"{algorithm} {layout}"
+        if agent != algorithm:  # a tuning or sweep file (D60, D65): named, so that the groups read well
+            label = f"{label} {agent}"
+        labels[fingerprint] = label
     groups: dict[str, list[Run]] = {}
     for fingerprint, members in by_print.items():
         label = labels[fingerprint]
@@ -252,6 +259,17 @@ def first_accepted(run: Run, max_gap: float, action: str = "mean", oracle: bool 
     return None
 
 
+def success_auc(run: Run, action: str = "mean") -> float:
+    """The area under the success curve of the evaluation with ``action``, by the trapezoidal rule over the
+    samples, divided by the samples of the last evaluation: in ``[0, 1]`` (the selection rule of D65); NaN with
+    fewer than two evaluations or without the action."""
+    steps, values = series(run, f"{evaluation_name(action)}/success_rate")
+    if steps.size < 2 or steps[-1] <= 0:
+        return math.nan
+    area = np.sum(0.5 * (values[1:] + values[:-1]) * np.diff(steps))  # the trapezoidal rule
+    return float(area / steps[-1])
+
+
 def has_oracle(record: Mapping[str, Any], action: str = "mean") -> bool:
     """Whether the evaluation record carries the oracle gap (D44)."""
     return _value(record, f"{evaluation_name(action)}/oracle_gap_max") is not None
@@ -322,11 +340,12 @@ def _summarize_group(label: str, runs: Sequence[Run], max_gap: float) -> list[st
     with_oracle = all(has_oracle(final, primary) for final in finals)
     applicable = with_oracle or not any(run.has_obstacles for run in runs)
     verdicts = []
-    for run, final in zip(runs, finals, strict=True):
+    aucs = np.array([success_auc(run, primary) for run in runs], dtype=np.float64)
+    for run, final, auc in zip(runs, finals, aucs, strict=True):
         first = first_accepted(run, max_gap, primary) if applicable else None
         verdict = ("yes" if accepted(final, max_gap, primary) else "no") if applicable else "n/a"
-        verdicts.append(f" {verdict:>8} {'-' if first is None else first:>8}")
-    acceptance_columns = f" {'accepted':>8} {'first':>8}"
+        verdicts.append(f" {verdict:>8} {'-' if first is None else first:>8} {_fmt(auc):>6}")
+    acceptance_columns = f" {'accepted':>8} {'first':>8} {'auc':>6}"
     lines = [f"== {label} ({len(runs)} runs)"]
     if primary == "mean":
         lines.append("action: mean; acceptance on the mean (D20)")
@@ -335,6 +354,11 @@ def _summarize_group(label: str, runs: Sequence[Run], max_gap: float) -> list[st
         lines += ["action: mean (D43)", *_table(runs, finals, "mean"), ""]
         lines.append("action: mode; acceptance on the mode (D57)")
         lines += _table(runs, finals, "mode", verdicts, acceptance_columns)
+    valid = aucs[~np.isnan(aucs)]
+    if valid.size:
+        mean, low, high = t_interval(valid)
+        interval = f"95% CI [{_fmt(low)}, {_fmt(high)}]"
+        lines.append(f"auc of the success curve ({primary}) mean {mean:.3f}  {interval}  (n={valid.size})")
     if applicable:
         count = sum(accepted(f, max_gap, primary) for f in finals)
         basis = "on the oracle gap, D59" if with_oracle else "on the gap of F7"
@@ -366,12 +390,41 @@ def _summarize_group(label: str, runs: Sequence[Run], max_gap: float) -> list[st
     return lines
 
 
+def _ranking(groups: Mapping[str, Sequence[Run]]) -> list[str]:
+    """The groups ranked by the mean AUC of the success curve of their primary action, then by the mean final
+    unshaped return of that action: the selection rule of the tuning protocol (D65)."""
+    rows = []
+    for label, members in groups.items():
+        finals = [_last_evaluation(run) for run in members]
+        primary = "mode" if all(f"{evaluation_name('mode')}/success_rate" in f for f in finals) else "mean"
+        aucs = np.array([success_auc(run, primary) for run in members], dtype=np.float64)
+        aucs = aucs[~np.isnan(aucs)]
+        returns = np.array([_value(f, f"{evaluation_name(primary)}/unshaped_return") or math.nan for f in finals])
+        returns = returns[~np.isnan(returns)]
+        auc = float(np.mean(aucs)) if aucs.size else math.nan
+        ret = float(np.mean(returns)) if returns.size else math.nan
+        rows.append((label, primary, auc, aucs.size, ret))
+    def order(row: tuple[str, str, float, int, float]) -> tuple[float, float]:
+        auc, ret = row[2], row[4]
+        return (-auc if not math.isnan(auc) else 1.0, -ret if not math.isnan(ret) else math.inf)
+
+    rows.sort(key=order)
+    lines = ["groups ranked by the AUC of the success curve (the mode where logged), then by the final return (D65)"]
+    for rank, (label, primary, auc, n, ret) in enumerate(rows, start=1):
+        lines.append(f"{rank:>3}. {label:<40} auc {_fmt(auc)} ({primary}, n={n})  final return {_fmt(ret, 1)}")
+    return lines
+
+
 def summarize(runs: Sequence[Run], max_gap: float = 0.05) -> str:
-    """For every group: the last evaluation of each run, means over runs and the acceptance status (D20)."""
+    """For every group: the last evaluation of each run, means over runs and the acceptance status (D20); with
+    several groups, their ranking by the AUC of the success curve (D65)."""
     lines: list[str] = []
-    for label, members in group_runs(runs).items():
+    groups = group_runs(runs)
+    for label, members in groups.items():
         lines += _summarize_group(label, members, max_gap)
         lines.append("")
+    if len(groups) > 1:
+        lines += _ranking(groups)
     return "\n".join(lines).rstrip("\n")
 
 

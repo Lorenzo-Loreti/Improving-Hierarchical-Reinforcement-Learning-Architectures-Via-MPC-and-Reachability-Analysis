@@ -22,6 +22,7 @@ from hrlmpc.analysis import (
     main,
     mean_curve,
     series,
+    success_auc,
     summarize,
     t_interval,
 )
@@ -59,9 +60,13 @@ def _make_run(
     every: int = 10240,
     env: dict[str, Any] | None = None,
     name: str | None = None,
+    agent: tuple[str, dict[str, Any]] | None = None,
 ) -> Path:
     run_dir = directory / (name or f"seed{seed}")
     config = {"algorithm": "ppo", "seed": seed, "env_file": "configs/env/tunnel.yaml", "env": env or TUNNEL}
+    if agent is not None:
+        config["agent_file"] = agent[0]
+        config["agent"] = agent[1]
     with RunLogger(run_dir, config, seed=seed) as logger:
         counter = SampleCounter()
         for i, record in enumerate(evaluations):
@@ -299,3 +304,47 @@ def test_the_curves_of_either_action(three_runs: list[Path], tmp_path: Path) -> 
     assert main([str(tmp_path / "mixed"), "--plot", str(figure), "--action", "mode"]) == 0
     assert figure.stat().st_size > 0
 
+
+
+# ------------------------------------------------------------------- tuning (D55, D65)
+
+
+def test_the_success_auc_is_the_normalized_area_under_the_curve(tmp_path: Path) -> None:
+    """Evaluations at 0, 10 240 and 20 480 with success 0, 0.5 and 1 (trapezoids) give 0.5 of the budget."""
+    run = load_run(_make_run(tmp_path, 1, [_eval(0.0, math.nan, 0.0, -200.0), _eval(0.5, 0.2, 0.0, 300.0),
+                                           _eval(1.0, 0.05, 0.0, 900.0)]))
+    assert success_auc(run, "mean") == pytest.approx(0.5)
+    assert math.isnan(success_auc(run, "mode"))  # not logged
+    single = load_run(_make_run(tmp_path / "one", 1, [_eval(1.0, 0.05, 0.0, 900.0)]))
+    assert math.isnan(success_auc(single, "mean"))  # one point has no area
+
+
+def test_group_labels_name_the_agent_file_when_it_is_not_the_algorithms(tmp_path: Path) -> None:
+    """Tuning and sweep files (c3.yaml, hppo_h6.yaml) tell the groups apart by name, not by a hash."""
+    a = _make_run(tmp_path / "a", 1, [_eval(1.0, 0.05, 0.0, 900.0)], agent=("configs/agent/tuning/ppo/c3.yaml",
+                                                                             {"lr": 1.0}))
+    b = _make_run(tmp_path / "b", 1, [_eval(1.0, 0.05, 0.0, 900.0)], agent=("configs/agent/tuning/ppo/c4.yaml",
+                                                                             {"lr": 2.0}))
+    c = _make_run(tmp_path / "c", 1, [_eval(1.0, 0.05, 0.0, 900.0)], agent=("configs\\agent\\ppo.yaml", {"lr": 3.0}))
+    groups = group_runs([load_run(a), load_run(b), load_run(c)])
+    assert sorted(groups) == ["ppo tunnel", "ppo tunnel c3", "ppo tunnel c4"]
+
+
+def test_the_summary_ranks_the_groups_by_the_auc(tmp_path: Path) -> None:
+    """D65: with several groups the summary ends with the ranking by the mean AUC of the success curve of the
+    primary action (the mode where logged), the selection rule of the tuning protocol."""
+    low = [_eval(0.0, math.nan, 0.0, -200.0), _eval(0.0, math.nan, 0.0, -200.0), _eval(1.0, 0.05, 0.0, 900.0)]
+    high = [_eval(0.0, math.nan, 0.0, -200.0), _eval(1.0, 0.05, 0.0, 850.0), _eval(1.0, 0.05, 0.0, 890.0)]
+    runs = []
+    for seed in (101, 102):
+        runs.append(load_run(_make_run(tmp_path / "c1", seed, low, agent=("tuning/ppo/c1.yaml", {"k": 1}))))
+        runs.append(load_run(_make_run(tmp_path / "c2", seed, high, agent=("tuning/ppo/c2.yaml", {"k": 2}))))
+    text = summarize(runs)
+    assert "auc of the success curve (mean)" in text
+    ranking = text.split("groups ranked by the AUC of the success curve")[1]
+    lines = [line for line in ranking.splitlines() if line.strip().startswith(("1.", "2."))]
+    assert lines[0].split()[1:4] == ["ppo", "tunnel", "c2"] and "auc 0.750" in lines[0] and "n=2" in lines[0]
+    assert lines[1].split()[1:4] == ["ppo", "tunnel", "c1"] and "auc 0.250" in lines[1]
+    assert "final return 890.0" in lines[0]
+    single = summarize([runs[0]])
+    assert "groups ranked" not in single
