@@ -33,8 +33,10 @@ def _data() -> dict[str, Any]:
 def test_the_shipped_configuration_is_the_decided_one() -> None:
     config = load_ppo_mpc_config(SHIPPED)
     hppo = load_hppo_config(REPO / "configs" / "agent" / "hppo.yaml")
-    # the Manager, the hierarchy, the rollout and the evaluation are hPPO's (D34)
-    assert config.manager == hppo.manager
+    # the Manager, the hierarchy, the rollout and the evaluation are hPPO's (D34); since the tuning of D65 each
+    # architecture carries its own selection, so the Manager is compared with hPPO's pre-tuning one (c1)
+    pre_tuning = load_hppo_config(REPO / "configs" / "agent" / "tuning" / "hppo" / "c1.yaml")
+    assert config.manager == pre_tuning.manager
     assert config.hierarchy == hppo.hierarchy
     assert config.rollout == hppo.rollout
     assert config.evaluation == hppo.evaluation

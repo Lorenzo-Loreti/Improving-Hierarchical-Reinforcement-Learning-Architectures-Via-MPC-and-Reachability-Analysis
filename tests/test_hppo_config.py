@@ -36,13 +36,14 @@ def _with(path: tuple[str, ...], value: Any) -> dict[str, Any]:
     return data
 
 
-def test_the_shipped_configuration_is_the_pre_alignment_tuning_of_hppo() -> None:
-    """D24, D27, D28."""
+def test_the_shipped_configuration_is_the_pre_alignment_tuning_with_the_selection_of_d65() -> None:
+    """D24, D27, D28; the Manager's entropy coefficient 0.03 since the tuning of D65 (configuration c3,
+    2026-10-14)."""
     config = load_hppo_config(SHIPPED)
     assert (config.hierarchy.segment_steps, config.hierarchy.target_reach_factor) == (10, 1.5)
     assert config.hierarchy.worker_progress_coef == 10.0
     assert (config.rollout.num_envs, config.rollout.num_steps) == (8, 256)
-    for level, minibatches in ((config.manager, 4), (config.worker, 8)):
+    for level, minibatches, entropy in ((config.manager, 4, 0.03), (config.worker, 8, 0.01)):
         assert level.network.hidden_sizes == (64, 64)
         u = level.update
         assert (u.discount, u.epochs, u.minibatches, u.learning_rate, u.anneal_learning_rate) == (
@@ -53,7 +54,7 @@ def test_the_shipped_configuration_is_the_pre_alignment_tuning_of_hppo() -> None
             False,
         )
         assert (u.critic_lr_mult, u.adam_eps, u.gae_lambda, u.clip_coef) == (3.0, 1e-5, 0.95, 0.2)
-        assert (u.entropy_coef, u.max_grad_norm, u.value_norm_horizon) == (0.01, 0.5, 10)
+        assert (u.entropy_coef, u.max_grad_norm, u.value_norm_horizon) == (entropy, 0.5, 10)
     assert (config.evaluation.every, config.evaluation.grid, config.evaluation.seed) == (10240, (5, 5), 12345)
     assert (config.runtime.device, config.runtime.torch_threads) == ("cpu", 1)
 

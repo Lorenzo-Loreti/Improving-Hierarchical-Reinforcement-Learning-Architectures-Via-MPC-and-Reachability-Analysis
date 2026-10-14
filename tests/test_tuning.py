@@ -1,5 +1,6 @@
 """Tests of the tuning configurations (decision log D55, D65): eight files per architecture that cover the
-2 x 2 x 2 design around the shipped file, nothing else changed."""
+2 x 2 x 2 design, nothing but the three knobs changed; the shipped file of an architecture is its selected
+configuration (c1, the pre-tuning file, while the selection is pending)."""
 
 from __future__ import annotations
 
@@ -17,6 +18,9 @@ from hrlmpc.ppo_mpc_config import PPOMPCConfig, load_ppo_mpc_config
 AGENTS = Path(__file__).resolve().parents[1] / "configs" / "agent"
 LEARNING_RATES = (3.0e-4, 1.0e-3)
 ENTROPIES = (0.01, 0.03)
+SELECTED = {"ppo": 5, "hppo": 3, "ppo_mpc": 1, "ppo_mpc_reachability": 1}
+"""The configuration each shipped file equals: the selections of 2026-10-14 (PPO c5, hPPO c3); the MPC
+architectures still their pre-tuning file c1, their tuning pending."""
 
 
 def _design(third: tuple[Any, Any]) -> list[tuple[float, float, Any]]:
@@ -55,11 +59,14 @@ def _mpc_variant(base: PPOMPCConfig, lr: float, entropy: float, effort: float) -
 
 
 def test_the_ppo_tuning_files_cover_the_design() -> None:
+    """Every file is the shipped file with its three knobs replaced: the shipped file differs from the pre-tuning
+    one in those knobs only, so this holds before and after the selection."""
     base = load_ppo_config(AGENTS / "ppo.yaml")
     for index, (lr, entropy, num_steps) in enumerate(_design((128, 256)), start=1):
         config = load_ppo_config(AGENTS / "tuning" / "ppo" / f"c{index}.yaml")
         assert config == _ppo_variant(base, lr, entropy, num_steps), index
-    assert load_ppo_config(AGENTS / "tuning" / "ppo" / "c1.yaml") == base  # the shipped tuning is c1
+    assert load_ppo_config(AGENTS / "tuning" / "ppo" / f"c{SELECTED['ppo']}.yaml") == base
+    assert base.update.learning_rate == 1.0e-3 and base.rollout.num_steps == 128  # c5 (2026-10-14)
 
 
 def test_the_hppo_tuning_files_cover_the_design() -> None:
@@ -67,7 +74,8 @@ def test_the_hppo_tuning_files_cover_the_design() -> None:
     for index, (lr, entropy, worker_lr) in enumerate(_design((3.0e-4, 1.0e-3)), start=1):
         config = load_hppo_config(AGENTS / "tuning" / "hppo" / f"c{index}.yaml")
         assert config == _hppo_variant(base, lr, entropy, worker_lr), index
-    assert load_hppo_config(AGENTS / "tuning" / "hppo" / "c1.yaml") == base
+    assert load_hppo_config(AGENTS / "tuning" / "hppo" / f"c{SELECTED['hppo']}.yaml") == base
+    assert base.manager.update.entropy_coef == 0.03 and base.worker.update.learning_rate == 3.0e-4  # c3
 
 
 @pytest.mark.parametrize("architecture", ["ppo_mpc", "ppo_mpc_reachability"])
@@ -78,7 +86,7 @@ def test_the_mpc_tuning_files_cover_the_design(architecture: str) -> None:
         config = load_ppo_mpc_config(AGENTS / "tuning" / architecture / f"c{index}.yaml")
         assert config == _mpc_variant(base, lr, entropy, effort), index
         assert config.algorithm == base.algorithm
-    assert load_ppo_mpc_config(AGENTS / "tuning" / architecture / "c1.yaml") == base
+    assert load_ppo_mpc_config(AGENTS / "tuning" / architecture / f"c{SELECTED[architecture]}.yaml") == base
 
 
 def test_every_architecture_has_exactly_eight_files() -> None:

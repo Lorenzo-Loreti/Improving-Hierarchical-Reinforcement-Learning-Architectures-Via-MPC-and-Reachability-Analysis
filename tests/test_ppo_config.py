@@ -26,15 +26,16 @@ def _with(section: str, key: str, value: Any) -> dict[str, Any]:
     return data
 
 
-def test_the_shipped_configuration_is_the_pre_alignment_tuning() -> None:
-    """D19: the values of the pre-alignment flat PPO (algorithms/ppo/ppo_train.py at tag pre-alignment)."""
+def test_the_shipped_configuration_is_the_pre_alignment_tuning_with_the_selection_of_d65() -> None:
+    """D19: the values of the pre-alignment flat PPO (algorithms/ppo/ppo_train.py at tag pre-alignment), but for
+    the learning rate, 1e-3 since the tuning of D65 (configuration c5, 2026-10-14)."""
     config = load_ppo_config(CONFIG)
     assert config.network.hidden_sizes == (64, 64)
     assert (config.rollout.num_envs, config.rollout.num_steps) == (8, 128)
     assert config.batch_size == 1024 and config.minibatch_size == 256
     u = config.update
     assert u.discount == 0.99  # gamma_RL of D13, set here since D22
-    assert (u.epochs, u.minibatches, u.learning_rate, u.anneal_learning_rate) == (10, 4, 3e-4, True)
+    assert (u.epochs, u.minibatches, u.learning_rate, u.anneal_learning_rate) == (10, 4, 1e-3, True)
     assert (u.critic_lr_mult, u.adam_eps, u.gae_lambda, u.clip_coef) == (3.0, 1e-5, 0.95, 0.2)
     assert (u.entropy_coef, u.max_grad_norm, u.value_norm_horizon) == (0.01, 0.5, 10)
     assert (config.evaluation.every, config.evaluation.grid) == (10240, (5, 5))

@@ -30,7 +30,7 @@ manager:
     adam_eps: 1.0e-5
     gae_lambda: 0.95           # per decision
     clip_coef: 0.2
-    entropy_coef: 0.01
+    entropy_coef: 0.03        # D65: c3; 0.01 before the tuning
     max_grad_norm: 0.5         # per network
     value_norm_horizon: 10     # updates in the running statistics of the critic's targets
 

@@ -14,6 +14,8 @@ from scipy import stats
 
 from hrlmpc.analysis import (
     CURVE_KEYS,
+    GAP_LENIENT,
+    SOLVED_LEVELS,
     accepted,
     curve_keys,
     find_runs,
@@ -24,9 +26,11 @@ from hrlmpc.analysis import (
     main,
     mean_curve,
     series,
+    solved,
     success_auc,
     summarize,
     t_interval,
+    time_to_solve,
     uses_oracle,
 )
 from hrlmpc.utils.runlog import RunLogger, SampleCounter
@@ -189,10 +193,16 @@ def test_the_first_accepted_evaluation(three_runs: list[Path]) -> None:
 
 
 def _rows(text: str, action: str = "mean") -> dict[str, list[str]]:
-    """The rows of the runs in the table of ``action``."""
-    mean, _, mode = text.partition("action: mode")
+    """The rows of the runs in the table of ``action`` (before the time-to-solve block)."""
+    mean, _, mode = text.partition("time to solve")[0].partition("action: mode")
     table = mean if action == "mean" else mode
     return {line.split()[0]: line.split() for line in table.splitlines() if line.startswith("seed")}
+
+
+def _solve_rows(text: str) -> dict[str, list[str]]:
+    """The rows of the runs in the time-to-solve block (D67)."""
+    block = text.partition("time to solve")[2].partition("solved:")[0]
+    return {line.split()[0]: line.split() for line in block.splitlines() if line.startswith("seed")}
 
 
 def test_the_summary_reports_every_run(three_runs: list[Path]) -> None:
@@ -370,3 +380,50 @@ def test_the_summary_ranks_the_groups_by_the_auc(tmp_path: Path) -> None:
     assert "final return 890.0" in lines[0]
     single = summarize([runs[0]])
     assert "groups ranked" not in single
+
+
+def test_the_time_to_solve_at_the_three_thresholds(tmp_path: Path) -> None:
+    """D67: the first evaluation with full success from the grid (primary), with full success and the gap at most
+    10 %, and meeting the strict criterion of D20 (gap at most 5 %, no contact); the contact-free full success is
+    reported beside them. On the primary action, the gap of the oracle where logged, else of F7."""
+    assert SOLVED_LEVELS == ("success", "gap_10", "strict", "contact_free") and GAP_LENIENT == 0.10
+    evaluations = [
+        _eval(0.0, math.nan, 0.0, -200.0, mode=(0.0, math.nan, 0.0, -200.0)),
+        _eval(1.0, 0.20, 0.04, 800.0, mode=(0.8, 0.20, 0.04, 700.0)),  # 10240: the mean arrives, the mode not yet
+        _eval(1.0, 0.08, 0.04, 850.0, mode=(1.0, 0.20, 0.04, 800.0)),  # 20480: full success of the mode, contact
+        _eval(1.0, 0.08, 0.00, 870.0, mode=(1.0, 0.08, 0.04, 850.0)),  # 30720: gap 8 %, still a contact
+        _eval(1.0, 0.03, 0.00, 900.0, mode=(1.0, 0.08, 0.00, 870.0)),  # 40960: contact-free
+        _eval(1.0, 0.03, 0.00, 900.0, mode=(1.0, 0.03, 0.00, 900.0)),  # 51200: strict
+    ]
+    run = load_run(_make_run(tmp_path, 1, evaluations))
+    assert time_to_solve(run, "mode") == {"success": 20480, "gap_10": 30720, "strict": 51200, "contact_free": 40960}
+    assert time_to_solve(run, "mean") == {"success": 10240, "gap_10": 20480, "strict": 40960, "contact_free": 30720}
+    assert time_to_solve(run, "mode", max_gap=0.02) == {"success": 20480, "gap_10": 30720, "strict": None,
+                                                        "contact_free": 40960}
+    record = evaluations[3]
+    assert solved(record, "success", "mode") and solved(record, "gap_10", "mode")
+    assert not solved(record, "strict", "mode") and not solved(record, "contact_free", "mode")
+    with pytest.raises(ValueError, match="level"):
+        solved(record, "gap_20", "mode")
+    text = summarize([run], max_gap=0.05)
+    assert "time to solve (D67)" in text
+    assert _solve_rows(text)["seed1"][1:] == ["20480", "30720", "51200", "40960"]
+    assert "solved: full success 1/1 (20480), gap <= 10% 1/1 (30720), strict 1/1 (51200), contact-free 1/1 (40960)" \
+        in text
+
+
+def test_the_time_to_solve_is_censored_and_needs_the_oracle_for_the_gaps(tmp_path: Path) -> None:
+    """A run that never meets a level is censored ("-"); on an obstacle layout without an oracle table the gap
+    levels are not applicable, the success levels still are."""
+    evaluations = [_eval(0.0, math.nan, 0.0, -200.0), _eval(1.0, 0.03, 0.0, 900.0)]
+    text = summarize([load_run(_make_run(tmp_path, 1, evaluations, env=SLALOM))], max_gap=0.05)
+    assert _solve_rows(text)["seed1"][1:] == ["10240", "n/a", "n/a", "10240"]
+    assert "solved: full success 1/1 (10240), gap <= 10% n/a, strict n/a, contact-free 1/1 (10240)" in text
+    stuck = [_eval(0.0, math.nan, 0.0, -200.0), _eval(0.5, 0.30, 0.2, 300.0)]
+    runs = [load_run(_make_run(tmp_path / "a", 2, stuck)), load_run(_make_run(tmp_path / "b", 3, evaluations))]
+    text = summarize(runs, max_gap=0.05)
+    rows = _solve_rows(text)
+    assert rows["seed2"][1:] == ["-", "-", "-", "-"] and rows["seed3"][1:] == ["10240", "10240", "10240", "10240"]
+    assert "solved: full success 1/2 (10240), gap <= 10% 1/2 (10240), strict 1/2 (10240), contact-free 1/2 (10240)" \
+        in text
+    assert time_to_solve(runs[0]) == {level: None for level in SOLVED_LEVELS}

@@ -1,7 +1,7 @@
-# hPPO (decision log D24-D28): the pre-alignment tuning of hPPO
-# (algorithms/hppo/hppo_train.py at tag pre-alignment), ported onto the
-# in-house PPO of D19 for both levels. The values are provisional until the
-# tuning protocol (Q13).
+# hPPO (decision log D24-D28): the pre-alignment tuning of hPPO, ported onto
+# the in-house PPO of D19 for both levels. Tuned under D65 (2026-10-14):
+# configuration c3 of configs/agent/tuning/hppo/ (the Manager's entropy
+# coefficient 0.03; the rest as before the tuning).
 # Write floats with a dot and a signed exponent (3.0e-4, 1.0e+5): YAML 1.1 reads 3e-4 and 1.0e5 as strings.
 
 hierarchy:                     # D24, D25, D27, D66
@@ -26,7 +26,7 @@ manager:
     adam_eps: 1.0e-5
     gae_lambda: 0.95           # per decision
     clip_coef: 0.2
-    entropy_coef: 0.01
+    entropy_coef: 0.03        # D65: c3; 0.01 before the tuning
     max_grad_norm: 0.5         # per network
     value_norm_horizon: 10     # updates in the running statistics of the critic's targets
 

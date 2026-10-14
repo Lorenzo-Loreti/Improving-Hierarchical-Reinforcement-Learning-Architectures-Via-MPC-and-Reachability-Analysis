@@ -10,7 +10,10 @@ It also checks the acceptance criterion of step 7 (D20): success from every
 start of the evaluation grid, arrival within a relative gap of the bound of
 F7, and no contact. The criterion applies to layouts without obstacles only,
 where the bound of F7 is the minimum time; with obstacles the gap is reported
-but measures the distance from a lower bound, not from the optimum.
+but measures the distance from a lower bound, not from the optimum, unless an
+oracle table was used (D59). The time to solve is reported at the levels of
+D67: full success from the grid (primary), full success with the gap at most
+10 %, the strict criterion of D20, and full success without contact.
 
 Since D43 every evaluation point evaluates the policy's mean and its mode,
 logged under ``eval/`` and ``eval_mode/`` (D50). The summary reports both, the
@@ -259,6 +262,49 @@ def first_accepted(run: Run, max_gap: float, action: str = "mean", oracle: bool 
     return None
 
 
+SOLVED_LEVELS: tuple[str, ...] = ("success", "gap_10", "strict", "contact_free")
+"""The levels of "solved" (D64, D67): full success from the grid (the primary threshold), full success with the
+largest gap of :func:`criterion_gap` at most :data:`GAP_LENIENT`, the strict criterion of D20 (:func:`accepted`:
+gap at most ``max_gap``, no contact), and full success without contact (reported beside them)."""
+
+GAP_LENIENT = 0.10
+"""The gap of the second level of D67."""
+
+
+def solved(record: Mapping[str, Any], level: str, action: str = "mean", max_gap: float = 0.05,
+           oracle: bool = True) -> bool:
+    """Whether the evaluation record meets ``level``, one of :data:`SOLVED_LEVELS`, on the evaluation with
+    ``action``.
+
+    Raises:
+        ValueError: For another level.
+    """
+    if level not in SOLVED_LEVELS:
+        raise ValueError(f"unknown level {level!r}, not one of {SOLVED_LEVELS}")
+    p = f"{evaluation_name(action)}/"
+    success = _value(record, p + "success_rate")
+    if success is None or success < 1.0:
+        return False
+    if level == "success":
+        return True
+    if level == "contact_free":
+        return _value(record, p + "contact_fraction") == 0.0
+    if level == "strict":
+        return accepted(record, max_gap, action, oracle)
+    gap = criterion_gap(record, action, oracle)
+    return gap is not None and gap <= GAP_LENIENT
+
+
+def time_to_solve(run: Run, action: str = "mean", max_gap: float = 0.05, oracle: bool = True) -> dict[str, int | None]:
+    """``env_steps`` of the first evaluation meeting each level of :data:`SOLVED_LEVELS` (D67), ``None`` where the
+    run never does (censored at its end)."""
+    evaluations = [r for r in run.records if "eval/success_rate" in r]
+    return {
+        level: next((int(r["env_steps"]) for r in evaluations if solved(r, level, action, max_gap, oracle)), None)
+        for level in SOLVED_LEVELS
+    }
+
+
 def success_auc(run: Run, action: str = "mean") -> float:
     """The area under the success curve of the evaluation with ``action``, by the trapezoidal rule over the
     samples, divided by the samples of the last evaluation: in ``[0, 1]`` (the selection rule of D65); NaN with
@@ -376,6 +422,7 @@ def _summarize_group(label: str, runs: Sequence[Run], max_gap: float) -> list[st
             "acceptance not applicable: the layout has obstacles and no oracle table, so the bound of F7 is not the "
             "minimum time"
         )
+    lines += ["", *_time_to_solve_block(runs, primary, max_gap, applicable)]
     if primary == "mean":
         lines.append("")
         lines.append("action: mode (D43): not evaluated in these runs")
@@ -395,6 +442,42 @@ def _summarize_group(label: str, runs: Sequence[Run], max_gap: float) -> list[st
             f"last stage reached in {len(reached)}/{len(runs)} runs"
             + (f"; samples: mean {np.mean(reached):.0f}, min {min(reached)}, max {max(reached)}" if reached else "")
         )
+    return lines
+
+
+_LEVEL_NAMES = {"success": "full success", "gap_10": "gap <= 10%", "strict": "strict", "contact_free": "contact-free"}
+
+
+def _time_to_solve_block(runs: Sequence[Run], action: str, max_gap: float, applicable: bool) -> list[str]:
+    """The first samples at which each run meets the levels of D67 on ``action``, and their counts over the runs;
+    the gap levels are not applicable on an obstacle layout without an oracle table."""
+    header = f"{'run':<28} {'success':>8} {'gap<=10%':>9} {'strict':>8} {'no-contact':>11}"
+    lines = [
+        f"time to solve (D67): the first evaluation of the {action} meeting the level (max gap {max_gap:g} for strict)",
+        header,
+        "-" * len(header),
+    ]
+    times = [time_to_solve(run, action, max_gap) for run in runs]
+    gap_levels = {"gap_10", "strict"}
+
+    def cell(level: str, value: int | None) -> str:
+        if level in gap_levels and not applicable:
+            return "n/a"
+        return "-" if value is None else str(value)
+
+    for run, time in zip(runs, times, strict=True):
+        widths = (8, 9, 8, 11)
+        cells = [f"{cell(level, time[level]):>{width}}" for level, width in zip(SOLVED_LEVELS, widths, strict=True)]
+        lines.append(f"{run.name:<28} " + " ".join(cells))
+    counts = []
+    for level in SOLVED_LEVELS:
+        if level in gap_levels and not applicable:
+            counts.append(f"{_LEVEL_NAMES[level]} n/a")
+            continue
+        met = sorted(value for t in times if (value := t[level]) is not None)
+        span = "" if not met else f" ({met[0]})" if met[0] == met[-1] else f" ({met[0]}-{met[-1]})"
+        counts.append(f"{_LEVEL_NAMES[level]} {len(met)}/{len(runs)}{span}")
+    lines.append("solved: " + ", ".join(counts))
     return lines
 
 

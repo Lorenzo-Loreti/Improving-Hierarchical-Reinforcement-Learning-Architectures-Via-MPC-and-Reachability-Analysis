@@ -1,6 +1,6 @@
 # Tuning configuration c6 of hppo (decision log D65): configs/agent/hppo.yaml with
 # manager.update.learning_rate = 0.001, manager.update.entropy_coef = 0.01 and worker.update.learning_rate = 0.001;
-# nothing else differs (a test). The eight files cover the 2 x 2 x 2 design of D65; c1 is the shipped file.
+# nothing else differs (a test). The eight files cover the 2 x 2 x 2 design of D65; c1 is the pre-tuning file.
 # Run on configs/env/slalom_sparse.yaml with --seeds 101 102 103 --runs-dir runs/tuning/hppo.
 hierarchy:
   segment_steps: 10
