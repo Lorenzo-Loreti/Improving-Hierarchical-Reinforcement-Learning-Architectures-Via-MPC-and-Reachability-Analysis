@@ -192,17 +192,73 @@ def test_the_summary_reports_every_run(three_runs: list[Path]) -> None:
     rows = _rows(text)
     assert [rows[f"seed{s}"][7] for s in (1, 2, 3)] == ["yes", "yes", "no"]
     assert [rows[f"seed{s}"][8] for s in (1, 2, 3)] == ["20480", "10240", "-"]
-    assert "== ppo tunnel (3 runs)" in text and "accepted at the end: 2/3 (max gap 0.05)" in text
+    assert "== ppo tunnel (3 runs)" in text and "accepted at the end: 2/3 (max gap 0.05, on the gap of F7)" in text
     strict = summarize([load_run(p) for p in three_runs], max_gap=0.025)
     assert [_rows(strict)[f"seed{s}"][7] for s in (1, 2, 3)] == ["no", "yes", "no"]
     assert "accepted at the end: 1/3" in strict
 
 
-def test_acceptance_does_not_apply_with_obstacles(tmp_path: Path) -> None:
-    """With obstacles F7 is only a lower bound, so the gap criterion of D20 is not applied."""
+def test_acceptance_does_not_apply_with_obstacles_and_no_oracle(tmp_path: Path) -> None:
+    """With obstacles F7 is only a lower bound, so without an oracle table the gap criterion is not applied."""
     run = load_run(_make_run(tmp_path, 1, [_eval(1.0, 0.01, 0.0, 900.0)], env=SLALOM))
     text = summarize([run])
     assert _rows(text)["seed1"][7] == "n/a" and "acceptance not applicable" in text
+
+
+def test_the_acceptance_uses_the_oracle_gap_where_it_is_logged(tmp_path: Path) -> None:
+    """D59: with an oracle table the criterion of D20 applies to the slalom too, on the oracle gap; the gap of F7
+    stays reported."""
+    first = _eval(1.0, 0.20, 0.0, 850.0)
+    first.update({"eval/oracle_gap_max": 0.08, "eval/oracle_gap_mean": 0.04})
+    last = _eval(1.0, 0.12, 0.0, 900.0)
+    last.update({"eval/oracle_gap_max": 0.03, "eval/oracle_gap_mean": 0.01})
+    run = load_run(_make_run(tmp_path, 1, [first, last], env=SLALOM))
+    text = summarize([run], max_gap=0.05)
+    assert _rows(text)["seed1"][7] == "yes" and _rows(text)["seed1"][8] == "10240"
+    assert "accepted at the end: 1/1 (max gap 0.05, on the oracle gap, D59)" in text
+    assert "eval/oracle_gap_max        mean 0.030" in text
+    assert accepted(last, max_gap=0.05) and not accepted(first, max_gap=0.05)
+    assert accepted(last, max_gap=0.05, oracle=False) is False  # on the gap of F7 alone, 0.12 fails
+    assert first_accepted(run, max_gap=0.05) == 10240
+
+
+def test_the_acceptance_is_decided_on_the_mode_where_it_is_logged(tmp_path: Path) -> None:
+    """D57: from the final runs on, the mode is the primary action: the acceptance is decided on its evaluation when
+    it is logged, and on the mean's otherwise (the runs of steps 7-10)."""
+    run = load_run(_make_run(tmp_path, 1, [_eval(1.0, 0.04, 0.0, 905.0, mode=(1.0, 0.10, 0.0, 880.0))]))
+    text = summarize([run], max_gap=0.05)
+    assert "acceptance on the mode (D57)" in text and "accepted at the end: 0/1" in text
+    assert _rows(text, "mode")["seed1"][7] == "no"
+    lenient = summarize([run], max_gap=0.10)
+    assert "accepted at the end: 1/1" in lenient
+    old = load_run(_make_run(tmp_path / "old", 1, [_eval(1.0, 0.04, 0.0, 905.0)]))
+    text = summarize([old], max_gap=0.05)
+    assert "acceptance on the mean (D20)" in text and "accepted at the end: 1/1" in text
+
+
+def test_the_curriculum_is_summarized(tmp_path: Path) -> None:
+    """D62: runs with a curriculum report the stage at the end and the samples at which the last stage was
+    reached; runs without one say nothing about it."""
+    env = {"geometry": {"obstacles": []}, "task": {"curriculum": {"x_start": 8.0, "step": 1.0, "window": 50,
+                                                                   "threshold": 0.8}}}
+    run_dir = tmp_path / "seed1"
+    config = {"algorithm": "ppo", "seed": 1, "env_file": "x.yaml", "env": env}
+    with RunLogger(run_dir, config, seed=1) as logger:
+        counter = SampleCounter()
+        logger.log(_eval(0.0, math.nan, 0.0, -200.0), counter)
+        stages = [(2048, 3.0), (4096, 7.0), (6144, 8.0), (8192, 8.0)]
+        for steps, stage in stages:
+            counter.add_env_steps(steps - counter.env_steps)
+            logger.log({"train/policy_loss": 0.1, "curriculum/stage": stage, "curriculum/stages": 9.0,
+                        "curriculum/x_min": 8.0 - stage, "curriculum/final": float(stage == 8.0),
+                        "curriculum/window_success": 0.5}, counter)
+            if steps == 8192:
+                logger.log(_eval(1.0, 0.02, 0.0, 900.0), counter)
+    text = summarize([load_run(run_dir)])
+    assert "curriculum (D62): stage at the end and samples to the last stage" in text
+    assert "seed1" in text and " 8/8 " in text and " 6144" in text
+    plain = summarize([load_run(_make_run(tmp_path, 2, [_eval(1.0, 0.02, 0.0, 900.0)]))])
+    assert "curriculum" not in plain
 
 
 def test_the_command_line_prints_and_plots(
@@ -216,12 +272,12 @@ def test_the_command_line_prints_and_plots(
 
 
 def test_the_summary_reports_the_mode_beside_the_mean(tmp_path: Path) -> None:
-    """D43, D50: a table for each action; the criterion of D20 stays on the mean."""
+    """D43, D50, D57: a table for each action; where the mode is logged the criterion of D20 is decided on it."""
     run = load_run(_make_run(tmp_path, 1, [_eval(1.0, 0.04, 0.0, 905.0, mode=(0.75, 0.01, 0.25, 640.0))]))
     text = summarize([run], max_gap=0.05)
-    assert _rows(text)["seed1"][2:8] == ["1.00", "905.0", "0.020", "0.040", "0.00", "yes"]
-    assert _rows(text, "mode")["seed1"][2:7] == ["0.75", "640.0", "0.005", "0.010", "0.25"]
-    assert "accepted at the end: 1/1 (max gap 0.05)" in text  # on the mean, whatever the mode did
+    assert _rows(text)["seed1"][2:7] == ["1.00", "905.0", "0.020", "0.040", "0.00"]
+    assert _rows(text, "mode")["seed1"][2:8] == ["0.75", "640.0", "0.005", "0.010", "0.25", "no"]
+    assert "accepted at the end: 0/1 (max gap 0.05, on the gap of F7)" in text  # on the mode, whatever the mean did
     assert "eval_mode/success_rate     mean 0.750" in text
 
 

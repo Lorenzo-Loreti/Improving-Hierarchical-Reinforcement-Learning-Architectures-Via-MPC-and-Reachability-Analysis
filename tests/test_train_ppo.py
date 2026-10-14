@@ -50,7 +50,7 @@ def _without_time(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def test_a_short_run_writes_its_directory(tmp_path: Path) -> None:
-    run_dir = train(_env(), _ppo(), budget=32, seed=1, run_dir=tmp_path / "run")
+    run_dir = train(_env(), _ppo(), budget=32, seed=1, run_dir=tmp_path / "run", oracle_dir=tmp_path / "none")
     names = sorted(p.name for p in run_dir.iterdir())
     assert names == ["config.yaml", "evaluations.jsonl", "final.pt", "meta.json", "metrics.jsonl"]
     records = _records(run_dir)
@@ -80,6 +80,49 @@ def test_a_short_run_writes_its_directory(tmp_path: Path) -> None:
     details = [json.loads(line) for line in (run_dir / "evaluations.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [(d["env_steps"], d["action"]) for d in details] == [(n, a) for n in (0, 16, 32) for a in EVAL_ACTIONS]
     assert details[0]["starts"] == details[1]["starts"] == spawn_grid(_env().task.spawn, (2, 2)).tolist()
+    assert config["oracle_file"] is None and details[0]["oracle_steps"] is None  # no table in oracle_dir (D44)
+    assert all(r["eval/oracle_gap_mean"] is None for r in evaluations)  # NaN is logged as null
+
+
+def test_the_spawn_curriculum_is_used_and_logged(tmp_path: Path) -> None:
+    """D62: with a curriculum in the task, its stage is logged with the rollout metrics and the run's
+    configuration records it; the evaluation keeps the grid of D20. (The starts from the band are the
+    environment's business: ``tests/test_curriculum.py``.)"""
+    env = _env(task={"curriculum": {"x_start": 8.0, "step": 1.0, "window": 2, "threshold": 0.5}})
+    assert env.task.curriculum is not None
+    run_dir = train(env, _ppo(), budget=32, seed=1, run_dir=tmp_path / "run", echo=None, oracle_dir=tmp_path / "x")
+    records = _records(run_dir)
+    updates = [r for r in records if "train/policy_loss" in r]
+    assert all(set(("curriculum/stage", "curriculum/x_min", "curriculum/final")) <= set(r) for r in updates)
+    assert updates[0]["curriculum/stages"] == 9.0 and 8.0 >= updates[0]["curriculum/x_min"] >= 0.0
+    config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    assert config["env"]["task"]["curriculum"] == {"x_start": 8.0, "step": 1.0, "window": 2, "threshold": 0.5}
+    details = [json.loads(line) for line in (run_dir / "evaluations.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert details[0]["starts"] == spawn_grid(env.task.spawn, (2, 2)).tolist()  # the evaluation's starts: D20
+    plain = _records(train(_env(), _ppo(), budget=16, seed=1, run_dir=tmp_path / "plain", echo=None))
+    assert not any("curriculum/stage" in r for r in plain)
+
+
+def test_the_oracle_table_of_the_layout_is_used_when_there_is_one(tmp_path: Path) -> None:
+    """D44: a table of the layout and starts in ``oracle_dir`` gives the oracle gaps and is recorded in the run."""
+    from hrlmpc.oracle import OracleEntry, OracleSettings, OracleTable, layout_signature
+
+    env, ppo = _env(), _ppo()
+    starts = spawn_grid(env.task.spawn, (2, 2))
+    physics, geometry = layout_signature(env)
+    entries = tuple(
+        OracleEntry((float(p[0]), float(p[1])), 9, 9, 0.0, (), 9, True, 0, 0, 0.0) for p in starts
+    )
+    folder = tmp_path / "oracle"
+    folder.mkdir()
+    OracleTable(physics, geometry, {"rho": OracleSettings.rho}, entries).save(folder / "tiny.json")
+    run_dir = train(env, ppo, budget=16, seed=1, run_dir=tmp_path / "run", echo=None, oracle_dir=folder)
+    config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    assert config["oracle_file"] == str((folder / "tiny.json").resolve())
+    details = [json.loads(line) for line in (run_dir / "evaluations.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert all(d["oracle_steps"] == [9, 9, 9, 9] for d in details)
+    for record in [r for r in _records(run_dir) if "eval/success_rate" in r]:
+        assert "eval/oracle_gap_mean" in record and "eval_mode/oracle_gap_max" in record
 
 
 def test_the_learning_rates_decay_linearly_over_the_budget(tmp_path: Path) -> None:
@@ -197,6 +240,8 @@ def test_inconsistent_settings_are_refused_before_anything_is_written(tmp_path: 
         train(_env(), _ppo(), budget=32, seed=99, run_dir=tmp_path / "run")  # _ppo() evaluates with seed 99
     with pytest.raises(ValueError, match="overwrite"):
         train(_env(), _ppo(), budget=32, seed=1, run_dir=tmp_path / "run", provenance={"seed": 5})
+    with pytest.raises(ValueError, match="overwrite"):  # D44: the table is found by content, not declared
+        train(_env(), _ppo(), budget=32, seed=1, run_dir=tmp_path / "run", provenance={"oracle_file": "x"})
     assert not (tmp_path / "run").exists()
     with pytest.raises(SystemExit):
         main(["--env", "x.yaml", "--agent", "y.yaml", "--budget", "32", "--seeds", "1", "1"])

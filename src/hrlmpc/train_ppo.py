@@ -42,6 +42,7 @@ import yaml
 from hrlmpc.config import EnvConfig, env_config_to_dict, load_env_config
 from hrlmpc.env import NavigationEnv
 from hrlmpc.evaluation import EVAL_ACTIONS, append_details, console_line, evaluate, evaluation_name, spawn_grid
+from hrlmpc.oracle import find_oracle, oracle_line, oracle_record
 from hrlmpc.ppo import PPOAgent, make_batch
 from hrlmpc.ppo_config import PPOConfig, load_ppo_config, ppo_config_from_dict, ppo_config_to_dict
 from hrlmpc.rollout import collect_rollout, compute_gae, episode_metrics
@@ -59,6 +60,7 @@ def train(
     provenance: Mapping[str, Any] | None = None,
     repo_dir: str | Path | None = None,
     echo: Callable[[str], None] | None = print,
+    oracle_dir: str | Path | None = None,
 ) -> Path:
     """Train flat PPO for ``budget`` samples and write the run directory.
 
@@ -73,6 +75,8 @@ def train(
         repo_dir: Directory inside the git checkout, for ``meta.json``; by
             default the package's own directory.
         echo: Receives one line per evaluation; ``None`` keeps quiet.
+        oracle_dir: Where to look for the oracle table of the layout (D44); by default the repository's
+            ``configs/oracle/``. Without a table the oracle gaps are NaN.
 
     Returns:
         The run directory.
@@ -92,7 +96,7 @@ def train(
         )
     if seed == ppo_config.evaluation.seed:
         raise ValueError(f"the training seed {seed} must differ from the evaluation seed")
-    reserved = {"algorithm", "seed", "budget", "discount", "env", "agent"}
+    reserved = {"algorithm", "seed", "budget", "discount", "env", "agent", "oracle_file"}
     if reserved & set(provenance or {}):
         raise ValueError(f"provenance entries may not overwrite {sorted(reserved & set(provenance or {}))}")
     if ppo_config.runtime.device.startswith("cuda") and "CUBLAS_WORKSPACE_CONFIG" not in os.environ:
@@ -101,7 +105,7 @@ def train(
     warn_only = torch.is_deterministic_algorithms_warn_only_enabled()
     threads, benchmark = torch.get_num_threads(), torch.backends.cudnn.benchmark
     try:
-        return _train(env_config, ppo_config, budget, seed, Path(run_dir), provenance, repo_dir, echo)
+        return _train(env_config, ppo_config, budget, seed, Path(run_dir), provenance, repo_dir, echo, oracle_dir)
     finally:  # leave the process's global PyTorch settings as they were
         torch.use_deterministic_algorithms(deterministic, warn_only=warn_only)
         torch.set_num_threads(threads)
@@ -117,6 +121,7 @@ def _train(
     provenance: Mapping[str, Any] | None,
     repo_dir: str | Path | None,
     echo: Callable[[str], None] | None,
+    oracle_dir: str | Path | None,
 ) -> Path:
     per_update, every = ppo_config.batch_size, ppo_config.evaluation.every
     seed_everything(seed)
@@ -128,6 +133,8 @@ def _train(
         env.observation_size, env.action_size, ppo_config.network, settings, device=ppo_config.runtime.device
     )
     starts = spawn_grid(env_config.task.spawn, ppo_config.evaluation.grid)
+    found = find_oracle(env_config, starts, oracle_dir)
+    oracle = None if found is None else found[1]
     config: dict[str, Any] = {
         "algorithm": "ppo",
         "seed": seed,
@@ -135,6 +142,7 @@ def _train(
         "discount": gamma,
         **dict(provenance or {}),
         "env": env_config_to_dict(env_config),
+        "oracle_file": oracle_record(found),
         "agent": ppo_config_to_dict(ppo_config),
     }
     num_updates = budget // per_update
@@ -146,7 +154,7 @@ def _train(
             for action in EVAL_ACTIONS:  # the mean, then the mode (D43)
                 name = evaluation_name(action)
                 policy = agent.deterministic_policy(action)
-                result = evaluate(policy, env_config, starts, seed=ppo_config.evaluation.seed)
+                result = evaluate(policy, env_config, starts, seed=ppo_config.evaluation.seed, oracle=oracle)
                 metrics.update(result.metrics(prefix=f"{name}/"))
                 metrics.update(result.timing(name))
                 append_details(path / "evaluations.jsonl", result, env_steps=env.counter.env_steps, action=action)
@@ -154,6 +162,8 @@ def _train(
             if echo is not None:
                 echo(f"{path.name}: {env.counter.env_steps:>8} samples | {console_line(metrics)}")
 
+        if echo is not None:
+            echo(f"{path.name}: {oracle_line(found)}")
         evaluate_now()
         obs = env.reset()
         started = time.perf_counter()
@@ -179,6 +189,7 @@ def _train(
             update_s = time.perf_counter() - tick
             training_time += rollout_s + update_s
             metrics.update(episode_metrics(rollout.episodes))
+            metrics.update(env.curriculum_metrics())  # the stage of the spawn curriculum, if any (D62)
             metrics.update(
                 {
                     "train/updates": k + 1,

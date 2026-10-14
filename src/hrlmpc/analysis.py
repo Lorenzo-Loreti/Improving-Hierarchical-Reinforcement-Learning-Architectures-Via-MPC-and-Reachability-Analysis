@@ -54,7 +54,7 @@ CURVE_KEYS: tuple[str, ...] = (
 """Evaluation metrics plotted by the command line, those of the mean (D20)."""
 
 _FRACTIONS = ("/success_rate", "/contact_fraction")
-_PROVENANCE = {"seed", "env_file", "agent_file"}
+_PROVENANCE = {"seed", "env_file", "agent_file", "oracle_file"}
 
 
 def curve_keys(action: str = "mean") -> tuple[str, ...]:
@@ -217,21 +217,55 @@ def mean_curve(runs: Sequence[Run], key: str, confidence: float = 0.95) -> Curve
     return Curve(steps, mean, low, high, count, len(runs))
 
 
-def accepted(record: Mapping[str, Any], max_gap: float) -> bool:
-    """Acceptance criterion of step 7 (D20) on one evaluation record."""
-    keys = ("eval/success_rate", "eval/arrival_gap_max", "eval/contact_fraction")
-    success, gap, contact = (record.get(k) for k in keys)
+def _value(record: Mapping[str, Any], key: str) -> float | None:
+    """A logged value, or ``None`` where it is missing or NaN (written as ``null``)."""
+    value = record.get(key)
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return None
+    return float(value)
+
+
+def criterion_gap(record: Mapping[str, Any], action: str = "mean", oracle: bool = True) -> float | None:
+    """The largest arrival gap the criterion of D20 is judged on: the oracle gap where it is logged (D59), else the
+    gap of F7; ``None`` where neither is."""
+    p = f"{evaluation_name(action)}/"
+    gap = _value(record, p + "oracle_gap_max") if oracle else None
+    return gap if gap is not None else _value(record, p + "arrival_gap_max")
+
+
+def accepted(record: Mapping[str, Any], max_gap: float, action: str = "mean", oracle: bool = True) -> bool:
+    """Acceptance criterion of step 7 (D20) on one evaluation record: success from every start, the largest arrival
+    gap (:func:`criterion_gap`) at most ``max_gap``, no contact; on the evaluation with ``action`` (D57)."""
+    p = f"{evaluation_name(action)}/"
+    success, contact = _value(record, p + "success_rate"), _value(record, p + "contact_fraction")
+    gap = criterion_gap(record, action, oracle)
     if success is None or gap is None or contact is None:
         return False
     return bool(success == 1.0 and gap <= max_gap and contact == 0.0)
 
 
-def first_accepted(run: Run, max_gap: float) -> int | None:
+def first_accepted(run: Run, max_gap: float, action: str = "mean", oracle: bool = True) -> int | None:
     """``env_steps`` of the first evaluation that meets the criterion, or ``None``."""
     for record in run.records:
-        if "eval/success_rate" in record and accepted(record, max_gap):
+        if "eval/success_rate" in record and accepted(record, max_gap, action, oracle):
             return int(record["env_steps"])
     return None
+
+
+def has_oracle(record: Mapping[str, Any], action: str = "mean") -> bool:
+    """Whether the evaluation record carries the oracle gap (D44)."""
+    return _value(record, f"{evaluation_name(action)}/oracle_gap_max") is not None
+
+
+def curriculum_summary(run: Run) -> tuple[int, int, int | None] | None:
+    """``(stage, stages, samples)`` of a run with the spawn curriculum (D62): the stage at the end, the number of
+    stages and the ``env_steps`` of the first update at the last stage (``None`` if never); ``None`` without one."""
+    updates = [r for r in run.records if "curriculum/stage" in r]
+    if not updates:
+        return None
+    last = updates[-1]
+    samples = next((int(r["env_steps"]) for r in updates if r.get("curriculum/final") == 1.0), None)
+    return int(last["curriculum/stage"]), int(last["curriculum/stages"]), samples
 
 
 def _last_evaluation(run: Run) -> dict[str, Any]:
@@ -268,7 +302,8 @@ def _table(
             f"{extra[i] if extra else ''}"
         )
     lines.append("")
-    for key in curve_keys(action):
+    oracle_keys = (p + "oracle_gap_mean", p + "oracle_gap_max")  # reported where measured (D44)
+    for key in (*curve_keys(action), *oracle_keys):
         values = np.array([math.nan if f.get(key) is None else f[key] for f in finals], dtype=np.float64)
         values = values[~np.isnan(values)]
         if values.size:
@@ -278,28 +313,56 @@ def _table(
 
 
 def _summarize_group(label: str, runs: Sequence[Run], max_gap: float) -> list[str]:
-    applicable = not any(run.has_obstacles for run in runs)
+    """The tables of a group: the mean's and, where logged, the mode's; the acceptance of D20 is decided on the mode
+    where it is logged (D57) and on the mean otherwise, on the oracle gap where a table was used (D59) and on the
+    gap of F7 otherwise, which applies to layouts without obstacles only."""
     finals = [_last_evaluation(run) for run in runs]
+    with_mode = all(f"{evaluation_name('mode')}/success_rate" in final for final in finals)
+    primary = "mode" if with_mode else "mean"
+    with_oracle = all(has_oracle(final, primary) for final in finals)
+    applicable = with_oracle or not any(run.has_obstacles for run in runs)
     verdicts = []
     for run, final in zip(runs, finals, strict=True):
-        first = first_accepted(run, max_gap) if applicable else None
-        verdict = ("yes" if accepted(final, max_gap) else "no") if applicable else "n/a"
+        first = first_accepted(run, max_gap, primary) if applicable else None
+        verdict = ("yes" if accepted(final, max_gap, primary) else "no") if applicable else "n/a"
         verdicts.append(f" {verdict:>8} {'-' if first is None else first:>8}")
-    lines = [
-        f"== {label} ({len(runs)} runs)",
-        "action: mean (D20)",
-        *_table(runs, finals, "mean", verdicts, f" {'accepted':>8} {'first':>8}"),
-    ]
+    acceptance_columns = f" {'accepted':>8} {'first':>8}"
+    lines = [f"== {label} ({len(runs)} runs)"]
+    if primary == "mean":
+        lines.append("action: mean; acceptance on the mean (D20)")
+        lines += _table(runs, finals, "mean", verdicts, acceptance_columns)
+    else:
+        lines += ["action: mean (D43)", *_table(runs, finals, "mean"), ""]
+        lines.append("action: mode; acceptance on the mode (D57)")
+        lines += _table(runs, finals, "mode", verdicts, acceptance_columns)
     if applicable:
-        count = sum(accepted(f, max_gap) for f in finals)
-        lines.append(f"accepted at the end: {count}/{len(runs)} (max gap {max_gap:g})")
+        count = sum(accepted(f, max_gap, primary) for f in finals)
+        basis = "on the oracle gap, D59" if with_oracle else "on the gap of F7"
+        lines.append(f"accepted at the end: {count}/{len(runs)} (max gap {max_gap:g}, {basis})")
     else:
-        lines.append("acceptance not applicable: the layout has obstacles, so the bound of F7 is not the minimum time")
-    lines.append("")
-    if any(f"{evaluation_name('mode')}/success_rate" in final for final in finals):
-        lines += ["action: mode (D43; the acceptance of D20 is the mean's)", *_table(runs, finals, "mode")]
-    else:
+        lines.append(
+            "acceptance not applicable: the layout has obstacles and no oracle table, so the bound of F7 is not the "
+            "minimum time"
+        )
+    if primary == "mean":
+        lines.append("")
         lines.append("action: mode (D43): not evaluated in these runs")
+    curricula = [curriculum_summary(run) for run in runs]
+    if any(c is not None for c in curricula):
+        lines += ["", "curriculum (D62): stage at the end and samples to the last stage"]
+        reached = []
+        for run, summary in zip(runs, curricula, strict=True):
+            if summary is None:
+                lines.append(f"{run.name:<28} {'-':>8}")
+                continue
+            stage, stages, samples = summary
+            lines.append(f"{run.name:<28} {stage}/{stages - 1} {'-' if samples is None else samples:>8}")
+            if samples is not None:
+                reached.append(samples)
+        lines.append(
+            f"last stage reached in {len(reached)}/{len(runs)} runs"
+            + (f"; samples: mean {np.mean(reached):.0f}, min {min(reached)}, max {max(reached)}" if reached else "")
+        )
     return lines
 
 

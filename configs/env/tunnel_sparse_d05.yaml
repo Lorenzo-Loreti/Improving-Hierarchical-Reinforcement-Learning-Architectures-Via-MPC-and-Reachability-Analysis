@@ -1,0 +1,35 @@
+# Tunnel with the sparse reward of decision log D51 at the disturbance level
+# d_bar = 0.5 (D45): configs/env/tunnel_d05.yaml with only the progress term removed
+# (progress_coef 0). Values from the thesis decision log: D9 (physics), D11 (geometry),
+# D13 (task and reward), D14 (contact penalty), D45 (levels) and D51 (sparse reward).
+
+physics:
+  dt: 0.1
+  a_max: 2.5
+  v_max: 1.2
+  gamma: 0.5
+  gamma_w: 1.0
+  d_bar: 0.5
+
+geometry:
+  arena: {x: [-1.0, 11.0], y: [-2.0, 2.0]}
+  obstacles: []
+  goal_x: 10.0
+
+task:
+  spawn: {x: [0.0, 2.0], y: [-1.0, 1.0]}  # the evaluation's starts
+  horizon: 200
+  curriculum:      # reverse spawn curriculum of the training starts (D62); absent in the shaped files
+    x_start: 8.0   # the first band is [8, 10] x [-1, 1], the shape of the spawn box; the last band is the spawn box
+    step: 1.0      # the band slides back by 1 m per stage: nine stages
+    window: 50     # episodes started in the stage over which the success rate is measured
+    threshold: 0.8 # success rate that advances the stage
+
+reward:
+  time_penalty: 1.0
+  success_bonus: 1000.0
+  progress_coef: 0.0           # sparse reward (D51): no progress term; 10.0 in the shaped files
+  shaping_discount: 1.0
+  effort_coef: 0.01
+  contact_impulse_coef: 50.0
+  contact_step_coef: 1.0

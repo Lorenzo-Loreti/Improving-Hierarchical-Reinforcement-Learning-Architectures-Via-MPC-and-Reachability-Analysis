@@ -17,7 +17,10 @@ each step, for every agent:
    reward omits the shaping term;
 5. an episode terminates when ``p_(k+1)`` lies in the goal region and is
    truncated at the horizon. A finished episode restarts at rest, uniformly in
-   the spawn box, unless automatic resets are disabled.
+   the spawn box or, with the reverse spawn curriculum of D62
+   (:mod:`hrlmpc.curriculum`), in the current band of the curriculum, unless
+   automatic resets are disabled. Explicit starts (the evaluation) bypass the
+   curriculum and do not count for its stage.
 
 Contact is never terminal (D1). Observations are ``(p, v)`` mapped to
 ``[-1, 1]`` with the arena's bounding box and ``v_max`` (D13); the map is
@@ -26,7 +29,8 @@ fixed and invertible (:class:`ObservationMap`).
 Random numbers. Each agent owns two generators spawned from the seed: one for
 its initial positions and one for its disturbances. An agent's trajectory
 therefore depends only on the seed, its index and its own actions, not on the
-batch size or on the other agents. Every level of ``d_bar`` draws the same unit
+batch size or on the other agents; with a curriculum, the band an agent
+starts from is shared state that every agent's outcomes advance. Every level of ``d_bar`` draws the same unit
 disturbances, scaled by ``d_bar``, which pairs the comparisons across levels.
 
 Samples (D6): every physical step adds ``num_envs`` to ``counter.env_steps``;
@@ -42,6 +46,7 @@ from numpy.typing import ArrayLike, NDArray
 
 from hrlmpc.action_map import square_to_disk
 from hrlmpc.config import EnvConfig
+from hrlmpc.curriculum import SpawnCurriculum
 from hrlmpc.geometry import TOL, Layout
 from hrlmpc.physics import physics_step
 from hrlmpc.utils.runlog import SampleCounter
@@ -208,7 +213,8 @@ class NavigationEnv:
         autoreset: Whether finished episodes restart within :meth:`step`.
 
     Raises:
-        ValueError: If ``num_envs`` is not positive or ``seed`` is negative.
+        ValueError: If ``num_envs`` is not positive or ``seed`` is negative, or a band of the curriculum has
+            too few free points (:class:`~hrlmpc.curriculum.SpawnCurriculum`).
     """
 
     observation_size = 4
@@ -231,6 +237,11 @@ class NavigationEnv:
         self.obs_map = ObservationMap.from_layout(self.layout, self.params.v_max)
         spawn = config.task.spawn
         self._spawn_lo, self._spawn_hi = np.array([spawn.x[0], spawn.y[0]]), np.array([spawn.x[1], spawn.y[1]])
+        self.curriculum: SpawnCurriculum | None = (
+            None if config.task.curriculum is None else SpawnCurriculum(config.task.curriculum, spawn, self.layout)
+        )
+        """The reverse spawn curriculum of the training starts (D62), or ``None``."""
+        self._episode_stage = np.full(num_envs, -1, dtype=np.int64)  # the stage each episode started in; -1: explicit
         self._p = np.zeros((num_envs, 2))
         self._v = np.zeros((num_envs, 2))
         self._steps = np.zeros(num_envs, dtype=np.int64)
@@ -252,6 +263,10 @@ class NavigationEnv:
         """``(B,)`` steps taken in the current episodes (a copy)."""
         return self._steps.copy()
 
+    def curriculum_metrics(self) -> dict[str, float]:
+        """The curriculum's stage for the logs (:meth:`SpawnCurriculum.metrics`); empty without a curriculum."""
+        return {} if self.curriculum is None else self.curriculum.metrics()
+
     def observe(self, p: ArrayLike, v: ArrayLike) -> FloatArray:
         """Observations of states ``(p, v)``: both mapped to ``[-1, 1]`` (D13, :class:`ObservationMap`)."""
         return self.obs_map.observe(p, v)
@@ -263,7 +278,8 @@ class NavigationEnv:
 
         Args:
             positions: One position per selected agent, free and outside the
-                goal region; by default drawn uniformly in the spawn box.
+                goal region; by default drawn uniformly in the spawn box or, with
+                a curriculum, in the free part of its current band (D62).
             velocities: One velocity per selected agent; zero by default.
             mask: ``(B,)`` booleans selecting the agents.
 
@@ -282,14 +298,19 @@ class NavigationEnv:
         v = np.zeros((len(index), 2)) if velocities is None else _rows(velocities, len(index), "velocities")
         if np.any(np.hypot(v[:, 0], v[:, 1]) > self.params.v_max + TOL):
             raise ValueError("every initial speed must be at most v_max")
-        if positions is None:
+        if positions is None and self.curriculum is not None:
+            p = np.array([self.curriculum.sample(self._spawn_rngs[i], 1)[0] for i in index]).reshape(-1, 2)
+            self._episode_stage[index] = self.curriculum.stage
+        elif positions is None:
             p = np.array([self._spawn_rngs[i].uniform(self._spawn_lo, self._spawn_hi) for i in index]).reshape(-1, 2)
+            self._episode_stage[index] = -1
         else:
             p = _rows(positions, len(index), "positions")
             if not self.layout.in_free_space(p).all():
                 raise ValueError("every initial position must lie in the free space")
             if self.layout.in_goal(p).any():
                 raise ValueError("no initial position may lie in the goal region")
+            self._episode_stage[index] = -1
         self._p[index], self._v[index] = p, v
         self._steps[index] = 0
         self._needs_reset[index] = False
@@ -356,6 +377,9 @@ class NavigationEnv:
         truncated = (self._steps >= self.config.task.horizon) & ~terminated
         done = terminated | truncated
         episodes = self._stats.add(reward, info, done, success)
+        if self.curriculum is not None:
+            for episode in episodes:  # before the automatic resets, which draw from the stage reached
+                self.curriculum.record(int(self._episode_stage[episode.env]), episode.success)
         final_obs = self.observe(self._p, self._v)
         if done.any():
             if self.autoreset:

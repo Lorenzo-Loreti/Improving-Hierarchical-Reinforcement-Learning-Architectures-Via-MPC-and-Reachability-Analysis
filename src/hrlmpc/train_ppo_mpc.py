@@ -97,6 +97,7 @@ from hrlmpc.hierarchy import (
 )
 from hrlmpc.mpc_command import MPCCommand, StepActor, episode_mask, mpc_metrics
 from hrlmpc.mpc_problem import MPCProblem
+from hrlmpc.oracle import find_oracle, oracle_line, oracle_record
 from hrlmpc.ppo import PPOAgent
 from hrlmpc.ppo_mpc_config import (
     PPOMPCConfig,
@@ -187,6 +188,7 @@ def train(
     provenance: Mapping[str, Any] | None = None,
     repo_dir: str | Path | None = None,
     echo: Callable[[str], None] | None = print,
+    oracle_dir: str | Path | None = None,
     worker_factory: WorkerFactory | None = None,
     targets_factory: TargetsFactory | None = None,
 ) -> Path:
@@ -225,7 +227,7 @@ def train(
         )
     if seed == config.evaluation.seed:
         raise ValueError(f"the training seed {seed} must differ from the evaluation seed")
-    reserved = {"algorithm", "seed", "budget", "env", "agent"}
+    reserved = {"algorithm", "seed", "budget", "env", "agent", "oracle_file"}
     if reserved & set(provenance or {}):
         raise ValueError(f"provenance entries may not overwrite {sorted(reserved & set(provenance or {}))}")
     if config.runtime.device.startswith("cuda") and "CUBLAS_WORKSPACE_CONFIG" not in os.environ:
@@ -236,7 +238,9 @@ def train(
     try:
         factory = solver_worker if worker_factory is None else worker_factory
         targets = solver_targets if targets_factory is None else targets_factory
-        return _train(env_config, config, budget, seed, Path(run_dir), provenance, repo_dir, echo, factory, targets)
+        return _train(
+            env_config, config, budget, seed, Path(run_dir), provenance, repo_dir, echo, oracle_dir, factory, targets
+        )
     finally:  # leave the process's global PyTorch settings as they were
         torch.use_deterministic_algorithms(deterministic, warn_only=warn_only)
         torch.set_num_threads(threads)
@@ -252,6 +256,7 @@ def _train(
     provenance: Mapping[str, Any] | None,
     repo_dir: str | Path | None,
     echo: Callable[[str], None] | None,
+    oracle_dir: str | Path | None,
     worker_factory: WorkerFactory,
     targets_factory: TargetsFactory,
 ) -> Path:
@@ -264,6 +269,8 @@ def _train(
     m_cfg = config.manager
     manager = PPOAgent(env.observation_size, env.action_size, m_cfg.network, m_cfg.update, device=config.runtime.device)
     starts = spawn_grid(env_config.task.spawn, config.evaluation.grid)
+    found = find_oracle(env_config, starts, oracle_dir)
+    oracle = None if found is None else found[1]
     obs_map = ObservationMap.from_config(env_config)
     reach_tolerance, segment_steps = _reach_tolerance(problem), config.hierarchy.segment_steps
     run_config: dict[str, Any] = {
@@ -272,6 +279,7 @@ def _train(
         "budget": budget,
         **dict(provenance or {}),
         "env": env_config_to_dict(env_config),
+        "oracle_file": oracle_record(found),
         "agent": ppo_mpc_config_to_dict(_with_horizon(config, problem)),
     }
     num_updates = budget // per_update
@@ -291,6 +299,7 @@ def _train(
         logger = stack.enter_context(RunLogger(path, run_config, seed=seed, repo_dir=source))
         if echo is not None:
             echo(problem.summary())
+            echo(f"{path.name}: {oracle_line(found)}")
 
         def evaluate_once(action: str) -> dict[str, Any]:
             """One evaluation of the hierarchy with ``action`` and its metrics, under the action's names (D50)."""
@@ -299,7 +308,7 @@ def _train(
                 reach.pop_stats()  # the training's decisions are logged with its updates
             policy = manager.deterministic_policy(action)
             controller = HierarchicalController(hierarchy, policy, eval_command.as_worker())
-            result = evaluate(controller, env_config, starts, seed=config.evaluation.seed)
+            result = evaluate(controller, env_config, starts, seed=config.evaluation.seed, oracle=oracle)
             metrics: dict[str, Any] = result.metrics(prefix=f"{name}/")
             metrics.update(result.timing(name))
             stats = eval_command.pop_stats()
@@ -348,6 +357,7 @@ def _train(
             update_s = time.perf_counter() - tick
             training_time += rollout_s + update_s
             metrics.update(episode_metrics(rollout.episodes))
+            metrics.update(env.curriculum_metrics())  # the stage of the spawn curriculum, if any (D62)
             metrics.update(_hierarchy_metrics(rollout))
             full = rollout.segments.steps == segment_steps
             metrics.update(reached_metrics(rollout.segments.end_distances[full], reach_tolerance, "hierarchy"))

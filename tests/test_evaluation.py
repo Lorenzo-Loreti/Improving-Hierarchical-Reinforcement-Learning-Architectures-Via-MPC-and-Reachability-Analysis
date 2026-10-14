@@ -234,6 +234,52 @@ def test_the_metrics_summarise_the_episodes() -> None:
     assert set(result.metrics(prefix="x/")) == {k.replace("eval/", "x/") for k in m}
 
 
+def test_the_oracle_gap_is_measured_against_the_oracle_steps() -> None:
+    """D44: with the oracle's minimum times, the gap of a successful episode is its length over them, minus one."""
+    episodes = (_stats(0, 105, True), _stats(1, 110, True), _stats(2, 200, False), _stats(3, 100, True))
+    bounds = np.array([100, 100, 100, 100])
+    without = Evaluation(np.zeros((4, 2)), episodes, bounds, np.full(4, 11.0))
+    assert math.isnan(without.metrics()["eval/oracle_gap_mean"])
+    assert math.isnan(without.metrics()["eval/oracle_gap_max"])
+    assert without.details()["oracle_steps"] is None
+    with_oracle = Evaluation(
+        np.zeros((4, 2)), episodes, bounds, np.full(4, 11.0), oracle_steps=np.array([105, 100, 150, 100])
+    )
+    m = with_oracle.metrics()
+    assert m["eval/oracle_gap_mean"] == pytest.approx((0.0 + 0.10 + 0.0) / 3)
+    assert m["eval/oracle_gap_max"] == pytest.approx(0.10)
+    assert m["eval/arrival_gap_mean"] == pytest.approx((0.05 + 0.10 + 0.0) / 3)  # the bound of F7 stays
+    assert with_oracle.details()["oracle_steps"] == [105, 100, 150, 100]
+    none_succeed = Evaluation(np.zeros((1, 2)), (_stats(0, 200, False),), np.array([100]), np.full(1, 11.0),
+                              oracle_steps=np.array([100]))
+    assert math.isnan(none_succeed.metrics()["eval/oracle_gap_mean"])
+
+
+def test_the_evaluation_takes_the_oracle_table_of_its_starts() -> None:
+    """D44: ``evaluate`` reads the minimum times from a table of the same starts, and refuses another's."""
+    from hrlmpc.oracle import OracleEntry, OracleSettings, OracleTable, layout_signature
+
+    config = _config()
+    starts = spawn_grid(config.task.spawn, (2, 2))
+    physics, geometry = layout_signature(config)
+
+    def table(points: np.ndarray, steps: list[int]) -> OracleTable:
+        entries = tuple(
+            OracleEntry((float(p[0]), float(p[1])), int(n), int(n), 0.0, (), int(n), True, 0, 0, 0.0)
+            for p, n in zip(points, steps, strict=True)
+        )
+        return OracleTable(physics, geometry, {"rho": OracleSettings.rho}, entries)
+
+    result = evaluate(_full_thrust, config, starts, seed=0, oracle=table(starts, [86, 86, 69, 69]))
+    np.testing.assert_array_equal(result.oracle_steps, [86, 86, 69, 69])
+    np.testing.assert_array_equal(result.lower_bounds, result.oracle_steps)
+    assert result.metrics()["eval/oracle_gap_max"] == 0.0
+    details = result.details()
+    assert json.loads(json.dumps(details))["oracle_steps"] == [86, 86, 69, 69]
+    with pytest.raises(ValueError, match="starts"):
+        evaluate(_full_thrust, config, starts, seed=0, oracle=table(starts[:3], [86, 86, 69]))
+
+
 def test_the_details_are_plain_json() -> None:
     result = evaluate(_full_thrust, _config(), [[0.0, 0.0], [2.0, 1.0]], seed=0)
     details = result.details()

@@ -32,6 +32,10 @@ class NavigationGymEnv(gym.Env[FloatArray, FloatArray]):
     :class:`~hrlmpc.env.EpisodeStats` under ``"episode_stats"`` (the key
     ``"episode"`` belongs to Gymnasium's ``RecordEpisodeStatistics``). After
     the end of an episode, :meth:`reset` must be called before the next step.
+    A reset without a ``"position"`` draws the start as the training does:
+    uniformly in the spawn box or, with a curriculum (D62), in its current
+    band, which the episode's outcome then feeds; a reset with a seed rebuilds
+    the environment and so restarts the curriculum.
 
     Args:
         config: Physics, geometry, task and reward of the layout.

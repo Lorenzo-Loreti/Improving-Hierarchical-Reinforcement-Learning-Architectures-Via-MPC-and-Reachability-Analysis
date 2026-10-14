@@ -1,4 +1,4 @@
-"""Tests of the YAML environment configuration (code rule C2; decision log D9, D11-D14, D45)."""
+"""Tests of the YAML environment configuration (code rule C2; decision log D9, D11-D14, D45, D51)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 import yaml
 
-from hrlmpc.config import Box, env_config_from_dict, env_config_to_dict, load_env_config
+from hrlmpc.config import Box, CurriculumConfig, env_config_from_dict, env_config_to_dict, load_env_config
 
 CONFIG_DIR = Path(__file__).resolve().parents[1] / "configs" / "env"
 
@@ -66,6 +66,83 @@ def test_each_disturbance_level_has_its_own_files(layout: str, level: str, d_bar
     cfg = load_env_config(CONFIG_DIR / f"{layout}_{level}.yaml")
     assert base.physics.d_bar == 0.0
     assert cfg == dataclasses.replace(base, physics=dataclasses.replace(base.physics, d_bar=d_bar))
+
+
+@pytest.mark.parametrize(
+    ("layout", "level"),
+    [("slalom", ""), ("slalom", "_d05"), ("slalom", "_d10"), ("tunnel", ""), ("tunnel", "_d05"), ("tunnel", "_d10")],
+)
+def test_sparse_reward_files_drop_the_progress_term_and_add_the_curriculum(layout: str, level: str) -> None:
+    """D51, D62: the sparse file of a layout and level is its shaped file with the progress coefficient set to 0
+    and the reverse spawn curriculum of D62; nothing else differs."""
+    shaped = load_env_config(CONFIG_DIR / f"{layout}{level}.yaml")
+    sparse = load_env_config(CONFIG_DIR / f"{layout}_sparse{level}.yaml")
+    assert shaped.reward.progress_coef == 10.0 and shaped.task.curriculum is None
+    curriculum = CurriculumConfig(x_start=8.0, step=1.0, window=50, threshold=0.8)
+    expected = dataclasses.replace(
+        shaped,
+        reward=dataclasses.replace(shaped.reward, progress_coef=0.0),
+        task=dataclasses.replace(shaped.task, curriculum=curriculum),
+    )
+    assert sparse == expected
+
+
+# ------------------------------------------------------------ the spawn curriculum (D62)
+
+
+def test_the_curriculum_is_optional_and_round_trips() -> None:
+    data = _slalom_dict()
+    assert env_config_from_dict(data).task.curriculum is None
+    data["task"]["curriculum"] = None
+    assert env_config_from_dict(data).task.curriculum is None
+    data["task"]["curriculum"] = {"x_start": 8.0, "step": 1.0, "window": 50, "threshold": 0.8}
+    cfg = env_config_from_dict(data)
+    assert cfg.task.curriculum == CurriculumConfig(8.0, 1.0, 50, 0.8)
+    plain = env_config_to_dict(cfg)
+    assert plain["task"]["curriculum"] == {"x_start": 8.0, "step": 1.0, "window": 50, "threshold": 0.8}
+    assert env_config_from_dict(plain) == cfg
+    assert env_config_to_dict(load_env_config(CONFIG_DIR / "slalom.yaml"))["task"]["curriculum"] is None
+
+
+@pytest.mark.parametrize(
+    "curriculum, message",
+    [
+        ({"x_start": 8.0, "step": 0.0, "window": 50, "threshold": 0.8}, "step"),
+        ({"x_start": 8.0, "step": 1.0, "window": 0, "threshold": 0.8}, "window"),
+        ({"x_start": 8.0, "step": 1.0, "window": 50, "threshold": 0.0}, "threshold"),
+        ({"x_start": 8.0, "step": 1.0, "window": 50, "threshold": 1.5}, "threshold"),
+        ({"x_start": 8.0, "step": 1.0, "window": 50.0, "threshold": 0.8}, "integer"),
+        ({"x_start": 8.5, "step": 1.0, "window": 50, "threshold": 0.8}, "goal"),  # first band [8.5, 10.5]
+        ({"x_start": 10.5, "step": 1.0, "window": 50, "threshold": 0.8}, "goal"),  # beyond the arena too
+        ({"x_start": -0.5, "step": 1.0, "window": 50, "threshold": 0.8}, "spawn"),  # behind the spawn box
+        ({"x_start": 8.0, "step": 2.5, "window": 50, "threshold": 0.8}, "gap"),  # step above the width of 2
+        ({"x_start": 8.0, "step": 1.0, "threshold": 0.8}, "missing"),
+        ({"x_start": 8.0, "step": 1.0, "window": 50, "threshold": 0.8, "extra": 1}, "unknown"),
+    ],
+)
+def test_invalid_curricula_are_rejected(curriculum: dict[str, Any], message: str) -> None:
+    data = _slalom_dict()
+    data["task"]["curriculum"] = curriculum
+    with pytest.raises(ValueError, match=message):
+        env_config_from_dict(data)
+
+
+def test_the_first_band_may_touch_the_goal_line_and_the_step_may_equal_the_width() -> None:
+    data = _slalom_dict()
+    data["task"]["curriculum"] = {"x_start": 8.0, "step": 2.0, "window": 50, "threshold": 0.8}
+    cfg = env_config_from_dict(data)  # [8, 10] ends on the goal line; bands [8,10], [6,8], ... touch
+    assert cfg.task.curriculum is not None and cfg.task.curriculum.step == 2.0
+    data["task"]["curriculum"]["x_start"] = 0.0  # a one-stage curriculum: the spawn box itself
+    assert env_config_from_dict(data).task.curriculum is not None
+
+
+def test_a_yaml_file_with_curriculum_null_loads_without_one(tmp_path: Path) -> None:
+    data = _slalom_dict()
+    data["task"]["curriculum"] = None
+    path = tmp_path / "env.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    assert load_env_config(path).task.curriculum is None
+    assert load_env_config(path) == load_env_config(CONFIG_DIR / "slalom.yaml")
 
 
 @pytest.mark.parametrize("d_bar", [0.0, 0.5, 1.0])
@@ -162,3 +239,33 @@ def test_a_repeated_key_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="duplicate key 'dt'"):
         load_env_config(path)
 
+
+
+# ------------------------------------------------------------- the narrow slalom (D61)
+
+
+@pytest.mark.parametrize("level", ["", "_d10"])
+def test_the_narrow_slalom_differs_from_the_sparse_slalom_in_its_gates_only(level: str) -> None:
+    """D61: gates 0.75 m wide instead of 1.5 m, centred at y = 1 and y = -1; sparse reward and curriculum as the
+    slalom's file of the same level."""
+    base = load_env_config(CONFIG_DIR / f"slalom_sparse{level}.yaml")
+    narrow = load_env_config(CONFIG_DIR / f"slalom_narrow_sparse{level}.yaml")
+    obstacles = (
+        Box(x=(4.0, 5.0), y=(-2.0, 0.625)),
+        Box(x=(4.0, 5.0), y=(1.375, 2.0)),
+        Box(x=(7.0, 8.0), y=(-2.0, -1.375)),
+        Box(x=(7.0, 8.0), y=(-0.625, 2.0)),
+    )
+    assert narrow == dataclasses.replace(base, geometry=dataclasses.replace(base.geometry, obstacles=obstacles))
+    for lower, upper, centre in ((obstacles[0], obstacles[1], 1.0), (obstacles[2], obstacles[3], -1.0)):
+        assert upper.y[0] - lower.y[1] == pytest.approx(0.75)
+        assert 0.5 * (upper.y[0] + lower.y[1]) == pytest.approx(centre)
+    assert narrow.task.curriculum is not None and narrow.reward.progress_coef == 0.0
+
+
+def test_the_exploration_setting_is_the_sparse_slalom_without_the_curriculum() -> None:
+    """D63: `slalom_sparse_nocur.yaml` differs from `slalom_sparse.yaml` in the curriculum only (none)."""
+    main = load_env_config(CONFIG_DIR / "slalom_sparse.yaml")
+    plain = load_env_config(CONFIG_DIR / "slalom_sparse_nocur.yaml")
+    assert main.task.curriculum is not None and plain.task.curriculum is None
+    assert plain == dataclasses.replace(main, task=dataclasses.replace(main.task, curriculum=None))

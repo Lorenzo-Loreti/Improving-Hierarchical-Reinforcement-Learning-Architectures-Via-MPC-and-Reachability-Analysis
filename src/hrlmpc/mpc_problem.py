@@ -189,6 +189,55 @@ Bounds = list[tuple[FloatArray, FloatArray]]
 """One ``(lb, ub)`` pair of ``(N, m)`` arrays per obstacle: the binaries' bounds for one solve."""
 
 
+def tightened_arena(layout: Layout, margin: float) -> ConvexPolygon:
+    """The arena with every face pushed inwards by ``margin``: where the planned positions may lie.
+
+    Raises:
+        ValueError: If the arena leaves no room for the margin.
+    """
+    arena = layout.arena
+    try:
+        return arena.pushed_out(-margin * np.ones(len(arena.offsets)))
+    except ValueError as error:
+        raise ValueError(f"the arena leaves no room for a margin of {margin} m") from error
+
+
+def layout_obstacles(layout: Layout, margin: float, tight: ConvexPolygon | None = None) -> list[Obstacle]:
+    """The obstacles of a plan on ``layout`` whose positions keep ``margin`` from every face (D32): the blocked
+    polygons of D16 with their live faces, the right-hand sides ``c_j + margin`` and the big-M constants.
+
+    Shared by the Worker's problem and the oracle (D44).
+
+    Args:
+        layout: The map.
+        margin: Distance [m] the planned positions keep from the faces.
+        tight: :func:`tightened_arena` of ``layout`` and ``margin``, if already computed.
+
+    Raises:
+        ValueError: If an obstacle, enlarged by the margin, leaves no room in the arena.
+    """
+    arena = layout.arena
+    tight = tightened_arena(layout, margin) if tight is None else tight
+    result = []
+    for index, polygon in enumerate(layout.blocked):
+        bounds = polygon.offsets + margin
+        live = (tight.vertices @ polygon.normals.T).max(axis=0) >= bounds
+        if not live.any():
+            raise ValueError(f"obstacle {index}, enlarged by the margin, leaves no room in the arena")
+        normals, offsets, bounds = polygon.normals[live], polygon.offsets[live], bounds[live]
+        lowest = (arena.vertices @ normals.T).min(axis=0)  # min over the arena of n_j' p
+        big_m = np.maximum(0.0, bounds - lowest) + BIG_M_PAD
+        result.append(Obstacle(normals.copy(), offsets.copy(), bounds, big_m))
+    return result
+
+
+def face_slack(obstacles: list[Obstacle]) -> float:
+    """How far a mixed-integer plan may violate a face [m]: a binary within Gurobi's integrality tolerance of 1
+    relaxes its face by ``M`` times it, plus the feasibility tolerance."""
+    largest_m = max((float(obstacle.big_m.max()) for obstacle in obstacles), default=0.0)
+    return INT_FEAS_TOL * largest_m + FEAS_TOL
+
+
 class MPCProblem:
     """The offline data of the Worker's problem for one layout, plant and setting (D31-D34).
 
@@ -249,16 +298,12 @@ class MPCProblem:
         arena = layout.arena
         self.arena_normals = arena.normals.copy()
         self.arena_bounds = arena.offsets - self.margin
-        try:
-            tight = arena.pushed_out(-self.margin * np.ones(len(arena.offsets)))
-        except ValueError as error:
-            raise ValueError(f"the arena leaves no room for a margin of {self.margin} m") from error
+        tight = tightened_arena(layout, self.margin)
         self.tight_arena: ConvexPolygon = tight
         self.position_low = tight.vertices.min(axis=0)
         self.position_high = tight.vertices.max(axis=0)
-        self.obstacles = [self._obstacle(polygon, arena, tight, i) for i, polygon in enumerate(layout.blocked)]
-        largest_m = max((float(obstacle.big_m.max()) for obstacle in self.obstacles), default=0.0)
-        self.face_slack = INT_FEAS_TOL * largest_m + FEAS_TOL
+        self.obstacles = layout_obstacles(layout, self.margin, tight)
+        self.face_slack = face_slack(self.obstacles)
         """How far a mixed-integer plan may violate a face: a binary within Gurobi's integrality
         tolerance of 1 relaxes its face by ``M`` times it, plus the feasibility tolerance [m]."""
         if not self.settings.rho > self.face_slack:
@@ -276,16 +321,6 @@ class MPCProblem:
             raise ValueError(
                 "the closed loop is not rotation-invariant: the plant and weights must treat both axes alike"
             )
-
-    def _obstacle(self, polygon: ConvexPolygon, arena: ConvexPolygon, tight: ConvexPolygon, index: int) -> Obstacle:
-        bounds = polygon.offsets + self.margin
-        live = (tight.vertices @ polygon.normals.T).max(axis=0) >= bounds
-        if not live.any():
-            raise ValueError(f"obstacle {index}, enlarged by the margin, leaves no room in the arena")
-        normals, offsets, bounds = polygon.normals[live], polygon.offsets[live], bounds[live]
-        lowest = (arena.vertices @ normals.T).min(axis=0)  # min over the arena of n_j' p
-        big_m = np.maximum(0.0, bounds - lowest) + BIG_M_PAD
-        return Obstacle(normals.copy(), offsets.copy(), bounds, big_m)
 
     # ---------------------------------------------------------------- helpers
     def waypoint_stage(self, steps_left: int) -> int:
