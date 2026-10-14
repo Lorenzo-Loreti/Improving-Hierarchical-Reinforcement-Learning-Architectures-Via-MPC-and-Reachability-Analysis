@@ -9,7 +9,8 @@ goal and slides back towards the spawn box as the policy succeeds:
 - stage ``s`` draws uniformly from the free part of the band
   ``[x_start - s step, x_start - s step + width] x [y_lo, y_hi]``, with the
   width and the ``y``-range of the spawn box, the left end clamped to the
-  spawn box's; the last stage is the spawn box itself;
+  spawn box's, outside the excluded boxes of the configuration (the dead
+  ends of a layout, D69); the last stage is the spawn box itself;
 - the finished episodes started in a stage are counted in blocks of
   ``window``: when a block is complete and its success rate reaches
   ``threshold`` the stage advances by one, otherwise a new block starts; the
@@ -96,11 +97,19 @@ class SpawnCurriculum:
         return Box(x=(x_min, x_min + self.width), y=self.spawn.y)
 
     def _free(self, points: FloatArray) -> NDArray[np.bool_]:
+        """Free, short of the goal line and outside the excluded boxes (D69)."""
         result: NDArray[np.bool_] = self.layout.in_free_space(points) & ~self.layout.in_goal(points)
+        for box in self.settings.exclude:
+            inside = (
+                (points[:, 0] >= box.x[0]) & (points[:, 0] <= box.x[1])
+                & (points[:, 1] >= box.y[0]) & (points[:, 1] <= box.y[1])
+            )
+            result &= ~inside
         return result
 
     def free_fraction(self, band: Box) -> float:
-        """The fraction of ``band`` that is free and short of the goal, estimated on fixed random points."""
+        """The fraction of ``band`` that is free, short of the goal and not excluded, estimated on fixed random
+    points."""
         rng = np.random.default_rng(0)
         points = rng.uniform([band.x[0], band.y[0]], [band.x[1], band.y[1]], size=(CHECK_POINTS, 2))
         return float(np.mean(self._free(points)))

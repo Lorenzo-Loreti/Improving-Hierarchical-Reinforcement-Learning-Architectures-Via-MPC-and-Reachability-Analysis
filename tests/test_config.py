@@ -98,10 +98,39 @@ def test_the_curriculum_is_optional_and_round_trips() -> None:
     data["task"]["curriculum"] = {"x_start": 8.0, "step": 1.0, "window": 50, "threshold": 0.8}
     cfg = env_config_from_dict(data)
     assert cfg.task.curriculum == CurriculumConfig(8.0, 1.0, 50, 0.8)
+    assert cfg.task.curriculum.exclude == ()  # no excluded region unless listed (D69)
     plain = env_config_to_dict(cfg)
-    assert plain["task"]["curriculum"] == {"x_start": 8.0, "step": 1.0, "window": 50, "threshold": 0.8}
+    assert plain["task"]["curriculum"] == {"x_start": 8.0, "step": 1.0, "window": 50, "threshold": 0.8,
+                                           "exclude": []}
     assert env_config_from_dict(plain) == cfg
     assert env_config_to_dict(load_env_config(CONFIG_DIR / "slalom.yaml"))["task"]["curriculum"] is None
+
+
+def test_the_curriculum_may_exclude_regions_from_the_training_starts() -> None:
+    """D69: `exclude` lists boxes (dead ends) from which no training start is drawn; they round-trip, may not
+    overlap the spawn box (the last band and the evaluation's starts) and must be well-formed."""
+    data = _slalom_dict()
+    data["task"]["curriculum"] = {"x_start": 8.0, "step": 1.0, "window": 50, "threshold": 0.8,
+                                  "exclude": [{"x": [3.5, 5.5], "y": [-0.8, 0.8]}, {"x": [6.0, 6.5], "y": [0.0, 1.0]}]}
+    cfg = env_config_from_dict(data)
+    assert cfg.task.curriculum is not None
+    assert cfg.task.curriculum.exclude == (Box(x=(3.5, 5.5), y=(-0.8, 0.8)), Box(x=(6.0, 6.5), y=(0.0, 1.0)))
+    plain = env_config_to_dict(cfg)
+    assert plain["task"]["curriculum"]["exclude"] == [{"x": [3.5, 5.5], "y": [-0.8, 0.8]},
+                                                      {"x": [6.0, 6.5], "y": [0.0, 1.0]}]
+    assert env_config_from_dict(plain) == cfg
+    data["task"]["curriculum"]["exclude"] = []
+    assert env_config_from_dict(data).task.curriculum.exclude == ()
+    for bad, message in (
+        ([{"x": [1.5, 3.0], "y": [-0.5, 0.5]}], "spawn"),  # overlaps the spawn box [0, 2] x [-1, 1]
+        ([{"x": [3.5, 3.5], "y": [-0.8, 0.8]}], "x"),  # degenerate
+        ([{"x": [3.5, 5.5]}], "missing"),
+        ({"x": [3.5, 5.5], "y": [-0.8, 0.8]}, "list"),  # not a list of boxes
+        ([{"x": [12.0, 13.0], "y": [-0.8, 0.8]}], "arena"),  # outside the arena
+    ):
+        data["task"]["curriculum"]["exclude"] = bad
+        with pytest.raises(ValueError, match=message):
+            env_config_from_dict(data)
 
 
 @pytest.mark.parametrize(
@@ -241,26 +270,53 @@ def test_a_repeated_key_is_rejected(tmp_path: Path) -> None:
 
 
 
-# ------------------------------------------------------------- the narrow slalom (D61)
+# ------------------------------------------------------------- the trap layout (D69)
 
 
-@pytest.mark.parametrize("level", ["", "_d10"])
-def test_the_narrow_slalom_differs_from_the_sparse_slalom_in_its_gates_only(level: str) -> None:
-    """D61: gates 0.75 m wide instead of 1.5 m, centred at y = 1 and y = -1; sparse reward and curriculum as the
-    slalom's file of the same level."""
-    base = load_env_config(CONFIG_DIR / f"slalom_sparse{level}.yaml")
-    narrow = load_env_config(CONFIG_DIR / f"slalom_narrow_sparse{level}.yaml")
-    obstacles = (
-        Box(x=(4.0, 5.0), y=(-2.0, 0.625)),
-        Box(x=(4.0, 5.0), y=(1.375, 2.0)),
-        Box(x=(7.0, 8.0), y=(-2.0, -1.375)),
-        Box(x=(7.0, 8.0), y=(-0.625, 2.0)),
+TRAP_OBSTACLES = (
+    Box(x=(5.25, 5.75), y=(-1.2, 1.2)),  # the U: back wall
+    Box(x=(3.75, 5.75), y=(0.8, 1.2)),  # the U: upper arm
+    Box(x=(3.75, 5.75), y=(-1.2, -0.8)),  # the U: lower arm
+    Box(x=(8.0, 8.5), y=(-2.0, -0.375)),  # the gate: lower block
+    Box(x=(8.0, 8.5), y=(0.375, 2.0)),  # the gate: upper block
+)
+TRAP_CAVITY = Box(x=(3.75, 5.25), y=(-0.8, 0.8))
+
+
+def test_the_trap_layout_is_the_sparse_slalom_with_its_obstacles_and_the_cavity_excluded() -> None:
+    """D69: the U-trap opening towards the spawn box on the straight route, the corridors of 0.8 m around it,
+    the gate of 0.75 m after it; the sparse reward and the curriculum of the slalom, whose starts skip the
+    cavity of the U (a dead end)."""
+    base = load_env_config(CONFIG_DIR / "slalom_sparse.yaml")
+    trap = load_env_config(CONFIG_DIR / "trap_sparse.yaml")
+    assert base.task.curriculum is not None and trap.task.curriculum is not None
+    expected = dataclasses.replace(
+        base,
+        geometry=dataclasses.replace(base.geometry, obstacles=TRAP_OBSTACLES),
+        task=dataclasses.replace(
+            base.task, curriculum=dataclasses.replace(base.task.curriculum, exclude=(TRAP_CAVITY,))
+        ),
     )
-    assert narrow == dataclasses.replace(base, geometry=dataclasses.replace(base.geometry, obstacles=obstacles))
-    for lower, upper, centre in ((obstacles[0], obstacles[1], 1.0), (obstacles[2], obstacles[3], -1.0)):
-        assert upper.y[0] - lower.y[1] == pytest.approx(0.75)
-        assert 0.5 * (upper.y[0] + lower.y[1]) == pytest.approx(centre)
-    assert narrow.task.curriculum is not None and narrow.reward.progress_coef == 0.0
+    assert trap == expected
+    back, upper, lower, gate_lower, gate_upper = TRAP_OBSTACLES
+    assert upper.y[0] - lower.y[1] == pytest.approx(1.6) and back.x[0] - upper.x[0] == pytest.approx(1.5)  # cavity
+    assert back.x[1] - upper.x[0] == pytest.approx(2.0)  # the U's footprint: 2 m, so that no band of D62 is covered
+    assert 2.0 - upper.y[1] == pytest.approx(0.8) and lower.y[0] + 2.0 == pytest.approx(0.8)  # the corridors
+    assert gate_upper.y[0] - gate_lower.y[1] == pytest.approx(0.75)  # the gate, centred on y = 0
+    assert TRAP_CAVITY == Box(x=(upper.x[0], back.x[0]), y=(lower.y[1], upper.y[0]))
+    assert trap.reward.progress_coef == 0.0
+
+
+def test_the_exploration_setting_of_the_trap_is_the_trap_without_the_curriculum() -> None:
+    main = load_env_config(CONFIG_DIR / "trap_sparse.yaml")
+    plain = load_env_config(CONFIG_DIR / "trap_sparse_nocur.yaml")
+    assert plain.task.curriculum is None
+    assert plain == dataclasses.replace(main, task=dataclasses.replace(main.task, curriculum=None))
+
+
+def test_the_narrow_gate_files_are_gone() -> None:
+    """D61 is withdrawn: the trap layout contains the narrow gate."""
+    assert not list(CONFIG_DIR.glob("slalom_narrow*"))
 
 
 def test_the_exploration_setting_is_the_sparse_slalom_without_the_curriculum() -> None:
