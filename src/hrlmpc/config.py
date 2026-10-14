@@ -94,6 +94,10 @@ class CurriculumConfig:
         step: By how much [m] the band slides back per stage; at most the spawn box's width.
         window: Episodes of a block, over which the success rate is measured.
         threshold: Success rate of a block that advances the stage, in ``(0, 1]``.
+        exclude: Boxes no training start is drawn from (D69): the dead ends of
+            a layout, such as the cavity of the trap's U, which the policies
+            meet on their way instead of starting in. Inside the arena and
+            apart from the spawn box; empty by default.
 
     Raises:
         ValueError: If the step is not positive, the window is below 1 or the
@@ -104,6 +108,7 @@ class CurriculumConfig:
     step: float
     window: int
     threshold: float
+    exclude: tuple[Box, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.step > 0.0:
@@ -220,6 +225,11 @@ class EnvConfig:
                 raise ValueError(
                     f"the curriculum's first band {band} crosses the goal line p_x = {self.geometry.goal_x}"
                 )
+            for i, box in enumerate(curriculum.exclude):
+                if not self.geometry.arena.contains(box):
+                    raise ValueError(f"excluded box {i} {box} is not inside the arena {self.geometry.arena}")
+                if spawn.overlaps_interior(box):
+                    raise ValueError(f"excluded box {i} {box} overlaps the spawn box {spawn}, the last band")
 
 
 _PHYSICS_KEYS = ("dt", "a_max", "v_max", "gamma", "gamma_w", "d_bar")
@@ -277,15 +287,21 @@ def _box(data: Any, where: str) -> Box:
 
 
 def _curriculum(data: Any, where: str) -> CurriculumConfig | None:
-    """Convert ``{x_start, step, window, threshold}`` to a :class:`CurriculumConfig`; ``None`` stays ``None``."""
+    """Convert ``{x_start, step, window, threshold[, exclude]}`` to a :class:`CurriculumConfig`; ``None`` stays
+    ``None``; ``exclude`` is an optional list of boxes."""
     if data is None:
         return None
-    section = _section(data, ("x_start", "step", "window", "threshold"), where)
+    section = _section(data, ("x_start", "step", "window", "threshold", "exclude"), where, optional=("exclude",))
+    raw_exclude = section.get("exclude", [])
+    if not isinstance(raw_exclude, (list, tuple)):
+        raise ValueError(f"{where}.exclude must be a list of boxes, got {raw_exclude!r}")
+    exclude = tuple(_box(item, f"{where}.exclude[{i}]") for i, item in enumerate(raw_exclude))
     return CurriculumConfig(
         x_start=_float(section["x_start"], f"{where}.x_start"),
         step=_float(section["step"], f"{where}.step"),
         window=_int(section["window"], f"{where}.window"),
         threshold=_float(section["threshold"], f"{where}.threshold"),
+        exclude=exclude,
     )
 
 

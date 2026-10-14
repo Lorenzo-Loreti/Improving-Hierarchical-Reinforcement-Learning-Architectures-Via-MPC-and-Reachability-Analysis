@@ -123,6 +123,41 @@ def test_sampling_rejects_the_blocked_part_of_a_band() -> None:
     assert np.any(points[in_gate, 1] < -0.9) and np.any(~in_gate & (points[:, 1] > 0.9))
 
 
+def test_excluded_regions_are_never_sampled_and_lower_the_free_fraction() -> None:
+    """D69: the starts skip the excluded boxes (the cavity of the trap's U); the free fraction of a band counts
+    them as blocked, and the last band is still the spawn box."""
+    cur = _curriculum("trap_sparse")
+    config = _config("trap_sparse")
+    assert config.task.curriculum is not None and config.task.curriculum.exclude == (
+        Box(x=(3.75, 5.25), y=(-0.8, 0.8)),
+    )
+    layout = Layout.from_config(config.geometry)
+    rng = np.random.default_rng(5)
+    for _ in range(cur.stages):
+        points = cur.sample(rng, 600)
+        assert layout.in_free_space(points).all()
+        # between x = 3.75 and 5.75 the band's y-range [-1, 1] is cavity (excluded), arm or back wall
+        assert not ((points[:, 0] > 3.75) & (points[:, 0] < 5.75)).any()
+        cur.advance()
+    assert cur.final and cur.band == config.task.spawn
+    fresh = _curriculum("trap_sparse")
+    assert 0.08 < fresh.free_fraction(Box(x=(4.0, 6.0), y=(-1.0, 1.0))) < 0.16  # x in [5.75, 6] only
+    assert 0.33 < fresh.free_fraction(Box(x=(3.0, 5.0), y=(-1.0, 1.0))) < 0.45  # x in [3, 3.75] only
+    without = _curriculum("trap_sparse", exclude=())
+    assert 0.57 < without.free_fraction(Box(x=(4.0, 6.0), y=(-1.0, 1.0))) < 0.68  # the cavity counts as free
+
+
+def test_a_band_that_is_all_excluded_is_refused_unless_it_is_the_spawn_box() -> None:
+    """The band [4, 6] of the trap is entirely excluded; the construction refuses it, as it refuses a band of
+    too few free points, unless it is the last band (the spawn box, never excluded)."""
+    config = _config("trap_sparse")
+    assert config.task.curriculum is not None
+    layout = Layout.from_config(config.geometry)
+    settings = dataclasses.replace(config.task.curriculum, x_start=3.75, step=3.75)  # bands [3.75, 5.75], [0, 2]
+    with pytest.raises(ValueError, match="free fraction"):
+        SpawnCurriculum(settings, config.task.spawn, layout)
+
+
 def test_sampling_is_deterministic_in_the_generator() -> None:
     a, b = _curriculum(), _curriculum()
     np.testing.assert_array_equal(a.sample(np.random.default_rng(7), 20), b.sample(np.random.default_rng(7), 20))

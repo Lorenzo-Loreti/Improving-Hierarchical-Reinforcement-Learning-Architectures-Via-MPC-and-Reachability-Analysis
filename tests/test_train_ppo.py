@@ -96,7 +96,8 @@ def test_the_spawn_curriculum_is_used_and_logged(tmp_path: Path) -> None:
     assert all(set(("curriculum/stage", "curriculum/x_min", "curriculum/final")) <= set(r) for r in updates)
     assert updates[0]["curriculum/stages"] == 9.0 and 8.0 >= updates[0]["curriculum/x_min"] >= 0.0
     config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
-    assert config["env"]["task"]["curriculum"] == {"x_start": 8.0, "step": 1.0, "window": 2, "threshold": 0.5}
+    assert config["env"]["task"]["curriculum"] == {"x_start": 8.0, "step": 1.0, "window": 2, "threshold": 0.5,
+                                                   "exclude": []}  # no excluded box (D69)
     details = [json.loads(line) for line in (run_dir / "evaluations.jsonl").read_text(encoding="utf-8").splitlines()]
     assert details[0]["starts"] == spawn_grid(env.task.spawn, (2, 2)).tolist()  # the evaluation's starts: D20
     plain = _records(train(_env(), _ppo(), budget=16, seed=1, run_dir=tmp_path / "plain", echo=None))
