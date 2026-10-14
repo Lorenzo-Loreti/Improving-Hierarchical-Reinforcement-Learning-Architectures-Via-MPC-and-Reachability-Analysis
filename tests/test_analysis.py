@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+import yaml
 from scipy import stats
 
 from hrlmpc.analysis import (
@@ -18,6 +19,7 @@ from hrlmpc.analysis import (
     find_runs,
     first_accepted,
     group_runs,
+    has_oracle,
     load_run,
     main,
     mean_curve,
@@ -25,6 +27,7 @@ from hrlmpc.analysis import (
     success_auc,
     summarize,
     t_interval,
+    uses_oracle,
 )
 from hrlmpc.utils.runlog import RunLogger, SampleCounter
 
@@ -225,6 +228,25 @@ def test_the_acceptance_uses_the_oracle_gap_where_it_is_logged(tmp_path: Path) -
     assert accepted(last, max_gap=0.05) and not accepted(first, max_gap=0.05)
     assert accepted(last, max_gap=0.05, oracle=False) is False  # on the gap of F7 alone, 0.12 fails
     assert first_accepted(run, max_gap=0.05) == 10240
+
+
+def test_a_run_without_arrivals_at_the_end_is_rejected_not_exempted(tmp_path: Path) -> None:
+    """An evaluation without arrivals carries no oracle gap; the run still measures it (the table is named in the
+    configuration, or an earlier evaluation carries the gap), so its verdict is "no", not "n/a"."""
+    first = _eval(1.0, 0.20, 0.0, 850.0)
+    first.update({"eval/oracle_gap_max": 0.08, "eval/oracle_gap_mean": 0.04})
+    failed = _eval(0.0, math.nan, 0.0, -200.0)
+    run = load_run(_make_run(tmp_path, 1, [first, failed], env=SLALOM))
+    text = summarize([run], max_gap=0.05)
+    assert _rows(text)["seed1"][7] == "no" and "accepted at the end: 0/1" in text
+    assert uses_oracle(run) and not has_oracle(failed)
+    named = _make_run(tmp_path / "named", 2, [failed], env=SLALOM)
+    config = yaml.safe_load((named / "config.yaml").read_text(encoding="utf-8"))
+    config["oracle_file"] = "configs/oracle/slalom.json"
+    (named / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+    text = summarize([load_run(named)], max_gap=0.05)
+    assert _rows(text)["seed2"][7] == "no" and "on the oracle gap, D59" in text
+    assert "acceptance not applicable" in summarize([load_run(_make_run(tmp_path / "bare", 3, [failed], env=SLALOM))])
 
 
 def test_the_acceptance_is_decided_on_the_mode_where_it_is_logged(tmp_path: Path) -> None:

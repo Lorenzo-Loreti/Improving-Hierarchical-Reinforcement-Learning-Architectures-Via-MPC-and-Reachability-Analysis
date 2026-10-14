@@ -220,6 +220,20 @@ def test_the_final_checkpoint_reproduces_the_last_evaluation(tmp_path: Path) -> 
         assert result.details()["unshaped_return"] == last["unshaped_return"]
 
 
+def test_a_run_from_before_the_workers_price_is_loaded_at_the_shaped_price(tmp_path: Path) -> None:
+    """D66: a run from before has no ``hierarchy.worker_progress_coef`` in its ``config.yaml``; its Worker was
+    paid the environment's ``progress_coef``. The reload only evaluates the deterministic policies, so it takes the
+    shaped reward's 10."""
+    run_dir = train(_env(), _hppo(), budget=40, seed=1, run_dir=tmp_path / "run", echo=None)
+    path = run_dir / "config.yaml"
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert raw["agent"]["hierarchy"]["worker_progress_coef"] == 10.0
+    del raw["agent"]["hierarchy"]["worker_progress_coef"]
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    _, _, hierarchy = load_hierarchy(run_dir)
+    assert hierarchy.progress_coef == 10.0
+
+
 def test_the_evaluations_take_the_same_statistic_at_both_levels(tmp_path: Path,
                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
     """D43: the evaluation with the mean takes the means of both policies, the one with the mode their modes, at

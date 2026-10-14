@@ -12,9 +12,10 @@
 # level. The values are provisional until the tuning protocol (Q13).
 # Write floats with a dot and a signed exponent (3.0e-4, 1.0e+5): YAML 1.1 reads 3e-4 and 1.0e5 as strings.
 
-hierarchy:                     # D24, D27
+hierarchy:                     # D24, D25, D27, D66
   segment_steps: 4             # H: one Manager decision per segment of 0.4 s (D60)
   target_reach_factor: 1.5     # targets within R = 1.5 v_max H dt = 1.8 m of the position
+  worker_progress_coef: 10.0   # c_p of the Worker's reward (D25, D66): the shaped reward's price (D13)
 
 rollout:
   num_envs: 8                  # parallel agents of NavigationEnv, one Worker slot each

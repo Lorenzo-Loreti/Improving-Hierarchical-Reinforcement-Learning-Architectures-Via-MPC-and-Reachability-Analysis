@@ -58,7 +58,13 @@ from hrlmpc.hierarchy import (
     segment_gae,
     start_segments,
 )
-from hrlmpc.hppo_config import HPPOConfig, hppo_config_from_dict, hppo_config_to_dict, load_hppo_config
+from hrlmpc.hppo_config import (
+    HPPOConfig,
+    hppo_config_from_dict,
+    hppo_config_to_dict,
+    load_hppo_config,
+    with_worker_price,
+)
 from hrlmpc.oracle import find_oracle, oracle_line, oracle_record
 from hrlmpc.ppo import Batch, PPOAgent, make_batch
 from hrlmpc.rollout import compute_gae, episode_metrics
@@ -70,12 +76,13 @@ WORKER_INPUT_SIZE = 6
 
 
 def hierarchy_of(env_config: EnvConfig, hppo_config: HPPOConfig) -> Hierarchy:
-    """Targets and segments of hPPO (D24, D27), with the Manager's discount."""
+    """Targets and segments of hPPO (D24, D27), with the Manager's discount and the Worker's price (D25, D66)."""
     return disk_hierarchy(
         env_config,
         segment_steps=hppo_config.hierarchy.segment_steps,
         reach_factor=hppo_config.hierarchy.target_reach_factor,
         discount=hppo_config.manager.update.discount,
+        progress_coef=hppo_config.hierarchy.worker_progress_coef,
     )
 
 
@@ -298,11 +305,14 @@ def _train(
 
 
 def load_hierarchy(run_dir: str | Path, checkpoint: str = "final.pt") -> tuple[PPOAgent, PPOAgent, Hierarchy]:
-    """The Manager, the Worker and the hierarchy of a run, rebuilt from its ``config.yaml`` and a checkpoint."""
+    """The Manager, the Worker and the hierarchy of a run, rebuilt from its ``config.yaml`` and a checkpoint. A
+    run from before D66 has no ``hierarchy.worker_progress_coef``: it is reloaded at the shaped price
+    (:func:`~hrlmpc.hppo_config.with_worker_price`), immaterial to the evaluation; not for continuing the
+    training of a sparse run from before, whose Worker was paid no progress."""
     path = Path(run_dir)
     config = yaml.safe_load((path / "config.yaml").read_text(encoding="utf-8"))
     env_config = env_config_from_dict(config["env"])
-    hppo_config = hppo_config_from_dict(config["agent"])
+    hppo_config = hppo_config_from_dict(with_worker_price(config["agent"]))
     device = hppo_config.runtime.device
     m_cfg, w_cfg = hppo_config.manager, hppo_config.worker
     manager = PPOAgent(NavigationEnv.observation_size, NavigationEnv.action_size, m_cfg.network, m_cfg.update, device)

@@ -5,6 +5,7 @@
 hierarchy:
   segment_steps: 10
   target_reach_factor: 1.5
+  worker_progress_coef: 10.0
 rollout:
   num_envs: 8
   num_steps: 256

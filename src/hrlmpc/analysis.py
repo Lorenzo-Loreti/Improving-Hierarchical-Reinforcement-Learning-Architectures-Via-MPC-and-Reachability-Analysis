@@ -275,6 +275,14 @@ def has_oracle(record: Mapping[str, Any], action: str = "mean") -> bool:
     return _value(record, f"{evaluation_name(action)}/oracle_gap_max") is not None
 
 
+def uses_oracle(run: Run, action: str = "mean") -> bool:
+    """Whether the run measures the oracle gap (D44): an oracle table is named in its configuration, or some
+    evaluation with ``action`` carries the gap (an evaluation without arrivals carries none)."""
+    if run.config.get("oracle_file"):
+        return True
+    return any(has_oracle(record, action) for record in run.records if "eval/success_rate" in record)
+
+
 def curriculum_summary(run: Run) -> tuple[int, int, int | None] | None:
     """``(stage, stages, samples)`` of a run with the spawn curriculum (D62): the stage at the end, the number of
     stages and the ``env_steps`` of the first update at the last stage (``None`` if never); ``None`` without one."""
@@ -337,7 +345,7 @@ def _summarize_group(label: str, runs: Sequence[Run], max_gap: float) -> list[st
     finals = [_last_evaluation(run) for run in runs]
     with_mode = all(f"{evaluation_name('mode')}/success_rate" in final for final in finals)
     primary = "mode" if with_mode else "mean"
-    with_oracle = all(has_oracle(final, primary) for final in finals)
+    with_oracle = all(uses_oracle(run, primary) for run in runs)
     applicable = with_oracle or not any(run.has_obstacles for run in runs)
     verdicts = []
     aucs = np.array([success_auc(run, primary) for run in runs], dtype=np.float64)

@@ -170,22 +170,36 @@ class WorkerReward:
 
 
 def worker_reward(
-    config: EnvConfig, positions: ArrayLike, next_positions: ArrayLike, targets: ArrayLike, info: StepInfo
+    config: EnvConfig,
+    positions: ArrayLike,
+    next_positions: ArrayLike,
+    targets: ArrayLike,
+    info: StepInfo,
+    *,
+    progress_coef: float,
 ) -> WorkerReward:
-    """The Worker's reward of one step (D25), at the environment's prices.
+    """The Worker's reward of one step (D25): the progress at the hierarchy's price, the contact and the effort
+    at the environment's.
 
     Args:
-        config: The environment's configuration, for ``c_p``, ``c_n``, ``c_s``, ``c_e`` and ``a_max``.
+        config: The environment's configuration, for ``c_n``, ``c_s``, ``c_e`` and ``a_max``.
         positions: ``(B, 2)`` positions before the step.
         next_positions: ``(B, 2)`` positions the step reached, before any reset.
         targets: ``(B, 2)`` targets of the step.
         info: The step's :class:`~hrlmpc.env.StepInfo`, for the contact and the input.
+        progress_coef: ``c_p``, the price of the decrease of the distance to the target (D66); not the
+            environment's ``progress_coef``, which is 0 under the sparse reward of D51.
+
+    Raises:
+        ValueError: If ``progress_coef`` is not positive.
     """
+    if not (math.isfinite(progress_coef) and progress_coef > 0.0):
+        raise ValueError(f"progress_coef must be positive and finite, got {progress_coef}")
     r, params = config.reward, config.physics
     p, q = np.asarray(positions, dtype=np.float64), np.asarray(next_positions, dtype=np.float64)
     g = np.asarray(targets, dtype=np.float64)
     before, after = p - g, q - g
-    progress = r.progress_coef * (np.hypot(before[..., 0], before[..., 1]) - np.hypot(after[..., 0], after[..., 1]))
+    progress = progress_coef * (np.hypot(before[..., 0], before[..., 1]) - np.hypot(after[..., 0], after[..., 1]))
     contact = -(r.contact_impulse_coef * info.impulse + r.contact_step_coef * info.contact)
     effort = -r.effort_coef * np.sum(info.u**2, axis=-1) / params.a_max**2
     return WorkerReward(progress=progress, contact=contact, effort=effort)
@@ -227,7 +241,8 @@ Worker = LearnedWorker | CommandWorker
 
 @dataclass(frozen=True, eq=False)
 class Hierarchy:
-    """The fixed parts of the loop: targets, segment length, the Manager's discount, observation map.
+    """The fixed parts of the loop: targets, segment length, the Manager's discount, the Worker's price, the
+    observation map.
 
     Attributes:
         targets: Map from the Manager's actions to targets (D24).
@@ -235,27 +250,36 @@ class Hierarchy:
         discount: The Manager's per-step discount ``gamma_RL``: its reward is
             discounted by it within a segment, and by ``gamma_RL^tau`` between decisions.
         obs_map: Positions and velocities of the observations.
+        progress_coef: ``c_p`` of the Worker's reward (D25, D66), the price of
+            the decrease of the distance to the target.
 
     Raises:
-        ValueError: If ``segment_steps`` is not positive or ``discount`` lies outside ``(0, 1]``.
+        ValueError: If ``segment_steps`` or ``progress_coef`` is not positive or ``discount`` lies outside
+            ``(0, 1]``.
     """
 
     targets: TargetMap
     segment_steps: int
     discount: float
     obs_map: ObservationMap
+    progress_coef: float
 
     def __post_init__(self) -> None:
         if self.segment_steps < 1:
             raise ValueError(f"segment_steps must be positive, got {self.segment_steps}")
         if not 0.0 < self.discount <= 1.0:
             raise ValueError(f"the discount must lie in (0, 1], got {self.discount}")
+        if not (math.isfinite(self.progress_coef) and self.progress_coef > 0.0):
+            raise ValueError(f"progress_coef must be positive and finite, got {self.progress_coef}")
 
 
-def disk_hierarchy(config: EnvConfig, *, segment_steps: int, reach_factor: float, discount: float) -> Hierarchy:
-    """The hierarchy of D24 and D27: targets on the disk of radius ``reach_factor`` times the segment's reach."""
+def disk_hierarchy(
+    config: EnvConfig, *, segment_steps: int, reach_factor: float, discount: float, progress_coef: float
+) -> Hierarchy:
+    """The hierarchy of D24, D25 and D27: targets on the disk of radius ``reach_factor`` times the segment's
+    reach, the Worker paid ``progress_coef`` per metre of progress."""
     radius = reach_factor * segment_reach(config.physics, segment_steps)
-    return Hierarchy(DiskTargets(radius), segment_steps, discount, ObservationMap.from_config(config))
+    return Hierarchy(DiskTargets(radius), segment_steps, discount, ObservationMap.from_config(config), progress_coef)
 
 
 @dataclass(frozen=True, eq=False)
@@ -422,7 +446,7 @@ def start_segments(
 
     Args:
         env: Environment with automatic resets.
-        hierarchy: Targets, segments and the Manager's discount.
+        hierarchy: Targets, segments, the Manager's discount and the Worker's price.
         manager_policy: The Manager's actions and log-probabilities.
         manager_value: The Manager's values.
         positions: Initial positions, one per agent; by default drawn in the spawn box.
@@ -469,7 +493,7 @@ def collect_hierarchical_rollout(
         env: Environment with automatic resets.
         state: Where the previous rollout (or :func:`start_segments`) stopped.
         num_steps: Steps per agent.
-        hierarchy: Targets, segments and the Manager's discount.
+        hierarchy: Targets, segments, the Manager's discount and the Worker's price.
         manager_policy: The Manager's actions and log-probabilities, at ``(k, 4)`` observations.
         manager_value: The Manager's values.
         worker: A :class:`LearnedWorker` or a :class:`CommandWorker`.
@@ -535,7 +559,7 @@ def collect_hierarchical_rollout(
             out = env.step_input(commands)
         done = out.terminated | out.truncated
         reached = obs_map.positions(out.final_obs)
-        reward = worker_reward(env.config, p, reached, targets, out.info)
+        reward = worker_reward(env.config, p, reached, targets, out.info, progress_coef=hierarchy.progress_coef)
         steps["obs"][t], steps["targets"][t], steps["rewards"][t] = obs, targets, out.reward
         steps["terminated"][t], steps["truncated"][t] = out.terminated, out.truncated
         steps["final_obs"][t] = out.final_obs

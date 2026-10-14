@@ -1,7 +1,8 @@
 """Typed configuration of hPPO, loaded from YAML (code rule C2, decision log D24, D27, D28).
 
-``configs/agent/hppo.yaml`` holds the hierarchy (segment length ``H`` and the
-targets' radius as a multiple of a segment's reach), the rollout, one network
+``configs/agent/hppo.yaml`` holds the hierarchy (segment length ``H``, the
+targets' radius as a multiple of a segment's reach and the price of the
+Worker's progress, D66), the rollout, one network
 and one PPO update for each level, the evaluation protocol and the runtime. The
 sections shared with flat PPO are validated by :mod:`hrlmpc.ppo_config`. Each
 level has its own discount: the Worker's per step, the Manager's per step
@@ -31,22 +32,31 @@ from hrlmpc.utils.strict_yaml import load_yaml
 
 @dataclass(frozen=True)
 class HierarchyConfig:
-    """Segments and targets (D24, D27).
+    """Segments, targets and the Worker's price (D24, D25, D27, D66).
 
     Attributes:
         segment_steps: ``H``, the steps of a full segment.
         target_reach_factor: The targets' radius as a multiple of the longest
             displacement in a segment, ``v_max H T_s``.
+        worker_progress_coef: ``c_p`` of the Worker's reward (D25): the price
+            of the decrease of the distance to the target, in seconds per
+            metre. It belongs to the hierarchy, not to the environment: the
+            sparse reward of D51 has no progress term (``progress_coef`` 0),
+            and the Worker keeps its dense reward (D66). The shipped value is
+            the shaped reward's, 10.
     """
 
     segment_steps: int
     target_reach_factor: float
+    worker_progress_coef: float
 
     def __post_init__(self) -> None:
         if self.segment_steps < 1:
             raise ValueError(f"segment_steps must be positive, got {self.segment_steps}")
         if not self.target_reach_factor > 0.0:
             raise ValueError(f"target_reach_factor must be positive, got {self.target_reach_factor}")
+        if not (math.isfinite(self.worker_progress_coef) and self.worker_progress_coef > 0.0):
+            raise ValueError(f"worker_progress_coef must be positive and finite, got {self.worker_progress_coef}")
 
 
 @dataclass(frozen=True)
@@ -114,21 +124,40 @@ class HPPOConfig:
         return self.rollout.num_envs * (self.rollout.num_steps // self.hierarchy.segment_steps)
 
 
+SHAPED_PROGRESS_COEF = 10.0
+"""The shaped reward's ``progress_coef`` (D13), the shipped price of the Worker's progress (D66)."""
+
 _TOP = ("hierarchy", "rollout", "manager", "worker", "evaluation", "runtime")
 _LEVEL = ("network", "update")
-_HIERARCHY = ("segment_steps", "target_reach_factor")
+_HIERARCHY = ("segment_steps", "target_reach_factor", "worker_progress_coef")
 
 
 def _hierarchy(data: Any) -> HierarchyConfig:
     raw = check_keys(data, _HIERARCHY, "hierarchy")
-    steps, factor = raw["segment_steps"], raw["target_reach_factor"]
+    steps = raw["segment_steps"]
     if isinstance(steps, bool) or not isinstance(steps, int):
         raise ValueError(f"hierarchy.segment_steps must be an integer, got {steps!r}")
-    if isinstance(factor, bool) or not isinstance(factor, (int, float)):
-        raise ValueError(f"hierarchy.target_reach_factor must be a number, got {factor!r}")
-    if not math.isfinite(factor):
-        raise ValueError(f"hierarchy.target_reach_factor must be finite, got {factor!r}")
-    return HierarchyConfig(segment_steps=steps, target_reach_factor=float(factor))
+    for key in ("target_reach_factor", "worker_progress_coef"):
+        value = raw[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"hierarchy.{key} must be a number, got {value!r}")
+        if not math.isfinite(value):
+            raise ValueError(f"hierarchy.{key} must be finite, got {value!r}")
+    return HierarchyConfig(
+        segment_steps=steps,
+        target_reach_factor=float(raw["target_reach_factor"]),
+        worker_progress_coef=float(raw["worker_progress_coef"]),
+    )
+
+
+def with_worker_price(agent: Any) -> Any:
+    """``agent`` with ``hierarchy.worker_progress_coef`` set to :data:`SHAPED_PROGRESS_COEF` where it is missing:
+    the ``config.yaml`` of a run from before D66, whose Worker was paid the environment's ``progress_coef``. For
+    reloading a run's policies for evaluation, where the price is immaterial."""
+    hierarchy = agent.get("hierarchy") if isinstance(agent, dict) else None
+    if isinstance(hierarchy, dict) and "worker_progress_coef" not in hierarchy:
+        return {**agent, "hierarchy": {**hierarchy, "worker_progress_coef": SHAPED_PROGRESS_COEF}}
+    return agent
 
 
 def _level(data: Any, name: str) -> LevelConfig:
