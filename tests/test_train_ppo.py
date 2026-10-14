@@ -126,7 +126,7 @@ def test_the_oracle_table_of_the_layout_is_used_when_there_is_one(tmp_path: Path
 
 
 def test_the_learning_rates_decay_linearly_over_the_budget(tmp_path: Path) -> None:
-    run_dir = train(_env(), _ppo(), budget=64, seed=1, run_dir=tmp_path / "run")
+    run_dir = train(_env(), _ppo(update={"learning_rate": 3e-4}), budget=64, seed=1, run_dir=tmp_path / "run")
     rates = [r["train/learning_rate"] for r in _records(run_dir) if "train/learning_rate" in r]
     np.testing.assert_allclose(rates, [3e-4, 2.25e-4, 1.5e-4, 0.75e-4], rtol=1e-9)
     critic = [r["train/critic_learning_rate"] for r in _records(run_dir) if "train/critic_learning_rate" in r]

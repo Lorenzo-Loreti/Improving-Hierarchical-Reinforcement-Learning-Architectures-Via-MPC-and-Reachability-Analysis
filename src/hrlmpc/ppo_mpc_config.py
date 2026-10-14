@@ -3,7 +3,8 @@ D27, D28, D34, D37, D38, D45, D46).
 
 ``configs/agent/ppo_mpc.yaml`` (architecture 3) and
 ``configs/agent/ppo_mpc_reachability.yaml`` (architecture 4) hold the hierarchy
-(segment length ``H`` and the radius of the targets of D24), the rollout, the
+(segment length ``H``, the radius of the targets of D24 and the price of the
+Worker's progress, D66, a diagnostic for this Worker), the rollout, the
 Manager's network and PPO update, the MPC Worker's settings, the targets of
 architecture 4 (``reachability``: ``null`` for architecture 3, else the number
 of support directions of D38), the evaluation protocol and the runtime. The

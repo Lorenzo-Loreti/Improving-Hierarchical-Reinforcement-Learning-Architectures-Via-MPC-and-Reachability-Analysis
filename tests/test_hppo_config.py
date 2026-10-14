@@ -10,7 +10,14 @@ from typing import Any
 import pytest
 import yaml
 
-from hrlmpc.hppo_config import HPPOConfig, hppo_config_from_dict, hppo_config_to_dict, load_hppo_config
+from hrlmpc.hppo_config import (
+    SHAPED_PROGRESS_COEF,
+    HPPOConfig,
+    hppo_config_from_dict,
+    hppo_config_to_dict,
+    load_hppo_config,
+    with_worker_price,
+)
 
 SHIPPED = Path(__file__).resolve().parents[1] / "configs" / "agent" / "hppo.yaml"
 
@@ -29,12 +36,14 @@ def _with(path: tuple[str, ...], value: Any) -> dict[str, Any]:
     return data
 
 
-def test_the_shipped_configuration_is_the_pre_alignment_tuning_of_hppo() -> None:
-    """D24, D27, D28."""
+def test_the_shipped_configuration_is_the_pre_alignment_tuning_with_the_selection_of_d65() -> None:
+    """D24, D27, D28; the Manager's entropy coefficient 0.03 since the tuning of D65 (configuration c3,
+    2026-10-14)."""
     config = load_hppo_config(SHIPPED)
     assert (config.hierarchy.segment_steps, config.hierarchy.target_reach_factor) == (10, 1.5)
+    assert config.hierarchy.worker_progress_coef == 10.0
     assert (config.rollout.num_envs, config.rollout.num_steps) == (8, 256)
-    for level, minibatches in ((config.manager, 4), (config.worker, 8)):
+    for level, minibatches, entropy in ((config.manager, 4, 0.03), (config.worker, 8, 0.01)):
         assert level.network.hidden_sizes == (64, 64)
         u = level.update
         assert (u.discount, u.epochs, u.minibatches, u.learning_rate, u.anneal_learning_rate) == (
@@ -45,7 +54,7 @@ def test_the_shipped_configuration_is_the_pre_alignment_tuning_of_hppo() -> None
             False,
         )
         assert (u.critic_lr_mult, u.adam_eps, u.gae_lambda, u.clip_coef) == (3.0, 1e-5, 0.95, 0.2)
-        assert (u.entropy_coef, u.max_grad_norm, u.value_norm_horizon) == (0.01, 0.5, 10)
+        assert (u.entropy_coef, u.max_grad_norm, u.value_norm_horizon) == (entropy, 0.5, 10)
     assert (config.evaluation.every, config.evaluation.grid, config.evaluation.seed) == (10240, (5, 5), 12345)
     assert (config.runtime.device, config.runtime.torch_threads) == ("cpu", 1)
 
@@ -72,6 +81,7 @@ def test_the_configuration_round_trips() -> None:
         ("manager", "network"),
         ("worker", "update", "discount"),
         ("hierarchy", "target_reach_factor"),
+        ("hierarchy", "worker_progress_coef"),
     ],
 )
 def test_missing_keys_are_rejected(path: tuple[str, ...]) -> None:
@@ -99,6 +109,10 @@ def test_unknown_keys_are_rejected(path: tuple[str, ...]) -> None:
         (("hierarchy", "segment_steps"), 2.5, "integer"),
         (("hierarchy", "target_reach_factor"), 0.0, "target_reach_factor"),
         (("hierarchy", "target_reach_factor"), True, "number"),
+        (("hierarchy", "worker_progress_coef"), 0.0, "worker_progress_coef"),
+        (("hierarchy", "worker_progress_coef"), -1.0, "worker_progress_coef"),
+        (("hierarchy", "worker_progress_coef"), "10", "number"),
+        (("hierarchy", "worker_progress_coef"), float("inf"), "finite"),
         (("rollout", "num_steps"), 9, "segment"),
         (("manager", "update", "minibatches"), 201, "minibatches"),
         (("worker", "update", "minibatches"), 4096, "minibatches"),
@@ -147,3 +161,31 @@ def test_the_sweep_files_differ_in_the_segment_length_only(segment_steps: int) -
         base, hierarchy=dataclasses.replace(base.hierarchy, segment_steps=segment_steps)
     )
     assert sweep.hierarchy.segment_steps == segment_steps and base.hierarchy.segment_steps == 10
+
+
+@pytest.mark.parametrize("name", ["hppo.yaml", "hppo_h6.yaml", "hppo_h4.yaml"])
+def test_the_workers_progress_is_priced_as_in_the_shaped_reward(name: str) -> None:
+    """D66: the Worker's progress coefficient is the hierarchy's, 10 s/m as the shaped reward's ``progress_coef``
+    (D13), so the Worker keeps its dense reward of D25 under the sparse reward of D51 (whose ``progress_coef`` is 0)."""
+    config = load_hppo_config(SHIPPED.with_name(name))
+    shaped = yaml.safe_load((SHIPPED.parents[1] / "env" / "slalom.yaml").read_text(encoding="utf-8"))
+    sparse = yaml.safe_load((SHIPPED.parents[1] / "env" / "slalom_sparse.yaml").read_text(encoding="utf-8"))
+    assert config.hierarchy.worker_progress_coef == shaped["reward"]["progress_coef"] == SHAPED_PROGRESS_COEF == 10.0
+    assert sparse["reward"]["progress_coef"] == 0.0
+
+
+def test_a_configuration_from_before_the_workers_price_gets_the_shaped_one() -> None:
+    """D66: ``with_worker_price`` fills a missing ``hierarchy.worker_progress_coef`` with the shaped price, for the
+    reload of a run from before; it leaves a present key, its input and anything but a mapping alone."""
+    data = _data()
+    del data["hierarchy"]["worker_progress_coef"]
+    before = copy.deepcopy(data)
+    with pytest.raises(ValueError, match="missing"):
+        hppo_config_from_dict(data)
+    filled = with_worker_price(data)
+    assert data == before  # not mutated
+    assert filled["hierarchy"]["worker_progress_coef"] == SHAPED_PROGRESS_COEF
+    assert hppo_config_from_dict(filled) == load_hppo_config(SHIPPED)
+    present = _data()
+    assert with_worker_price(present) is present
+    assert with_worker_price("text") == "text" and with_worker_price({"rollout": {}}) == {"rollout": {}}

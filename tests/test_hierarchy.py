@@ -48,8 +48,14 @@ def _config(layout: str = "tunnel", **sections: dict[str, Any]) -> EnvConfig:
     return env_config_from_dict(data)
 
 
-def _hierarchy(config: EnvConfig, segment_steps: int = H) -> Hierarchy:
-    return disk_hierarchy(config, segment_steps=segment_steps, reach_factor=1.5, discount=GAMMA)
+C_P = 10.0
+"""The Worker's progress coefficient of the shipped configurations (D25, D66): the shaped reward's (D13)."""
+
+
+def _hierarchy(config: EnvConfig, segment_steps: int = H, progress_coef: float = C_P) -> Hierarchy:
+    return disk_hierarchy(
+        config, segment_steps=segment_steps, reach_factor=1.5, discount=GAMMA, progress_coef=progress_coef
+    )
 
 
 # Deterministic stubs: the Manager aims forward and toward y = 0, the Worker toward its target.
@@ -216,7 +222,7 @@ def test_worker_reward_of_free_motion_toward_the_target() -> None:
     config = _config()
     p, p_next, out = _one_step(config, [2.0, 0.0], [0.0, 0.0], [1.0, 0.0])
     np.testing.assert_allclose(p_next, [[2.025, 0.0]], atol=1e-12)
-    reward = worker_reward(config, p, p_next, np.array([[3.0, 0.0]]), out.info)
+    reward = worker_reward(config, p, p_next, np.array([[3.0, 0.0]]), out.info, progress_coef=C_P)
     np.testing.assert_allclose(reward.progress, [10.0 * (1.0 - 0.975)], atol=1e-10)
     np.testing.assert_allclose(reward.contact, [0.0])
     np.testing.assert_allclose(reward.effort, [-0.01], atol=1e-12)
@@ -229,7 +235,7 @@ def test_worker_reward_of_a_head_on_impact() -> None:
     p, p_next, out = _one_step(config, [2.0, -1.95], [0.0, -1.2], [0.0, 0.0])
     np.testing.assert_allclose(out.info.impulse, [0.64], atol=1e-12)
     np.testing.assert_allclose(p_next, [[2.0, -2.0]], atol=1e-12)
-    reward = worker_reward(config, p, p_next, np.array([[2.0, -1.0]]), out.info)
+    reward = worker_reward(config, p, p_next, np.array([[2.0, -1.0]]), out.info, progress_coef=C_P)
     np.testing.assert_allclose(reward.progress, [10.0 * (0.95 - 1.0)], atol=1e-10)
     np.testing.assert_allclose(reward.contact, [-50.0 * 0.64 - 1.0], atol=1e-10)
     np.testing.assert_allclose(reward.total, [-0.5 - 33.0], atol=1e-10)
@@ -250,25 +256,26 @@ def test_the_worker_reward_has_no_term_of_the_task(layout: str) -> None:
         action = np.clip(rng.normal([0.9, 0.0], 0.6, (16, 2)), -1.0, 1.0)
         out = env.step(action)
         p_next = env.obs_map.positions(out.final_obs)
-        reward = worker_reward(config, p, p_next, g, out.info)
+        reward = worker_reward(config, p, p_next, g, out.info, progress_coef=C_P)
         task = -r.time_penalty + r.success_bonus * out.terminated
         np.testing.assert_allclose(reward.contact + reward.effort, out.info.reward_unshaped - task, atol=1e-9)
         np.testing.assert_allclose(
-            reward.progress, r.progress_coef * (np.hypot(*(p - g).T) - np.hypot(*(p_next - g).T)), atol=1e-12
+            reward.progress, C_P * (np.hypot(*(p - g).T) - np.hypot(*(p_next - g).T)), atol=1e-12
         )
-        assert np.all(np.abs(reward.progress) <= r.progress_coef * config.physics.v_max * config.physics.dt + 1e-9)
+        assert np.all(np.abs(reward.progress) <= C_P * config.physics.v_max * config.physics.dt + 1e-9)
         seen_contact |= bool(out.info.contact.any())
         seen_success |= bool(out.terminated.any())
         obs = out.obs
     assert seen_contact if layout == "slalom" else seen_success
 
 
-@pytest.mark.parametrize("layout", ["slalom", "tunnel"])
+@pytest.mark.parametrize("layout", sorted(path.stem for path in CONFIGS.glob("*.yaml")))
 def test_shipped_configs_meet_the_contact_criterion_for_the_worker(layout: str) -> None:
-    """D25: one saved step is worth at most c_p v_max T_s + c_e to the Worker, so c_n must exceed that / (a_max T_s)."""
+    """D25: one saved step is worth at most c_p v_max T_s + c_e to the Worker, so c_n must exceed that / (a_max T_s);
+    with c_p the hierarchy's price (D66), in the sparse files too, whose own ``progress_coef`` is 0."""
     config = _config(layout)
     r, p = config.reward, config.physics
-    threshold = (r.progress_coef * p.v_max * p.dt + r.effort_coef) / (p.a_max * p.dt)
+    threshold = (C_P * p.v_max * p.dt + r.effort_coef) / (p.a_max * p.dt)
     assert threshold == pytest.approx(4.84)
     assert r.contact_impulse_coef >= threshold
 
@@ -453,6 +460,31 @@ def test_the_worker_rewards_of_the_rollout() -> None:
     assert np.all(rollout.worker_reward.contact <= 0.0) and np.all(rollout.worker_reward.effort <= 0.0)
 
 
+def test_the_workers_progress_is_priced_by_the_hierarchy_not_by_the_environment() -> None:
+    """D66 (the realization of D51): under the sparse reward the environment's ``progress_coef`` is 0, and the
+    Worker keeps its dense reward of D25 at the hierarchy's price. Before the fix the Worker of every sparse run
+    was paid no progress at all."""
+    config = _config("slalom", task={"horizon": 30}, reward={"progress_coef": 0.0})
+    assert config.reward.progress_coef == 0.0
+    env, hierarchy, state, rollout, after = _run(config, batch=4, steps=60, manager=_random_policy(4))
+    assert hierarchy.progress_coef == C_P
+    obs_map = env.obs_map
+    g = rollout.targets
+    p, p_next = obs_map.positions(rollout.obs), obs_map.positions(rollout.final_obs)
+    progress = C_P * (np.linalg.norm(p - g, axis=-1) - np.linalg.norm(p_next - g, axis=-1))
+    np.testing.assert_allclose(rollout.worker_reward.progress, progress, atol=1e-9)
+    assert np.abs(progress).max() > 0.1  # the Worker is paid for its progress
+    assert rollout.worker is not None
+    np.testing.assert_allclose(rollout.worker.rewards, rollout.worker_reward.total, rtol=1e-12)
+    p0, p1, out = _one_step(config, [2.0, 0.0], [0.0, 0.0], [1.0, 0.0])
+    reward = worker_reward(config, p0, p1, np.array([[3.0, 0.0]]), out.info, progress_coef=3.0)
+    np.testing.assert_allclose(reward.progress, [3.0 * (1.0 - 0.975)], atol=1e-10)  # the given price, not 0
+    with pytest.raises(ValueError, match="progress_coef"):
+        _hierarchy(config, progress_coef=0.0)
+    with pytest.raises(ValueError, match="progress_coef"):
+        worker_reward(config, p0, p1, np.array([[3.0, 0.0]]), out.info, progress_coef=-1.0)
+
+
 def test_rollouts_are_reproducible() -> None:
     results = []
     for _ in range(2):
@@ -506,9 +538,9 @@ def test_invalid_arguments_are_rejected() -> None:
     with pytest.raises(ValueError, match="agents"):
         other = NavigationEnv(config, 3)
         collect_hierarchical_rollout(other, state, 5, hierarchy, _manager_policy, _manager_value, LEARNED)
-    for steps, discount in ((0, 0.99), (10, 0.0), (10, 1.5)):
+    for steps, discount, price in ((0, 0.99, C_P), (10, 0.0, C_P), (10, 1.5, C_P), (10, 0.99, 0.0)):
         with pytest.raises(ValueError):
-            Hierarchy(DiskTargets(1.8), steps, discount, env.obs_map)
+            Hierarchy(DiskTargets(1.8), steps, discount, env.obs_map, price)
 
 
 # --------------------------------------------------------------------------

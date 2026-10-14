@@ -95,6 +95,7 @@ from hrlmpc.hierarchy import (
     disk_hierarchy,
     start_segments,
 )
+from hrlmpc.hppo_config import with_worker_price
 from hrlmpc.mpc_command import MPCCommand, StepActor, episode_mask, mpc_metrics
 from hrlmpc.mpc_problem import MPCProblem
 from hrlmpc.oracle import find_oracle, oracle_line, oracle_record
@@ -136,13 +137,14 @@ def solver_targets(problem: MPCProblem, config: PPOMPCConfig) -> ReachableTarget
 
 
 def hierarchy_of(env_config: EnvConfig, config: PPOMPCConfig) -> Hierarchy:
-    """Targets and segments (D24, D27), as hPPO's, with the Manager's discount; architecture 4 replaces the
-    targets by those of D38 (:func:`solver_targets`)."""
+    """Targets and segments (D24, D27), as hPPO's, with the Manager's discount and the Worker's price (D25, D66, a
+    diagnostic here); architecture 4 replaces the targets by those of D38 (:func:`solver_targets`)."""
     return disk_hierarchy(
         env_config,
         segment_steps=config.hierarchy.segment_steps,
         reach_factor=config.hierarchy.target_reach_factor,
         discount=config.manager.update.discount,
+        progress_coef=config.hierarchy.worker_progress_coef,
     )
 
 
@@ -391,12 +393,14 @@ def load_manager(
     The Worker itself is built from the problem by the caller (it needs the solvers). For architecture 4 the
     hierarchy's targets are built by ``targets_factory`` (:func:`solver_targets` by default, which needs the
     solvers); the caller closes them. A run from before the regularizer of D46 has no ``mpc.start_weight`` in
-    its ``config.yaml``; its Worker had no regularizer, so it is rebuilt with ``start_weight = 0``.
+    its ``config.yaml``; its Worker had no regularizer, so it is rebuilt with ``start_weight = 0``. A run from
+    before D66 has no ``hierarchy.worker_progress_coef``; it is reloaded at the shaped price
+    (:func:`~hrlmpc.hppo_config.with_worker_price`), a diagnostic for this Worker.
     """
     path = Path(run_dir)
     raw = yaml.safe_load((path / "config.yaml").read_text(encoding="utf-8"))
     env_config = env_config_from_dict(raw["env"])
-    agent = raw["agent"]
+    agent = with_worker_price(raw["agent"])
     mpc = agent.get("mpc") if isinstance(agent, dict) else None
     if isinstance(mpc, dict) and "start_weight" not in mpc:  # a run of steps 9 and 10 (D46)
         agent = {**agent, "mpc": {**mpc, "start_weight": 0.0}}

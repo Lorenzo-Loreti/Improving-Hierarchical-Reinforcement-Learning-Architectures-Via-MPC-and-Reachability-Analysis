@@ -9,21 +9,29 @@ from typing import Any
 
 import numpy as np
 import pytest
+import yaml
 from scipy import stats
 
 from hrlmpc.analysis import (
     CURVE_KEYS,
+    GAP_LENIENT,
+    SOLVED_LEVELS,
     accepted,
     curve_keys,
     find_runs,
     first_accepted,
     group_runs,
+    has_oracle,
     load_run,
     main,
     mean_curve,
     series,
+    solved,
+    success_auc,
     summarize,
     t_interval,
+    time_to_solve,
+    uses_oracle,
 )
 from hrlmpc.utils.runlog import RunLogger, SampleCounter
 
@@ -59,9 +67,13 @@ def _make_run(
     every: int = 10240,
     env: dict[str, Any] | None = None,
     name: str | None = None,
+    agent: tuple[str, dict[str, Any]] | None = None,
 ) -> Path:
     run_dir = directory / (name or f"seed{seed}")
     config = {"algorithm": "ppo", "seed": seed, "env_file": "configs/env/tunnel.yaml", "env": env or TUNNEL}
+    if agent is not None:
+        config["agent_file"] = agent[0]
+        config["agent"] = agent[1]
     with RunLogger(run_dir, config, seed=seed) as logger:
         counter = SampleCounter()
         for i, record in enumerate(evaluations):
@@ -181,10 +193,16 @@ def test_the_first_accepted_evaluation(three_runs: list[Path]) -> None:
 
 
 def _rows(text: str, action: str = "mean") -> dict[str, list[str]]:
-    """The rows of the runs in the table of ``action``."""
-    mean, _, mode = text.partition("action: mode")
+    """The rows of the runs in the table of ``action`` (before the time-to-solve block)."""
+    mean, _, mode = text.partition("time to solve")[0].partition("action: mode")
     table = mean if action == "mean" else mode
     return {line.split()[0]: line.split() for line in table.splitlines() if line.startswith("seed")}
+
+
+def _solve_rows(text: str) -> dict[str, list[str]]:
+    """The rows of the runs in the time-to-solve block (D67)."""
+    block = text.partition("time to solve")[2].partition("solved:")[0]
+    return {line.split()[0]: line.split() for line in block.splitlines() if line.startswith("seed")}
 
 
 def test_the_summary_reports_every_run(three_runs: list[Path]) -> None:
@@ -220,6 +238,25 @@ def test_the_acceptance_uses_the_oracle_gap_where_it_is_logged(tmp_path: Path) -
     assert accepted(last, max_gap=0.05) and not accepted(first, max_gap=0.05)
     assert accepted(last, max_gap=0.05, oracle=False) is False  # on the gap of F7 alone, 0.12 fails
     assert first_accepted(run, max_gap=0.05) == 10240
+
+
+def test_a_run_without_arrivals_at_the_end_is_rejected_not_exempted(tmp_path: Path) -> None:
+    """An evaluation without arrivals carries no oracle gap; the run still measures it (the table is named in the
+    configuration, or an earlier evaluation carries the gap), so its verdict is "no", not "n/a"."""
+    first = _eval(1.0, 0.20, 0.0, 850.0)
+    first.update({"eval/oracle_gap_max": 0.08, "eval/oracle_gap_mean": 0.04})
+    failed = _eval(0.0, math.nan, 0.0, -200.0)
+    run = load_run(_make_run(tmp_path, 1, [first, failed], env=SLALOM))
+    text = summarize([run], max_gap=0.05)
+    assert _rows(text)["seed1"][7] == "no" and "accepted at the end: 0/1" in text
+    assert uses_oracle(run) and not has_oracle(failed)
+    named = _make_run(tmp_path / "named", 2, [failed], env=SLALOM)
+    config = yaml.safe_load((named / "config.yaml").read_text(encoding="utf-8"))
+    config["oracle_file"] = "configs/oracle/slalom.json"
+    (named / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+    text = summarize([load_run(named)], max_gap=0.05)
+    assert _rows(text)["seed2"][7] == "no" and "on the oracle gap, D59" in text
+    assert "acceptance not applicable" in summarize([load_run(_make_run(tmp_path / "bare", 3, [failed], env=SLALOM))])
 
 
 def test_the_acceptance_is_decided_on_the_mode_where_it_is_logged(tmp_path: Path) -> None:
@@ -299,3 +336,94 @@ def test_the_curves_of_either_action(three_runs: list[Path], tmp_path: Path) -> 
     assert main([str(tmp_path / "mixed"), "--plot", str(figure), "--action", "mode"]) == 0
     assert figure.stat().st_size > 0
 
+
+
+# ------------------------------------------------------------------- tuning (D55, D65)
+
+
+def test_the_success_auc_is_the_normalized_area_under_the_curve(tmp_path: Path) -> None:
+    """Evaluations at 0, 10 240 and 20 480 with success 0, 0.5 and 1 (trapezoids) give 0.5 of the budget."""
+    run = load_run(_make_run(tmp_path, 1, [_eval(0.0, math.nan, 0.0, -200.0), _eval(0.5, 0.2, 0.0, 300.0),
+                                           _eval(1.0, 0.05, 0.0, 900.0)]))
+    assert success_auc(run, "mean") == pytest.approx(0.5)
+    assert math.isnan(success_auc(run, "mode"))  # not logged
+    single = load_run(_make_run(tmp_path / "one", 1, [_eval(1.0, 0.05, 0.0, 900.0)]))
+    assert math.isnan(success_auc(single, "mean"))  # one point has no area
+
+
+def test_group_labels_name_the_agent_file_when_it_is_not_the_algorithms(tmp_path: Path) -> None:
+    """Tuning and sweep files (c3.yaml, hppo_h6.yaml) tell the groups apart by name, not by a hash."""
+    a = _make_run(tmp_path / "a", 1, [_eval(1.0, 0.05, 0.0, 900.0)], agent=("configs/agent/tuning/ppo/c3.yaml",
+                                                                             {"lr": 1.0}))
+    b = _make_run(tmp_path / "b", 1, [_eval(1.0, 0.05, 0.0, 900.0)], agent=("configs/agent/tuning/ppo/c4.yaml",
+                                                                             {"lr": 2.0}))
+    c = _make_run(tmp_path / "c", 1, [_eval(1.0, 0.05, 0.0, 900.0)], agent=("configs\\agent\\ppo.yaml", {"lr": 3.0}))
+    groups = group_runs([load_run(a), load_run(b), load_run(c)])
+    assert sorted(groups) == ["ppo tunnel", "ppo tunnel c3", "ppo tunnel c4"]
+
+
+def test_the_summary_ranks_the_groups_by_the_auc(tmp_path: Path) -> None:
+    """D65: with several groups the summary ends with the ranking by the mean AUC of the success curve of the
+    primary action (the mode where logged), the selection rule of the tuning protocol."""
+    low = [_eval(0.0, math.nan, 0.0, -200.0), _eval(0.0, math.nan, 0.0, -200.0), _eval(1.0, 0.05, 0.0, 900.0)]
+    high = [_eval(0.0, math.nan, 0.0, -200.0), _eval(1.0, 0.05, 0.0, 850.0), _eval(1.0, 0.05, 0.0, 890.0)]
+    runs = []
+    for seed in (101, 102):
+        runs.append(load_run(_make_run(tmp_path / "c1", seed, low, agent=("tuning/ppo/c1.yaml", {"k": 1}))))
+        runs.append(load_run(_make_run(tmp_path / "c2", seed, high, agent=("tuning/ppo/c2.yaml", {"k": 2}))))
+    text = summarize(runs)
+    assert "auc of the success curve (mean)" in text
+    ranking = text.split("groups ranked by the AUC of the success curve")[1]
+    lines = [line for line in ranking.splitlines() if line.strip().startswith(("1.", "2."))]
+    assert lines[0].split()[1:4] == ["ppo", "tunnel", "c2"] and "auc 0.750" in lines[0] and "n=2" in lines[0]
+    assert lines[1].split()[1:4] == ["ppo", "tunnel", "c1"] and "auc 0.250" in lines[1]
+    assert "final return 890.0" in lines[0]
+    single = summarize([runs[0]])
+    assert "groups ranked" not in single
+
+
+def test_the_time_to_solve_at_the_three_thresholds(tmp_path: Path) -> None:
+    """D67: the first evaluation with full success from the grid (primary), with full success and the gap at most
+    10 %, and meeting the strict criterion of D20 (gap at most 5 %, no contact); the contact-free full success is
+    reported beside them. On the primary action, the gap of the oracle where logged, else of F7."""
+    assert SOLVED_LEVELS == ("success", "gap_10", "strict", "contact_free") and GAP_LENIENT == 0.10
+    evaluations = [
+        _eval(0.0, math.nan, 0.0, -200.0, mode=(0.0, math.nan, 0.0, -200.0)),
+        _eval(1.0, 0.20, 0.04, 800.0, mode=(0.8, 0.20, 0.04, 700.0)),  # 10240: the mean arrives, the mode not yet
+        _eval(1.0, 0.08, 0.04, 850.0, mode=(1.0, 0.20, 0.04, 800.0)),  # 20480: full success of the mode, contact
+        _eval(1.0, 0.08, 0.00, 870.0, mode=(1.0, 0.08, 0.04, 850.0)),  # 30720: gap 8 %, still a contact
+        _eval(1.0, 0.03, 0.00, 900.0, mode=(1.0, 0.08, 0.00, 870.0)),  # 40960: contact-free
+        _eval(1.0, 0.03, 0.00, 900.0, mode=(1.0, 0.03, 0.00, 900.0)),  # 51200: strict
+    ]
+    run = load_run(_make_run(tmp_path, 1, evaluations))
+    assert time_to_solve(run, "mode") == {"success": 20480, "gap_10": 30720, "strict": 51200, "contact_free": 40960}
+    assert time_to_solve(run, "mean") == {"success": 10240, "gap_10": 20480, "strict": 40960, "contact_free": 30720}
+    assert time_to_solve(run, "mode", max_gap=0.02) == {"success": 20480, "gap_10": 30720, "strict": None,
+                                                        "contact_free": 40960}
+    record = evaluations[3]
+    assert solved(record, "success", "mode") and solved(record, "gap_10", "mode")
+    assert not solved(record, "strict", "mode") and not solved(record, "contact_free", "mode")
+    with pytest.raises(ValueError, match="level"):
+        solved(record, "gap_20", "mode")
+    text = summarize([run], max_gap=0.05)
+    assert "time to solve (D67)" in text
+    assert _solve_rows(text)["seed1"][1:] == ["20480", "30720", "51200", "40960"]
+    assert "solved: full success 1/1 (20480), gap <= 10% 1/1 (30720), strict 1/1 (51200), contact-free 1/1 (40960)" \
+        in text
+
+
+def test_the_time_to_solve_is_censored_and_needs_the_oracle_for_the_gaps(tmp_path: Path) -> None:
+    """A run that never meets a level is censored ("-"); on an obstacle layout without an oracle table the gap
+    levels are not applicable, the success levels still are."""
+    evaluations = [_eval(0.0, math.nan, 0.0, -200.0), _eval(1.0, 0.03, 0.0, 900.0)]
+    text = summarize([load_run(_make_run(tmp_path, 1, evaluations, env=SLALOM))], max_gap=0.05)
+    assert _solve_rows(text)["seed1"][1:] == ["10240", "n/a", "n/a", "10240"]
+    assert "solved: full success 1/1 (10240), gap <= 10% n/a, strict n/a, contact-free 1/1 (10240)" in text
+    stuck = [_eval(0.0, math.nan, 0.0, -200.0), _eval(0.5, 0.30, 0.2, 300.0)]
+    runs = [load_run(_make_run(tmp_path / "a", 2, stuck)), load_run(_make_run(tmp_path / "b", 3, evaluations))]
+    text = summarize(runs, max_gap=0.05)
+    rows = _solve_rows(text)
+    assert rows["seed2"][1:] == ["-", "-", "-", "-"] and rows["seed3"][1:] == ["10240", "10240", "10240", "10240"]
+    assert "solved: full success 1/2 (10240), gap <= 10% 1/2 (10240), strict 1/2 (10240), contact-free 1/2 (10240)" \
+        in text
+    assert time_to_solve(runs[0]) == {level: None for level in SOLVED_LEVELS}
