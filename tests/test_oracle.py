@@ -170,8 +170,9 @@ def test_a_plan_the_environment_corrects_is_not_an_entry() -> None:
     full = np.tile([config.physics.a_max, 0.0], (78, 1))
     stats = replay(config, [1.0, 0.0], full)
     assert stats is not None and stats.success and stats.length == 78 and stats.limiter_steps > 0
-    with pytest.raises(RuntimeError, match=f"corrected steps {stats.limiter_steps}"):
+    with pytest.raises(RuntimeError, match=f"corrected steps {stats.limiter_steps}") as info:
         entry_for(problem, np.array([1.0, 0.0]), 78, full)
+    assert f"limiter {stats.limiter_steps}, wall 0" in str(info.value) and "saturation 0" in str(info.value)
 
 
 def test_the_effort_term_must_be_worth_less_than_a_step() -> None:
@@ -434,6 +435,7 @@ def test_the_oracle_on_the_slalom_threads_the_gates_in_the_minimum_time() -> Non
     with _licence(), OracleSolver(problem) as solver:
         steps, inputs = problem.minimum_time(start, solver.solve)
         assert solver.mixed_solves >= 1  # the gates are within reach: free binaries, Gurobi
+        assert solver.polished == solver.mixed_solves  # every mixed plan refined by Clarabel on its binaries
     assert 73 <= steps <= 80
     entry = entry_for(problem, start, steps, inputs)
     stats = replay(config, start, inputs)

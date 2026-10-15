@@ -101,7 +101,7 @@ def test_the_curriculum_is_optional_and_round_trips() -> None:
     assert cfg.task.curriculum.exclude == ()  # no excluded region unless listed (D69)
     plain = env_config_to_dict(cfg)
     assert plain["task"]["curriculum"] == {"x_start": 8.0, "step": 1.0, "window": 50, "threshold": 0.8,
-                                           "exclude": []}
+                                           "exclude": [], "y": None}
     assert env_config_from_dict(plain) == cfg
     assert env_config_to_dict(load_env_config(CONFIG_DIR / "slalom.yaml"))["task"]["curriculum"] is None
 
@@ -129,6 +129,30 @@ def test_the_curriculum_may_exclude_regions_from_the_training_starts() -> None:
         ([{"x": [12.0, 13.0], "y": [-0.8, 0.8]}], "arena"),  # outside the arena
     ):
         data["task"]["curriculum"]["exclude"] = bad
+        with pytest.raises(ValueError, match=message):
+            env_config_from_dict(data)
+
+
+def test_the_curriculum_may_set_the_bands_height() -> None:
+    """D69: `y` gives the bands' y-range (the spawn box's by default); it must lie inside the arena and contain
+    the spawn box's y-range, so that the last band, the spawn box, is no surprise."""
+    data = _slalom_dict()
+    data["task"]["curriculum"] = {"x_start": 8.0, "step": 1.0, "window": 50, "threshold": 0.8, "y": [-2.0, 2.0]}
+    cfg = env_config_from_dict(data)
+    assert cfg.task.curriculum is not None and cfg.task.curriculum.y == (-2.0, 2.0)
+    plain = env_config_to_dict(cfg)
+    assert plain["task"]["curriculum"]["y"] == [-2.0, 2.0] and env_config_from_dict(plain) == cfg
+    del data["task"]["curriculum"]["y"]
+    cfg = env_config_from_dict(data)
+    assert cfg.task.curriculum is not None and cfg.task.curriculum.y is None
+    assert env_config_to_dict(cfg)["task"]["curriculum"]["y"] is None
+    for bad, message in (
+        ([-2.5, 2.0], "arena"),
+        ([-0.5, 2.0], "spawn"),  # does not contain the spawn box's [-1, 1]
+        ([2.0, -2.0], "y"),
+        ("tall", "list"),
+    ):
+        data["task"]["curriculum"]["y"] = bad
         with pytest.raises(ValueError, match=message):
             env_config_from_dict(data)
 
@@ -294,10 +318,11 @@ def test_the_trap_layout_is_the_sparse_slalom_with_its_obstacles_and_the_cavity_
         base,
         geometry=dataclasses.replace(base.geometry, obstacles=TRAP_OBSTACLES),
         task=dataclasses.replace(
-            base.task, curriculum=dataclasses.replace(base.task.curriculum, exclude=(TRAP_CAVITY,))
+            base.task,
+            curriculum=dataclasses.replace(base.task.curriculum, exclude=(TRAP_CAVITY,), y=(-2.0, 2.0)),
         ),
     )
-    assert trap == expected
+    assert trap == expected  # the bands span the arena's height: the corridors carry starts
     back, upper, lower, gate_lower, gate_upper = TRAP_OBSTACLES
     assert upper.y[0] - lower.y[1] == pytest.approx(1.6) and back.x[0] - upper.x[0] == pytest.approx(1.5)  # cavity
     assert back.x[1] - upper.x[0] == pytest.approx(2.0)  # the U's footprint: 2 m, so that no band of D62 is covered

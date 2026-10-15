@@ -8,9 +8,11 @@ goal and slides back towards the spawn box as the policy succeeds:
 
 - stage ``s`` draws uniformly from the free part of the band
   ``[x_start - s step, x_start - s step + width] x [y_lo, y_hi]``, with the
-  width and the ``y``-range of the spawn box, the left end clamped to the
-  spawn box's, outside the excluded boxes of the configuration (the dead
-  ends of a layout, D69); the last stage is the spawn box itself;
+  width of the spawn box and its ``y``-range or the one the configuration
+  gives (the arena's height on the trap, so that the corridors around its U
+  carry starts, D69), the left end clamped to the spawn box's, outside the
+  excluded boxes of the configuration (the dead ends of a layout, D69); the
+  last stage is the spawn box itself;
 - the finished episodes started in a stage are counted in blocks of
   ``window``: when a block is complete and its success rate reaches
   ``threshold`` the stage advances by one, otherwise a new block starts; the
@@ -94,7 +96,8 @@ class SpawnCurriculum:
         if stage >= self.stages - 1:
             return self.spawn  # the last band is the spawn box, exactly
         x_min = max(self.spawn.x[0], self.settings.x_start - stage * self.settings.step)
-        return Box(x=(x_min, x_min + self.width), y=self.spawn.y)
+        y = self.spawn.y if self.settings.y is None else self.settings.y
+        return Box(x=(x_min, x_min + self.width), y=y)
 
     def _free(self, points: FloatArray) -> NDArray[np.bool_]:
         """Free, short of the goal line and outside the excluded boxes (D69)."""

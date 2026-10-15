@@ -98,10 +98,16 @@ class CurriculumConfig:
             a layout, such as the cavity of the trap's U, which the policies
             meet on their way instead of starting in. Inside the arena and
             apart from the spawn box; empty by default.
+        y: The ``y``-range of the bands before the last, the spawn box's by
+            default (``None``); the trap's bands span the arena's height, so
+            that the corridors around its U carry training starts and every
+            stage extends the one before (D69). It contains the spawn box's
+            ``y``-range and lies inside the arena; the last band is the spawn
+            box whatever it is.
 
     Raises:
-        ValueError: If the step is not positive, the window is below 1 or the
-            threshold is outside ``(0, 1]``.
+        ValueError: If the step is not positive, the window is below 1, the
+            threshold is outside ``(0, 1]`` or ``y`` is not an interval.
     """
 
     x_start: float
@@ -109,6 +115,7 @@ class CurriculumConfig:
     window: int
     threshold: float
     exclude: tuple[Box, ...] = ()
+    y: tuple[float, float] | None = None
 
     def __post_init__(self) -> None:
         if not self.step > 0.0:
@@ -117,6 +124,8 @@ class CurriculumConfig:
             raise ValueError(f"curriculum window must be at least 1, got {self.window}")
         if not 0.0 < self.threshold <= 1.0:
             raise ValueError(f"curriculum threshold must lie in (0, 1], got {self.threshold}")
+        if self.y is not None and not self.y[0] < self.y[1]:
+            raise ValueError(f"the curriculum's y-range must be an interval [lo, hi] with lo < hi, got {self.y}")
 
 
 @dataclass(frozen=True)
@@ -230,6 +239,14 @@ class EnvConfig:
                     raise ValueError(f"excluded box {i} {box} is not inside the arena {self.geometry.arena}")
                 if spawn.overlaps_interior(box):
                     raise ValueError(f"excluded box {i} {box} overlaps the spawn box {spawn}, the last band")
+            if curriculum.y is not None:
+                tall = Box(x=spawn.x, y=curriculum.y)
+                if not self.geometry.arena.contains(tall):
+                    raise ValueError(f"the curriculum's y-range {curriculum.y} leaves the arena {self.geometry.arena}")
+                if not (curriculum.y[0] <= spawn.y[0] and spawn.y[1] <= curriculum.y[1]):
+                    raise ValueError(
+                        f"the curriculum's y-range {curriculum.y} does not contain the spawn box's {spawn.y}"
+                    )
 
 
 _PHYSICS_KEYS = ("dt", "a_max", "v_max", "gamma", "gamma_w", "d_bar")
@@ -291,17 +308,22 @@ def _curriculum(data: Any, where: str) -> CurriculumConfig | None:
     ``None``; ``exclude`` is an optional list of boxes."""
     if data is None:
         return None
-    section = _section(data, ("x_start", "step", "window", "threshold", "exclude"), where, optional=("exclude",))
+    section = _section(
+        data, ("x_start", "step", "window", "threshold", "exclude", "y"), where, optional=("exclude", "y")
+    )
     raw_exclude = section.get("exclude", [])
     if not isinstance(raw_exclude, (list, tuple)):
         raise ValueError(f"{where}.exclude must be a list of boxes, got {raw_exclude!r}")
     exclude = tuple(_box(item, f"{where}.exclude[{i}]") for i, item in enumerate(raw_exclude))
+    raw_y = section.get("y")
+    y = None if raw_y is None else _interval(raw_y, f"{where}.y")
     return CurriculumConfig(
         x_start=_float(section["x_start"], f"{where}.x_start"),
         step=_float(section["step"], f"{where}.step"),
         window=_int(section["window"], f"{where}.window"),
         threshold=_float(section["threshold"], f"{where}.threshold"),
         exclude=exclude,
+        y=y,
     )
 
 

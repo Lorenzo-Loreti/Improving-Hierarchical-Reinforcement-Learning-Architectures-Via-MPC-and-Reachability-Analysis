@@ -67,7 +67,12 @@ in exactly ``N`` steps, without contact and without any correction of the
 input (saturation, speed limiter, wall reaction), is an error, not an entry:
 the oracle's plan is coherent, the environment's trajectory is the model's,
 and the table's numbers are facts about the environment whatever the solver's
-tolerances were.
+tolerances were. Gurobi meets the dynamics within its feasibility tolerance
+(1e-6), and the replay, which recomputes the states from the inputs alone,
+drifts from Gurobi's states by up to that over ``gamma T_s``, beyond the disk
+margin; so every plan of a mixed-integer solve is refined by Clarabel with the
+binaries fixed to Gurobi's choice (a convex problem met about a hundred times
+more tightly), and Gurobi's own plan is kept only where Clarabel finds none.
 
 Tables. A table (:class:`OracleTable`) holds the physics (without ``d_bar``),
 the geometry, the settings, the reward the returns were measured with and one
@@ -508,9 +513,13 @@ def entry_for(problem: OracleProblem, start: ArrayLike, steps: int, inputs: Arra
         unshaped_return=float(stats.unshaped_return) if stats is not None else float("nan"),
     )
     if not entry.valid:
+        kinds = (
+            f" (saturation {stats.saturation_steps}, limiter {stats.limiter_steps}, wall {stats.wall_steps})"
+            if stats is not None else ""
+        )
         raise RuntimeError(
             f"the plan from {point.tolist()} replays to length {entry.length}, success {entry.success}, "
-            f"contact steps {entry.contact_steps}, corrected steps {entry.corrections}; expected success in "
+            f"contact steps {entry.contact_steps}, corrected steps {entry.corrections}{kinds}; expected success in "
             f"{steps} steps without contact or correction"
         )
     reward = problem.config.reward
@@ -608,6 +617,8 @@ class OracleSolver:
         """How many horizons Gurobi solved."""
         self.retries = 0
         """How many Gurobi solves needed another setting of :data:`GUROBI_RETRIES`."""
+        self.polished = 0
+        """How many of Gurobi's plans Clarabel refined with the binaries fixed to Gurobi's choice."""
 
     def solve(self, start: ArrayLike, horizon: int) -> FloatArray | None:
         """The inputs ``(horizon, 2)`` of the least-effort plan with ``horizon`` steps from ``start`` at rest, or
@@ -627,7 +638,19 @@ class OracleSolver:
             self.convex_solves += 1
             return self._solve_convex(point, N, [lb for lb, _ in bounds])
         self.mixed_solves += 1
-        return self._solve_mixed(point, N, bounds)
+        mixed = self._solve_mixed(point, N, bounds)
+        if mixed is None:
+            return None
+        plan, deltas = mixed
+        # Gurobi meets its constraints within its feasibility tolerance (1e-6 on the dynamics too), and the replay,
+        # which recomputes the states from the inputs alone, can drift from Gurobi's states by that tolerance over
+        # 1 - (1 - gamma T_s): beyond the disk margin. Clarabel on the convex problem with Gurobi's binaries fixed
+        # meets them about a hundred times more tightly; its plan is taken where it finds one.
+        polished = self._solve_convex(point, N, deltas)
+        if polished is None:
+            return plan
+        self.polished += 1
+        return polished
 
     def _solve_convex(self, point: FloatArray, N: int, deltas: list[FloatArray]) -> FloatArray | None:
         """Clarabel on the problem with every binary fixed to ``deltas``: the selected faces hold on both ends."""
@@ -656,8 +679,9 @@ class OracleSolver:
             return None
         raise RuntimeError(f"Clarabel ended with status {prob.status!r} on the oracle's problem with horizon {N}")
 
-    def _solve_mixed(self, point: FloatArray, N: int, bounds: Bounds) -> FloatArray | None:
-        """Gurobi on the mixed-integer problem, with the settings of :data:`GUROBI_RETRIES` in turn."""
+    def _solve_mixed(self, point: FloatArray, N: int, bounds: Bounds) -> tuple[FloatArray, list[FloatArray]] | None:
+        """Gurobi on the mixed-integer problem, with the settings of :data:`GUROBI_RETRIES` in turn: the inputs and
+        the binaries of its plan, or ``None`` if the problem is infeasible."""
         gp, pr = self._gp, self.problem
         GRB = gp.GRB
         a_max, v_max = pr.a_max, pr.v_max  # the radii less the disk margin
@@ -682,12 +706,14 @@ class OracleSolver:
                 m.addQConstr(vx * vx + vy * vy <= v_max**2, name=f"speed{k + 1}")
                 objective.add(ux * ux + uy * uy)
             m.addConstr(x[:, :2] @ pr.arena_normals.T <= np.tile(pr.arena_bounds, (N + 1, 1)), name="arena")
+            binaries = []
             for i, (obstacle, (lb, ub)) in enumerate(zip(pr.obstacles, bounds, strict=True)):
                 d = m.addMVar((N, obstacle.num_faces), lb=lb, ub=ub, vtype=GRB.BINARY, name=f"delta{i}")
                 rhs = obstacle.bounds - obstacle.big_m
                 m.addConstr(x[:N, :2] @ obstacle.normals.T - d * obstacle.big_m >= rhs, name=f"first_end{i}")
                 m.addConstr(x[1:, :2] @ obstacle.normals.T - d * obstacle.big_m >= rhs, name=f"second_end{i}")
                 m.addConstr(d.sum(axis=1) >= 1, name=f"any{i}")
+                binaries.append(d)
             m.addConstr(x[N, 0] >= pr.goal_x + pr.settings.goal_margin, name="goal")
             m.setObjective(objective, GRB.MINIMIZE)
             status = None
@@ -703,7 +729,8 @@ class OracleSolver:
                     break
             if status == GRB.OPTIMAL:
                 result: FloatArray = np.array(u.X, dtype=np.float64).reshape(N, 2)
-                return result
+                deltas = [np.rint(np.array(d.X, dtype=np.float64)).reshape(N, -1) for d in binaries]
+                return result, deltas
             if status in (GRB.INFEASIBLE, GRB.INF_OR_UNBD):
                 return None
             tried = f" after {len(GUROBI_RETRIES)} settings" if status in NUMERICAL_STATUSES else ""
@@ -775,7 +802,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         table = compute_oracle(problem, starts, solver.solve, source=source, echo=print)
         print(f"solves: {solver.convex_solves} convex (Clarabel), {solver.mixed_solves} mixed-integer (Gurobi), "
-              f"{solver.retries} retried")
+              f"{solver.retries} retried, {solver.polished} refined by Clarabel")
     out.parent.mkdir(parents=True, exist_ok=True)
     table.save(out)
     print(f"written {out}: {len(table.entries)} starts, minimum times {table.steps.min()}-{table.steps.max()} steps")

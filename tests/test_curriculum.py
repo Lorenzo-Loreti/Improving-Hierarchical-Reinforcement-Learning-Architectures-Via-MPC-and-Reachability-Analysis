@@ -133,13 +133,16 @@ def test_excluded_regions_are_never_sampled_and_lower_the_free_fraction() -> Non
     )
     layout = Layout.from_config(config.geometry)
     rng = np.random.default_rng(5)
+    seen_corridor = False
     for _ in range(cur.stages):
         points = cur.sample(rng, 600)
         assert layout.in_free_space(points).all()
-        # between x = 3.75 and 5.75 the band's y-range [-1, 1] is cavity (excluded), arm or back wall
-        assert not ((points[:, 0] > 3.75) & (points[:, 0] < 5.75)).any()
+        # between x = 3.75 and 5.75 only the corridors around the U are free and not excluded
+        between = (points[:, 0] > 3.75) & (points[:, 0] < 5.75)
+        assert np.all(np.abs(points[between, 1]) > 1.2)
+        seen_corridor |= bool(between.any())
         cur.advance()
-    assert cur.final and cur.band == config.task.spawn
+    assert seen_corridor and cur.final and cur.band == config.task.spawn
     fresh = _curriculum("trap_sparse")
     assert 0.08 < fresh.free_fraction(Box(x=(4.0, 6.0), y=(-1.0, 1.0))) < 0.16  # x in [5.75, 6] only
     assert 0.33 < fresh.free_fraction(Box(x=(3.0, 5.0), y=(-1.0, 1.0))) < 0.45  # x in [3, 3.75] only
@@ -147,13 +150,36 @@ def test_excluded_regions_are_never_sampled_and_lower_the_free_fraction() -> Non
     assert 0.57 < without.free_fraction(Box(x=(4.0, 6.0), y=(-1.0, 1.0))) < 0.68  # the cavity counts as free
 
 
+def test_the_bands_may_span_another_y_range_than_the_spawn_box() -> None:
+    """D69 (amended after the smoke runs): on the trap the bands span the arena's height, so that the corridors
+    around the U carry training starts and every stage extends the one before; the last band is the spawn box
+    exactly; the slalom keeps the spawn box's height (the default)."""
+    trap = _config("trap_sparse")
+    assert trap.task.curriculum is not None and trap.task.curriculum.y == (-2.0, 2.0)
+    cur = _curriculum("trap_sparse")
+    assert cur.band == Box(x=(8.0, 10.0), y=(-2.0, 2.0))
+    for _ in range(4):
+        cur.advance()
+    assert cur.band == Box(x=(4.0, 6.0), y=(-2.0, 2.0))
+    assert 0.40 < cur.free_fraction(cur.band) < 0.55  # the corridors and the stretch behind the back wall
+    points = cur.sample(np.random.default_rng(7), 800)
+    assert np.any(np.abs(points[:, 1]) > 1.2) and np.any(points[:, 0] > 5.75)
+    while not cur.final:
+        cur.advance()
+    assert cur.band == trap.task.spawn
+    slalom = _config("slalom_sparse")
+    assert slalom.task.curriculum is not None and slalom.task.curriculum.y is None
+    assert _curriculum("slalom_sparse").band == Box(x=(8.0, 10.0), y=(-1.0, 1.0))
+
+
 def test_a_band_that_is_all_excluded_is_refused_unless_it_is_the_spawn_box() -> None:
-    """The band [4, 6] of the trap is entirely excluded; the construction refuses it, as it refuses a band of
-    too few free points, unless it is the last band (the spawn box, never excluded)."""
+    """A band of the spawn box's height over the U is entirely cavity (excluded), arm or wall; the construction
+    refuses it, as it refuses a band of too few free points, unless it is the last band (the spawn box, never
+    excluded)."""
     config = _config("trap_sparse")
     assert config.task.curriculum is not None
     layout = Layout.from_config(config.geometry)
-    settings = dataclasses.replace(config.task.curriculum, x_start=3.75, step=3.75)  # bands [3.75, 5.75], [0, 2]
+    settings = dataclasses.replace(config.task.curriculum, x_start=3.75, step=3.75, y=None)  # [3.75, 5.75] x [-1, 1]
     with pytest.raises(ValueError, match="free fraction"):
         SpawnCurriculum(settings, config.task.spawn, layout)
 
