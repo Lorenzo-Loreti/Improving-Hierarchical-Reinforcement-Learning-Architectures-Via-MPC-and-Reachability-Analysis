@@ -3,8 +3,9 @@
 # straight route to the goal (its cavity is a dead end 1.5 m deep and 1.6 m wide,
 # with corridors of 0.8 m around it), and a gate of 0.75 m follows it. Physics,
 # arena, spawn box, goal, reward and curriculum as in slalom_sparse.yaml; the
-# curriculum's starts skip the cavity (task.curriculum.exclude), which the policies
-# meet on their way instead. Values from the decision log: D9 (physics), D13 (task
+# curriculum's bands span the arena's height (task.curriculum.y), so that the corridors
+# around the U carry training starts, and skip the cavity (task.curriculum.exclude),
+# which the policies meet on their way instead. Values from the decision log: D9 (physics), D13 (task
 # and reward), D14 (contact penalty), D51 (sparse reward), D62 (curriculum), D69.
 
 physics:
@@ -35,6 +36,7 @@ task:
     threshold: 0.8 # success rate that advances the stage
     exclude:       # no training start inside the U's cavity, a dead end (D69)
       - {x: [3.75, 5.25], y: [-0.8, 0.8]}
+    y: [-2.0, 2.0] # the bands span the arena's height: the corridors around the U carry starts (D69)
 
 reward:            # all coefficients non-negative; signs in hrlmpc.config.RewardConfig
   time_penalty: 1.0
