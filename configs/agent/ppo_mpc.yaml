@@ -5,7 +5,9 @@
 # should be when the segment ends. The Worker's tube and horizon follow the
 # disturbance d_bar of the environment's configuration (one file per level:
 # configs/env/<layout>_d05.yaml and _d10.yaml, D45), so this file serves every
-# level. The values are provisional until the tuning protocol (Q13).
+# level. Tuned under D65 (2026-10-16): configuration c7 of
+# configs/agent/tuning/ (the Manager's learning rate 1.0e-3 and entropy coefficient 0.03; the
+# Worker's effort weight 0.1 as before), the same for both MPC architectures by the tie-break of D65.
 # Write floats with a dot and a signed exponent (3.0e-4, 1.0e+5): YAML 1.1 reads 3e-4 and 1.0e5 as strings.
 
 hierarchy:                     # D24, D25, D27, D66
@@ -24,13 +26,13 @@ manager:                       # hPPO's Manager (D28)
     discount: 0.99             # gamma_RL per step; gamma_RL^tau between decisions (D27)
     epochs: 10
     minibatches: 4             # about 51 segments per minibatch
-    learning_rate: 3.0e-4      # actor
+    learning_rate: 1.0e-3      # actor; tuned under D65 (c7)
     anneal_learning_rate: false
     critic_lr_mult: 3.0        # critic learning rate = 3 x learning_rate
     adam_eps: 1.0e-5
     gae_lambda: 0.95           # per decision
     clip_coef: 0.2
-    entropy_coef: 0.01
+    entropy_coef: 0.03         # tuned under D65 (c7)
     max_grad_norm: 0.5         # per network
     value_norm_horizon: 10     # updates in the running statistics of the critic's targets
 

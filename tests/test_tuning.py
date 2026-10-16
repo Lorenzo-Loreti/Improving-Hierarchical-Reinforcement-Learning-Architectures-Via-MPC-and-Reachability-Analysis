@@ -1,6 +1,6 @@
 """Tests of the tuning configurations (decision log D55, D65): eight files per architecture that cover the
 2 x 2 x 2 design, nothing but the three knobs changed; the shipped file of an architecture is its selected
-configuration (c1, the pre-tuning file, while the selection is pending)."""
+configuration."""
 
 from __future__ import annotations
 
@@ -18,9 +18,10 @@ from hrlmpc.ppo_mpc_config import PPOMPCConfig, load_ppo_mpc_config
 AGENTS = Path(__file__).resolve().parents[1] / "configs" / "agent"
 LEARNING_RATES = (3.0e-4, 1.0e-3)
 ENTROPIES = (0.01, 0.03)
-SELECTED = {"ppo": 5, "hppo": 3, "ppo_mpc": 1, "ppo_mpc_reachability": 1}
-"""The configuration each shipped file equals: the selections of 2026-10-14 (PPO c5, hPPO c3); the MPC
-architectures still their pre-tuning file c1, their tuning pending."""
+SELECTED = {"ppo": 5, "hppo": 3, "ppo_mpc": 7, "ppo_mpc_reachability": 7}
+"""The configuration each shipped file equals: the selections of 2026-10-14 (PPO c5, hPPO c3) and of
+2026-10-16 (both MPC architectures c7: the Manager's learning rate 1e-3 and entropy 0.03, the Worker's effort
+weight 0.1, the same for both by the tie-break of D65 among configurations within the noise)."""
 
 
 def _design(third: tuple[Any, Any]) -> list[tuple[float, float, Any]]:
@@ -87,6 +88,8 @@ def test_the_mpc_tuning_files_cover_the_design(architecture: str) -> None:
         assert config == _mpc_variant(base, lr, entropy, effort), index
         assert config.algorithm == base.algorithm
     assert load_ppo_mpc_config(AGENTS / "tuning" / architecture / f"c{SELECTED[architecture]}.yaml") == base
+    assert base.manager.update.learning_rate == 1.0e-3 and base.manager.update.entropy_coef == 0.03  # c7
+    assert base.mpc.effort_weight == 0.1
 
 
 def test_every_architecture_has_exactly_eight_files() -> None:

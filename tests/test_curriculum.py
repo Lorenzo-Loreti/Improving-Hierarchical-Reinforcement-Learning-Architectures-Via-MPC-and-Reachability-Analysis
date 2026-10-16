@@ -123,31 +123,54 @@ def test_sampling_rejects_the_blocked_part_of_a_band() -> None:
     assert np.any(points[in_gate, 1] < -0.9) and np.any(~in_gate & (points[:, 1] > 0.9))
 
 
+CAVITY = Box(x=(3.75, 5.25), y=(-0.8, 0.8))
+
+
+def _in_cavity(points: np.ndarray) -> np.ndarray:
+    return (points[:, 0] > CAVITY.x[0]) & (points[:, 0] < CAVITY.x[1]) & (np.abs(points[:, 1]) < CAVITY.y[1])
+
+
 def test_excluded_regions_are_never_sampled_and_lower_the_free_fraction() -> None:
-    """D69: the starts skip the excluded boxes (the cavity of the trap's U); the free fraction of a band counts
-    them as blocked, and the last band is still the spawn box."""
-    cur = _curriculum("trap_sparse")
+    """D69: `exclude` lists boxes no training start is drawn from (here the cavity of the trap's U, applied to
+    the trap's file); the free fraction of a band counts them as blocked, and the last band is still the spawn
+    box."""
     config = _config("trap_sparse")
-    assert config.task.curriculum is not None and config.task.curriculum.exclude == (
-        Box(x=(3.75, 5.25), y=(-0.8, 0.8)),
-    )
+    cur = _curriculum("trap_sparse", exclude=(CAVITY,))
     layout = Layout.from_config(config.geometry)
     rng = np.random.default_rng(5)
     seen_corridor = False
     for _ in range(cur.stages):
         points = cur.sample(rng, 600)
-        assert layout.in_free_space(points).all()
+        assert layout.in_free_space(points).all() and not _in_cavity(points).any()
         # between x = 3.75 and 5.75 only the corridors around the U are free and not excluded
         between = (points[:, 0] > 3.75) & (points[:, 0] < 5.75)
         assert np.all(np.abs(points[between, 1]) > 1.2)
         seen_corridor |= bool(between.any())
         cur.advance()
     assert seen_corridor and cur.final and cur.band == config.task.spawn
-    fresh = _curriculum("trap_sparse")
+    fresh = _curriculum("trap_sparse", exclude=(CAVITY,))
     assert 0.08 < fresh.free_fraction(Box(x=(4.0, 6.0), y=(-1.0, 1.0))) < 0.16  # x in [5.75, 6] only
     assert 0.33 < fresh.free_fraction(Box(x=(3.0, 5.0), y=(-1.0, 1.0))) < 0.45  # x in [3, 3.75] only
-    without = _curriculum("trap_sparse", exclude=())
+    without = _curriculum("trap_sparse")
     assert 0.57 < without.free_fraction(Box(x=(4.0, 6.0), y=(-1.0, 1.0))) < 0.68  # the cavity counts as free
+
+
+def test_the_traps_cavity_carries_training_starts_from_the_third_stage_on() -> None:
+    """D69 (second amendment, 2026-10-16): the shipped trap file excludes nothing, so the cavity enters the bands
+    gradually — a sliver at stage 3 ([5, 7]: x in [5, 5.25]), about a third of the starts at stages 4 and 5 — and
+    is learned before the starts in front of the mouth, which lead into it: every stage extends the one before."""
+    config = _config("trap_sparse")
+    assert config.task.curriculum is not None and config.task.curriculum.exclude == ()
+    cur = _curriculum("trap_sparse")
+    rng = np.random.default_rng(11)
+    shares = []
+    for _ in range(6):
+        shares.append(float(_in_cavity(cur.sample(rng, 1500)).mean()))
+        cur.advance()
+    assert shares[0] == shares[1] == shares[2] == 0.0  # bands [8, 10], [7, 9], [6, 8]: no cavity
+    assert 0.03 < shares[3] < 0.10  # [5, 7]: the back of the cavity, 0.4 of 6.2 m^2 free
+    assert 0.30 < shares[4] < 0.45  # [4, 6]: 2.0 of 5.4 m^2
+    assert 0.22 < shares[5] < 0.36  # [3, 5]: 2.0 of 7.0 m^2, beside the starts in front of the mouth
 
 
 def test_the_bands_may_span_another_y_range_than_the_spawn_box() -> None:
@@ -161,7 +184,7 @@ def test_the_bands_may_span_another_y_range_than_the_spawn_box() -> None:
     for _ in range(4):
         cur.advance()
     assert cur.band == Box(x=(4.0, 6.0), y=(-2.0, 2.0))
-    assert 0.40 < cur.free_fraction(cur.band) < 0.55  # the corridors and the stretch behind the back wall
+    assert 0.62 < cur.free_fraction(cur.band) < 0.73  # the corridors, the cavity and the stretch behind the wall
     points = cur.sample(np.random.default_rng(7), 800)
     assert np.any(np.abs(points[:, 1]) > 1.2) and np.any(points[:, 0] > 5.75)
     while not cur.final:
@@ -179,7 +202,9 @@ def test_a_band_that_is_all_excluded_is_refused_unless_it_is_the_spawn_box() -> 
     config = _config("trap_sparse")
     assert config.task.curriculum is not None
     layout = Layout.from_config(config.geometry)
-    settings = dataclasses.replace(config.task.curriculum, x_start=3.75, step=3.75, y=None)  # [3.75, 5.75] x [-1, 1]
+    settings = dataclasses.replace(  # [3.75, 5.75] x [-1, 1] with the cavity excluded
+        config.task.curriculum, x_start=3.75, step=3.75, y=None, exclude=(CAVITY,),
+    )
     with pytest.raises(ValueError, match="free fraction"):
         SpawnCurriculum(settings, config.task.spawn, layout)
 

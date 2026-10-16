@@ -430,12 +430,14 @@ def test_a_run_from_before_the_workers_price_is_loaded_at_the_shaped_price(tmp_p
 
 
 def test_the_learning_rates_are_constant_unless_annealed(tmp_path: Path) -> None:
-    run_dir = train(_env(), _config(), budget=160, seed=1, run_dir=tmp_path / "constant", worker_factory=PDWorker,
+    """Pinned to a learning rate of 3e-4 (the shipped file carries the selection of D65, 1e-3)."""
+    constant = _config(manager__update__learning_rate=3e-4)
+    run_dir = train(_env(), constant, budget=160, seed=1, run_dir=tmp_path / "constant", worker_factory=PDWorker,
                     echo=None)
     records = [r for r in _records(run_dir) if "train/updates" in r]
     np.testing.assert_allclose([r["manager/learning_rate"] for r in records], [3e-4] * 4, rtol=1e-12)
     np.testing.assert_allclose([r["manager/critic_learning_rate"] for r in records], [9e-4] * 4, rtol=1e-12)
-    annealed = _config(manager__update__anneal_learning_rate=True)
+    annealed = _config(manager__update__learning_rate=3e-4, manager__update__anneal_learning_rate=True)
     run_dir = train(_env(), annealed, budget=160, seed=1, run_dir=tmp_path / "annealed", worker_factory=PDWorker,
                     echo=None)
     records = [r for r in _records(run_dir) if "train/updates" in r]
