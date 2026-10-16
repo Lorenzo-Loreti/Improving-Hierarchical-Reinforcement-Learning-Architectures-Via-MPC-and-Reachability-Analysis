@@ -307,10 +307,11 @@ TRAP_OBSTACLES = (
 TRAP_CAVITY = Box(x=(3.75, 5.25), y=(-0.8, 0.8))
 
 
-def test_the_trap_layout_is_the_sparse_slalom_with_its_obstacles_and_the_cavity_excluded() -> None:
-    """D69: the U-trap opening towards the spawn box on the straight route, the corridors of 0.8 m around it,
-    the gate of 0.75 m after it; the sparse reward and the curriculum of the slalom, whose starts skip the
-    cavity of the U (a dead end)."""
+def test_the_trap_layout_is_the_sparse_slalom_with_its_obstacles_and_bands_of_the_arenas_height() -> None:
+    """D69 (amended twice): the U-trap opening towards the spawn box on the straight route, the corridors of
+    0.8 m around it, the gate of 0.75 m after it; the sparse reward and the curriculum of the slalom, with bands
+    of the arena's height and no excluded region: the cavity of the U carries training starts like any other
+    free region, so that every stage extends the one before (the starts in front of the mouth lead into it)."""
     base = load_env_config(CONFIG_DIR / "slalom_sparse.yaml")
     trap = load_env_config(CONFIG_DIR / "trap_sparse.yaml")
     assert base.task.curriculum is not None and trap.task.curriculum is not None
@@ -318,11 +319,11 @@ def test_the_trap_layout_is_the_sparse_slalom_with_its_obstacles_and_the_cavity_
         base,
         geometry=dataclasses.replace(base.geometry, obstacles=TRAP_OBSTACLES),
         task=dataclasses.replace(
-            base.task,
-            curriculum=dataclasses.replace(base.task.curriculum, exclude=(TRAP_CAVITY,), y=(-2.0, 2.0)),
+            base.task, curriculum=dataclasses.replace(base.task.curriculum, exclude=(), y=(-2.0, 2.0)),
         ),
     )
     assert trap == expected  # the bands span the arena's height: the corridors carry starts
+    assert trap.task.curriculum.exclude == ()  # the cavity is not excluded (the second amendment of D69)
     back, upper, lower, gate_lower, gate_upper = TRAP_OBSTACLES
     assert upper.y[0] - lower.y[1] == pytest.approx(1.6) and back.x[0] - upper.x[0] == pytest.approx(1.5)  # cavity
     assert back.x[1] - upper.x[0] == pytest.approx(2.0)  # the U's footprint: 2 m, so that no band of D62 is covered
@@ -344,9 +345,11 @@ def test_the_narrow_gate_files_are_gone() -> None:
     assert not list(CONFIG_DIR.glob("slalom_narrow*"))
 
 
-def test_the_exploration_setting_is_the_sparse_slalom_without_the_curriculum() -> None:
-    """D63: `slalom_sparse_nocur.yaml` differs from `slalom_sparse.yaml` in the curriculum only (none)."""
-    main = load_env_config(CONFIG_DIR / "slalom_sparse.yaml")
-    plain = load_env_config(CONFIG_DIR / "slalom_sparse_nocur.yaml")
+@pytest.mark.parametrize("layout", ["slalom", "tunnel"])
+def test_the_exploration_setting_is_the_sparse_layout_without_the_curriculum(layout: str) -> None:
+    """D63, D68: `<layout>_sparse_nocur.yaml` differs from `<layout>_sparse.yaml` in the curriculum only (none);
+    the tunnel's exploration file is the control of D68."""
+    main = load_env_config(CONFIG_DIR / f"{layout}_sparse.yaml")
+    plain = load_env_config(CONFIG_DIR / f"{layout}_sparse_nocur.yaml")
     assert main.task.curriculum is not None and plain.task.curriculum is None
     assert plain == dataclasses.replace(main, task=dataclasses.replace(main.task, curriculum=None))

@@ -290,7 +290,8 @@ class _ExactProblem:
         infeasible, certified or almost, or Clarabel leaves no plan.
 
         Raises:
-            SolverFailure: If Clarabel fails (cvxpy's ``SolverError``).
+            SolverFailure: If Clarabel fails (cvxpy's ``SolverError``, or any other error the solve raises:
+                a long run must not abort on a solver's surprise; the failure is counted and reported).
         """
         k = self.assign(x, target, steps_left, deltas)
         self.last_status = None
@@ -298,8 +299,10 @@ class _ExactProblem:
             with warnings.catch_warnings():  # inaccurate solves are handled below
                 warnings.simplefilter("ignore")
                 self.prob.solve(solver=cp.CLARABEL)
-        except cp.SolverError as error:
-            raise SolverFailure(f"Clarabel failed on the exact problem: {error}") from error
+        except Exception as error:
+            raise SolverFailure(
+                f"Clarabel failed on the exact problem: {type(error).__name__}: {error}"
+            ) from error
         self.last_status = self.prob.status
         if self.prob.status not in PLAN_STATUSES or self.z.value is None or self.v.value is None:
             return None
@@ -349,7 +352,7 @@ class ReachSupport:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     self.prob.solve(solver=cp.CLARABEL)
-            except cp.SolverError:
+            except Exception:  # a failed direction is a NaN row, whatever the solve raised
                 self.failures += 1
                 continue
             if self.prob.status != "optimal" or self.z.value is None:
@@ -836,12 +839,16 @@ class MPCWorker:
         free = pr.free_binaries(bounds)
         solution = self._optimize(s, x, g, k, bounds)
         plan, outcome, invalid = self._choose(x, g, k, solution, candidate, candidate_cost)
+        if plan is not None:
+            u = pr.input(x, plan[0], plan[1])
+            if not np.isfinite(u).all():  # a non-finite plan never reaches the environment: counted, braked
+                self._errors += 1
+                plan, outcome, invalid = None, EMERGENCY, 0
         if plan is None:
             u = pr.emergency_input(x)
             s.plan = None
             cost = float("nan")
         else:
-            u = pr.input(x, plan[0], plan[1])
             s.plan = (plan[0], plan[1])
             cost = pr.cost(plan[0], plan[1], g, k, x=x)
         report = self._report()

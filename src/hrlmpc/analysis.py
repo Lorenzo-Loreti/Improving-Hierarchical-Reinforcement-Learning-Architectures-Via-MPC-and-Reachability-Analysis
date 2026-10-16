@@ -34,7 +34,7 @@ import argparse
 import hashlib
 import json
 import math
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Any
@@ -44,7 +44,11 @@ import yaml
 from numpy.typing import NDArray
 from scipy import stats
 
+from hrlmpc.config import env_config_from_dict, env_config_to_dict
 from hrlmpc.evaluation import EVAL_ACTIONS, evaluation_name
+from hrlmpc.hppo_config import hppo_config_from_dict, hppo_config_to_dict
+from hrlmpc.ppo_config import ppo_config_from_dict, ppo_config_to_dict
+from hrlmpc.ppo_mpc_config import ppo_mpc_config_from_dict, ppo_mpc_config_to_dict
 
 FloatArray = NDArray[np.float64]
 
@@ -85,6 +89,21 @@ class Run:
         return self.path.name
 
     @property
+    def budget(self) -> int | None:
+        """The budget of samples the run was given, when its configuration records one."""
+        budget = self.config.get("budget")
+        return None if budget is None else int(budget)
+
+    @property
+    def complete(self) -> bool:
+        """Whether the run reached its budget (a run killed before the end keeps its records up to the kill);
+        ``True`` when no budget is recorded."""
+        budget = self.budget
+        if budget is None or not self.records:
+            return True
+        return int(self.records[-1].get("env_steps", 0)) >= budget
+
+    @property
     def seed(self) -> Any:
         """Training seed, from the configuration or else from the provenance."""
         return self.config.get("seed", self.meta.get("seed"))
@@ -119,9 +138,41 @@ def find_runs(paths: Iterable[str | Path]) -> list[Run]:
     return [load_run(p) for p in sorted(found)]
 
 
-def _fingerprint(config: Mapping[str, Any]) -> str:
+_ROUND_TRIPS: dict[str, tuple[Callable[[Mapping[str, Any]], Any], Callable[[Any], dict[str, Any]]]] = {
+    "ppo": (ppo_config_from_dict, ppo_config_to_dict),
+    "hppo": (hppo_config_from_dict, hppo_config_to_dict),
+    "ppo_mpc": (ppo_mpc_config_from_dict, ppo_mpc_config_to_dict),
+    "ppo_mpc_reachability": (ppo_mpc_config_from_dict, ppo_mpc_config_to_dict),
+}
+"""The loader and the writer of the agent section of a run's configuration, by algorithm."""
+
+
+def _normalized(config: Mapping[str, Any]) -> dict[str, Any]:
+    """The configuration without its provenance, with the environment and agent sections as today's loaders
+    record them: an optional key that did not exist when a run was written (the bands' height of D69, say) is
+    filled with its default, so that runs of one configuration share their fingerprint across versions of the
+    schema. A section today's loader refuses is kept as written."""
     shared = {k: v for k, v in config.items() if k not in _PROVENANCE}
-    return hashlib.sha256(json.dumps(shared, sort_keys=True, default=str).encode()).hexdigest()[:8]
+    env = shared.get("env")
+    if isinstance(env, Mapping):
+        try:
+            shared["env"] = env_config_to_dict(env_config_from_dict(env))
+        except (KeyError, TypeError, ValueError):
+            pass
+    agent = shared.get("agent")
+    round_trip = _ROUND_TRIPS.get(str(config.get("algorithm")))
+    if isinstance(agent, Mapping) and round_trip is not None:
+        load, dump = round_trip
+        try:
+            shared["agent"] = dump(load(agent))
+        except (KeyError, TypeError, ValueError):
+            pass
+    return shared
+
+
+def _fingerprint(config: Mapping[str, Any]) -> str:
+    normalized = _normalized(config)
+    return hashlib.sha256(json.dumps(normalized, sort_keys=True, default=str).encode()).hexdigest()[:8]
 
 
 def group_runs(runs: Sequence[Run]) -> dict[str, list[Run]]:
@@ -307,13 +358,15 @@ def time_to_solve(run: Run, action: str = "mean", max_gap: float = 0.05, oracle:
 
 def success_auc(run: Run, action: str = "mean") -> float:
     """The area under the success curve of the evaluation with ``action``, by the trapezoidal rule over the
-    samples, divided by the samples of the last evaluation: in ``[0, 1]`` (the selection rule of D65); NaN with
-    fewer than two evaluations or without the action."""
+    samples, divided by the run's budget (by the samples of the last evaluation when no budget is recorded): in
+    ``[0, 1]`` (the selection rule of D65), and an incomplete run counts the area it reached only; NaN with fewer
+    than two evaluations or without the action."""
     steps, values = series(run, f"{evaluation_name(action)}/success_rate")
     if steps.size < 2 or steps[-1] <= 0:
         return math.nan
     area = np.sum(0.5 * (values[1:] + values[:-1]) * np.diff(steps))  # the trapezoidal rule
-    return float(area / steps[-1])
+    span = steps[-1] if run.budget is None else max(run.budget, steps[-1])
+    return float(area / span)
 
 
 def has_oracle(record: Mapping[str, Any], action: str = "mean") -> bool:
@@ -391,6 +444,10 @@ def _summarize_group(label: str, runs: Sequence[Run], max_gap: float) -> list[st
     finals = [_last_evaluation(run) for run in runs]
     with_mode = all(f"{evaluation_name('mode')}/success_rate" in final for final in finals)
     primary = "mode" if with_mode else "mean"
+    incomplete = [
+        f"INCOMPLETE: {run.name} stopped at {int(run.records[-1].get('env_steps', 0))} of {run.budget} samples"
+        for run in runs if not run.complete
+    ]
     with_oracle = all(uses_oracle(run, primary) for run in runs)
     applicable = with_oracle or not any(run.has_obstacles for run in runs)
     verdicts = []
@@ -400,7 +457,7 @@ def _summarize_group(label: str, runs: Sequence[Run], max_gap: float) -> list[st
         verdict = ("yes" if accepted(final, max_gap, primary) else "no") if applicable else "n/a"
         verdicts.append(f" {verdict:>8} {'-' if first is None else first:>8} {_fmt(auc):>6}")
     acceptance_columns = f" {'accepted':>8} {'first':>8} {'auc':>6}"
-    lines = [f"== {label} ({len(runs)} runs)"]
+    lines = [f"== {label} ({len(runs)} runs)", *incomplete]
     if primary == "mean":
         lines.append("action: mean; acceptance on the mean (D20)")
         lines += _table(runs, finals, "mean", verdicts, acceptance_columns)
@@ -558,8 +615,25 @@ def plot_curves(runs: Sequence[Run], path: str | Path, keys: Sequence[str] = CUR
     plt.close(fig)
 
 
+def inventory(runs: Sequence[Run]) -> str:
+    """One line per group: how many runs, their seeds, and which of them are incomplete (a run killed before its
+    budget): the check of a matrix of runs before its analysis."""
+    lines = []
+    for label, members in group_runs(runs).items():
+        seeds = sorted(members, key=lambda run: str(run.seed))
+        cut = [run for run in members if not run.complete]
+        text = f"{label:<48} {len(members):>3} runs  seeds {', '.join(str(run.seed) for run in seeds)}"
+        if cut:
+            text += "  INCOMPLETE: " + ", ".join(
+                f"{run.name} ({int(run.records[-1].get('env_steps', 0))} of {run.budget})" for run in cut
+            )
+        lines.append(text)
+    return "\n".join(lines)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """Command line: print the summary of the runs below the given directories, optionally plot them."""
+    """Command line: print the summary of the runs below the given directories, optionally plot them; with
+    ``--inventory``, only the list of the groups with their seeds and incomplete runs."""
     parser = argparse.ArgumentParser(description="Summarize training runs: final evaluation and learning curves.")
     parser.add_argument("paths", nargs="+", type=Path, help="run directories or directories containing runs")
     parser.add_argument("--max-gap", type=float, default=0.05, help="largest accepted arrival gap (D20)")
@@ -567,8 +641,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--action", choices=EVAL_ACTIONS, default="mean", help="the evaluation whose curves are plotted (D43)"
     )
+    parser.add_argument("--inventory", action="store_true", help="list the groups, their seeds and incomplete runs")
     args = parser.parse_args(argv)
     runs = find_runs(args.paths)
+    if args.inventory:
+        print(inventory(runs))
+        return 0
     print(summarize(runs, args.max_gap))
     if args.plot is not None:
         plot_curves(runs, args.plot, curve_keys(args.action))

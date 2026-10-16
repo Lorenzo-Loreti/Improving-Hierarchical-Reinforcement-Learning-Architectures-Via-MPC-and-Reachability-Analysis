@@ -1,0 +1,34 @@
+# Tunnel with the sparse reward of D51 and WITHOUT the spawn curriculum of D62: the exploration setting of
+# D63, in which the training starts are uniform on the spawn box from the first episode. Identical to
+# configs/env/tunnel_sparse.yaml apart from task.curriculum (a test). The control of D68: the tunnel is run
+# in this setting only (5 seeds), for the certified minimum time and the cost of the hierarchy where no
+# obstacle justifies it.
+# Values from the thesis decision log: D9 (physics), D11 (geometry), D13 (task and reward),
+# D14 (contact penalty), D51 (sparse reward), D63 (exploration setting) and D68 (scope).
+
+physics:
+  dt: 0.1
+  a_max: 2.5
+  v_max: 1.2
+  gamma: 0.5
+  gamma_w: 1.0
+  d_bar: 0.0
+
+geometry:
+  arena: {x: [-1.0, 11.0], y: [-2.0, 2.0]}
+  obstacles: []
+  goal_x: 10.0
+
+task:
+  spawn: {x: [0.0, 2.0], y: [-1.0, 1.0]}  # the evaluation's starts
+  horizon: 200
+  curriculum: null # no curriculum (D63): the exploration setting, starts uniform on the spawn box from the first episode
+
+reward:
+  time_penalty: 1.0
+  success_bonus: 1000.0
+  progress_coef: 0.0           # sparse reward (D51): no progress term; 10.0 in the shaped files
+  shaping_discount: 1.0
+  effort_coef: 0.01
+  contact_impulse_coef: 50.0
+  contact_step_coef: 1.0

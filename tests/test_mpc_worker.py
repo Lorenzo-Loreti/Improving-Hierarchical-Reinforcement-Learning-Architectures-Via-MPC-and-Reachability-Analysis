@@ -558,6 +558,52 @@ def test_an_exact_solve_without_a_plan_is_counted_by_its_status(status: str, ina
     worker.close()
 
 
+class _Raising:
+    """A stand-in for the exact problem's cvxpy problem whose solve raises an error that is not cvxpy's
+    ``SolverError`` (a surprise of the solver or of cvxpy's parameter checks)."""
+
+    status = None
+
+    def solve(self, **kwargs: Any) -> None:
+        raise ValueError("a surprise")
+
+
+def test_any_error_of_the_exact_solve_is_a_counted_failure_not_an_abort(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A run of hours must survive whatever the exact solve raises: the step ends as a solver failure (exit
+    ``error``, counted), the agent brakes, and the next step solves again."""
+    _, _, problem = _setup("tunnel")
+    worker = MPCWorker(problem)
+    x = np.array([1.0, 0.0, 0.3, 0.0])
+    monkeypatch.setattr(worker._exact, "prob", _Raising())
+    with _licence():
+        u, info = worker.act(x, [2.8, 0.0], H)
+    assert info.outcome == EMERGENCY and info.exit == ERROR and info.solver_errors == 1
+    np.testing.assert_allclose(u, problem.emergency_input(x))
+    monkeypatch.undo()
+    with _licence():
+        _, info = worker.act(x, [2.8, 0.0], H)
+    assert info.outcome == SOLVER and info.solver_errors == 0
+    worker.close()
+
+
+def test_a_plan_with_a_non_finite_input_is_braked_and_counted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-finite input never reaches the environment (which would abort the run): the step brakes, as without
+    a plan, and counts a solver failure; the plan is not kept as a candidate."""
+    _, _, problem = _setup("tunnel")
+    worker = MPCWorker(problem)
+    x = np.array([1.0, 0.0, 0.3, 0.0])
+    monkeypatch.setattr(worker.problem, "input", lambda *args: np.array([np.nan, 0.0]))
+    with _licence():
+        u, info = worker.act(x, [2.8, 0.0], H)
+    assert info.outcome == EMERGENCY and info.solver_errors == 1 and np.isfinite(u).all()
+    np.testing.assert_allclose(u, problem.emergency_input(x))
+    monkeypatch.undo()
+    with _licence():
+        _, info = worker.act(x, [2.8, 0.0], H)
+    assert info.outcome == SOLVER and info.solver_errors == 0  # no candidate was kept from the braked step
+    worker.close()
+
+
 def test_a_search_out_of_rounds_ends_as_such(monkeypatch: pytest.MonkeyPatch) -> None:
     """D47: with no round of cuts allowed, a search with free binaries ends with its rounds exhausted, before
     any mixed-integer solve."""
@@ -1046,6 +1092,14 @@ def test_the_support_points_from_rest_lie_on_the_circle_of_f7() -> None:
     assert radius == pytest.approx(0.95092, abs=1e-5)
     np.testing.assert_allclose(points - x[:2], radius * support_directions(16), atol=1e-5)
     assert support.failures == 0
+
+
+def test_a_failed_support_direction_is_a_nan_row_whatever_the_solve_raised(monkeypatch: pytest.MonkeyPatch) -> None:
+    _, _, problem = _setup("tunnel")
+    support = ReachSupport(problem, H, support_directions(4))
+    monkeypatch.setattr(support, "prob", _Raising())
+    points = support(np.array([5.0, 0.0, 0.0, 0.0]))
+    assert points.shape == (4, 2) and np.isnan(points).all() and support.failures == 4
 
 
 def test_the_forward_support_point_at_full_speed_is_a_segment_at_full_speed() -> None:

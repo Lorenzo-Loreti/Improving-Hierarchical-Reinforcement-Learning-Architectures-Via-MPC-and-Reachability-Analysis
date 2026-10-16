@@ -3,6 +3,7 @@ D43, D50)."""
 
 from __future__ import annotations
 
+import copy
 import math
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from hrlmpc.analysis import (
     first_accepted,
     group_runs,
     has_oracle,
+    inventory,
     load_run,
     main,
     mean_curve,
@@ -33,8 +35,10 @@ from hrlmpc.analysis import (
     time_to_solve,
     uses_oracle,
 )
+from hrlmpc.config import env_config_to_dict, load_env_config
 from hrlmpc.utils.runlog import RunLogger, SampleCounter
 
+CONFIG_DIR = Path(__file__).resolve().parents[1] / "configs" / "env"
 TUNNEL: dict[str, Any] = {"geometry": {"obstacles": []}}
 SLALOM: dict[str, Any] = {"geometry": {"obstacles": [{"x": [4.0, 5.0], "y": [-2.0, 0.25]}]}}
 
@@ -68,9 +72,12 @@ def _make_run(
     env: dict[str, Any] | None = None,
     name: str | None = None,
     agent: tuple[str, dict[str, Any]] | None = None,
+    budget: int | None = None,
 ) -> Path:
     run_dir = directory / (name or f"seed{seed}")
     config = {"algorithm": "ppo", "seed": seed, "env_file": "configs/env/tunnel.yaml", "env": env or TUNNEL}
+    if budget is not None:
+        config["budget"] = budget
     if agent is not None:
         config["agent_file"] = agent[0]
         config["agent"] = agent[1]
@@ -147,6 +154,47 @@ def test_runs_are_grouped_by_their_configuration(tmp_path: Path) -> None:
     _make_run(tmp_path / "again", 1, record)
     with pytest.raises(ValueError, match="seed twice"):
         group_runs(find_runs([tmp_path]))
+
+
+def test_a_run_written_before_an_optional_key_existed_shares_the_group(tmp_path: Path) -> None:
+    """A recorded configuration that lacks an optional key of today's schema (the bands' height of D69, say)
+    fingerprints as one that records its default: the groups follow the configuration, not the schema's age."""
+    env = env_config_to_dict(load_env_config(CONFIG_DIR / "slalom_sparse.yaml"))
+    record = [_eval(1.0, 0.01, 0.0, 900.0)]
+    _make_run(tmp_path, 1, record, env=env)
+    older = copy.deepcopy(env)
+    del older["task"]["curriculum"]["y"]  # the key did not exist when the run was written
+    _make_run(tmp_path, 2, record, env=older)
+    groups = group_runs(find_runs([tmp_path]))
+    assert list(groups) == ["ppo tunnel"] and len(groups["ppo tunnel"]) == 2
+    other = copy.deepcopy(env)
+    other["task"]["curriculum"]["y"] = [-2.0, 2.0]  # a different configuration still tells
+    _make_run(tmp_path / "other", 1, record, env=other)
+    assert len(group_runs(find_runs([tmp_path]))) == 2
+
+
+def test_an_incomplete_run_is_flagged_and_its_auc_counts_the_area_it_reached(tmp_path: Path) -> None:
+    """A run killed before its budget (a restart of the machine, say) keeps its records: the summary says so, and
+    its AUC is the area over the budget, not over the shorter range it reached; a run without a recorded budget
+    is taken as complete, with the AUC over its last evaluation (older runs)."""
+    curve = [_eval(0.0, math.nan, 0.0, -200.0), _eval(0.5, 0.1, 0.0, 400.0), _eval(1.0, 0.02, 0.0, 905.0)]
+    full = load_run(_make_run(tmp_path / "full", 1, curve, budget=20480))
+    cut = load_run(_make_run(tmp_path / "cut", 1, curve, budget=40960))
+    old = load_run(_make_run(tmp_path / "old", 1, curve))
+    assert full.complete and old.complete and not cut.complete
+    assert full.budget == 20480 and old.budget is None
+    assert success_auc(full) == pytest.approx(0.5) and success_auc(old) == pytest.approx(0.5)
+    assert success_auc(cut) == pytest.approx(0.25)  # the same area over twice the samples
+    text = summarize(find_runs([tmp_path / "cut"]))
+    assert "INCOMPLETE: seed1 stopped at 20480 of 40960 samples" in text
+    assert "INCOMPLETE" not in summarize(find_runs([tmp_path / "full"]))
+    listing = inventory(find_runs([tmp_path / "cut", tmp_path / "full"]))
+    assert listing.count("\n") == 1 and "2 runs" not in listing  # two groups (the budgets differ), one run each
+    assert "INCOMPLETE: seed1 (20480 of 40960)" in listing
+    _make_run(tmp_path / "full", 2, curve, budget=20480)
+    listing = inventory(find_runs([tmp_path / "full"]))
+    assert "2 runs  seeds 1, 2" in listing and "INCOMPLETE" not in listing
+    assert main([str(tmp_path / "full"), "--inventory"]) == 0
 
 
 def test_the_mean_curve_has_a_confidence_band(three_runs: list[Path]) -> None:

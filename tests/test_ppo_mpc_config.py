@@ -34,9 +34,13 @@ def test_the_shipped_configuration_is_the_decided_one() -> None:
     config = load_ppo_mpc_config(SHIPPED)
     hppo = load_hppo_config(REPO / "configs" / "agent" / "hppo.yaml")
     # the Manager, the hierarchy, the rollout and the evaluation are hPPO's (D34); since the tuning of D65 each
-    # architecture carries its own selection, so the Manager is compared with hPPO's pre-tuning one (c1)
+    # architecture carries its own selection: the Manager is hPPO's pre-tuning one (c1) with the two knobs of
+    # the MPC architectures' selection c7 (2026-10-16), the learning rate 1e-3 and the entropy coefficient 0.03
     pre_tuning = load_hppo_config(REPO / "configs" / "agent" / "tuning" / "hppo" / "c1.yaml")
-    assert config.manager == pre_tuning.manager
+    assert config.manager == dataclasses.replace(
+        pre_tuning.manager,
+        update=dataclasses.replace(pre_tuning.manager.update, learning_rate=1.0e-3, entropy_coef=0.03),
+    )
     assert config.hierarchy == hppo.hierarchy
     assert config.rollout == hppo.rollout
     assert config.evaluation == hppo.evaluation
