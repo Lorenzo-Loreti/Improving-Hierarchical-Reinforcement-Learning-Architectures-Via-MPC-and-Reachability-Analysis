@@ -340,6 +340,16 @@ def test_the_exploration_setting_of_the_trap_is_the_trap_without_the_curriculum(
     assert plain == dataclasses.replace(main, task=dataclasses.replace(main.task, curriculum=None))
 
 
+def test_the_dense_setting_of_the_trap_is_the_trap_exploration_file_with_the_progress_term() -> None:
+    """D71: `trap.yaml`, the dense (shaped) setting of the trap restored on 2026-10-20, is `trap_sparse_nocur.yaml`
+    with the progress term of D22 added back (coefficient 10, undiscounted); nothing else differs, as for the
+    shaped files of the other layouts."""
+    plain = load_env_config(CONFIG_DIR / "trap_sparse_nocur.yaml")
+    dense = load_env_config(CONFIG_DIR / "trap.yaml")
+    assert dense.task.curriculum is None and dense.reward.shaping_discount == 1.0
+    assert dense == dataclasses.replace(plain, reward=dataclasses.replace(plain.reward, progress_coef=10.0))
+
+
 def test_the_narrow_gate_files_are_gone() -> None:
     """D61 is withdrawn: the trap layout contains the narrow gate."""
     assert not list(CONFIG_DIR.glob("slalom_narrow*"))
