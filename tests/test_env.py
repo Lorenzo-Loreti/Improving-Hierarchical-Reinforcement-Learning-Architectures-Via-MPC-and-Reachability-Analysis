@@ -315,7 +315,7 @@ def test_reset_with_given_states_is_validated() -> None:
 @pytest.mark.parametrize(
     ("name", "expected_threshold"),
     [("slalom", 48.44), ("tunnel", 48.44), ("trap", 48.44), ("slalom_sparse", 44.04), ("tunnel_sparse", 44.04),
-     ("trap_sparse", 44.04)],
+     ("trap_sparse", 44.04), ("slalom_sparse_nocur_d10", 44.04)],
 )
 def test_shipped_configs_meet_the_criterion_of_the_contact_penalty(name: str, expected_threshold: float) -> None:
     """D18, D22, D51: braking against a wall does not pay off.

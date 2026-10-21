@@ -340,6 +340,16 @@ def test_the_exploration_setting_of_the_trap_is_the_trap_without_the_curriculum(
     assert plain == dataclasses.replace(main, task=dataclasses.replace(main.task, curriculum=None))
 
 
+def test_the_exploration_setting_at_the_disturbed_level_is_the_exploration_file_with_the_radius_changed() -> None:
+    """D72: `slalom_sparse_nocur_d10.yaml` is `slalom_sparse_nocur.yaml` with d_bar = 1.0 and nothing else changed,
+    which makes it `slalom_sparse_d10.yaml` without the curriculum."""
+    plain = load_env_config(CONFIG_DIR / "slalom_sparse_nocur.yaml")
+    disturbed = load_env_config(CONFIG_DIR / "slalom_sparse_nocur_d10.yaml")
+    assert disturbed == dataclasses.replace(plain, physics=dataclasses.replace(plain.physics, d_bar=1.0))
+    main_d10 = load_env_config(CONFIG_DIR / "slalom_sparse_d10.yaml")
+    assert disturbed == dataclasses.replace(main_d10, task=dataclasses.replace(main_d10.task, curriculum=None))
+
+
 def test_the_dense_setting_of_the_trap_is_the_trap_exploration_file_with_the_progress_term() -> None:
     """D71: `trap.yaml`, the dense (shaped) setting of the trap restored on 2026-10-20, is `trap_sparse_nocur.yaml`
     with the progress term of D22 added back (coefficient 10, undiscounted); nothing else differs, as for the
