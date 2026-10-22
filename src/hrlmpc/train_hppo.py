@@ -6,8 +6,9 @@ Usage, from the repository root::
         --budget 204800 --seeds 1 2 3 4 5
 
 A PPO Manager sets a target every ``H`` steps on the common loop of
-:mod:`hrlmpc.hierarchy`; a PPO Worker, conditioned on the target, acts at
-every step. Both levels are the in-house PPO of D19. After each rollout the
+:mod:`hrlmpc.hierarchy`; a PPO Worker, conditioned on the target (and, in
+the ablation of D75, on local map features), acts at every step. Both levels
+are the in-house PPO of D19. After each rollout the
 Worker is updated on its own transitions (GAE at its discount, bootstrapping at
 every end of an episode, D25), then the Manager on the segments that ended
 (GAE at ``gamma^tau``, D27).
@@ -48,11 +49,13 @@ import yaml
 from hrlmpc.config import EnvConfig, env_config_from_dict, env_config_to_dict, load_env_config
 from hrlmpc.env import NavigationEnv
 from hrlmpc.evaluation import EVAL_ACTIONS, append_details, console_line, evaluate, evaluation_name, spawn_grid
+from hrlmpc.geometry import Layout
 from hrlmpc.hierarchy import (
     HierarchicalController,
     HierarchicalRollout,
     Hierarchy,
     LearnedWorker,
+    MapFeatures,
     collect_hierarchical_rollout,
     disk_hierarchy,
     segment_gae,
@@ -71,18 +74,21 @@ from hrlmpc.rollout import compute_gae, episode_metrics
 from hrlmpc.utils.runlog import RunLogger
 from hrlmpc.utils.seeding import seed_everything
 
-WORKER_INPUT_SIZE = 6
-"""The Worker's input: the observation and the target offset (D26)."""
-
 
 def hierarchy_of(env_config: EnvConfig, hppo_config: HPPOConfig) -> Hierarchy:
-    """Targets and segments of hPPO (D24, D27), with the Manager's discount and the Worker's price (D25, D66)."""
+    """Targets and segments of hPPO (D24, D27), with the Manager's discount, the Worker's price (D25, D66) and, if
+    configured, the Worker's local map features of the layout (D75). The Worker's input width is
+    :attr:`~hrlmpc.hierarchy.Hierarchy.worker_input_size`."""
+    features = hppo_config.hierarchy.worker_map_features
     return disk_hierarchy(
         env_config,
         segment_steps=hppo_config.hierarchy.segment_steps,
         reach_factor=hppo_config.hierarchy.target_reach_factor,
         discount=hppo_config.manager.update.discount,
         progress_coef=hppo_config.hierarchy.worker_progress_coef,
+        map_features=None if features is None else MapFeatures.rays(
+            Layout.from_config(env_config.geometry), features.rays, features.range
+        ),
     )
 
 
@@ -216,7 +222,7 @@ def _train(
     hierarchy = hierarchy_of(env_config, hppo_config)
     m_cfg, w_cfg = hppo_config.manager, hppo_config.worker
     manager = PPOAgent(env.observation_size, env.action_size, m_cfg.network, m_cfg.update, device=device)
-    worker = PPOAgent(WORKER_INPUT_SIZE, env.action_size, w_cfg.network, w_cfg.update, device=device)
+    worker = PPOAgent(hierarchy.worker_input_size, env.action_size, w_cfg.network, w_cfg.update, device=device)
     starts = spawn_grid(env_config.task.spawn, hppo_config.evaluation.grid)
     found = find_oracle(env_config, starts, oracle_dir)
     oracle = None if found is None else found[1]
@@ -315,12 +321,13 @@ def load_hierarchy(run_dir: str | Path, checkpoint: str = "final.pt") -> tuple[P
     hppo_config = hppo_config_from_dict(with_worker_price(config["agent"]))
     device = hppo_config.runtime.device
     m_cfg, w_cfg = hppo_config.manager, hppo_config.worker
+    hierarchy = hierarchy_of(env_config, hppo_config)
     manager = PPOAgent(NavigationEnv.observation_size, NavigationEnv.action_size, m_cfg.network, m_cfg.update, device)
-    worker = PPOAgent(WORKER_INPUT_SIZE, NavigationEnv.action_size, w_cfg.network, w_cfg.update, device)
+    worker = PPOAgent(hierarchy.worker_input_size, NavigationEnv.action_size, w_cfg.network, w_cfg.update, device)
     state = torch.load(path / checkpoint, map_location=manager.device, weights_only=True)
     manager.load_state_dict(state["manager"])
     worker.load_state_dict(state["worker"])
-    return manager, worker, hierarchy_of(env_config, hppo_config)
+    return manager, worker, hierarchy
 
 
 def main(argv: Sequence[str] | None = None) -> int:

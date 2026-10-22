@@ -16,7 +16,8 @@ reachable targets of architecture 4 (D38, :class:`hrlmpc.reachability.ReachableT
 enter through the same interface, :class:`TargetMap`.
 
 Workers. The Worker is interchangeable. A :class:`LearnedWorker`, the hPPO
-Worker, sees the observation and the target offset ``(g - p) / R`` (D26) and
+Worker, sees the observation and the target offset ``(g - p) / R`` (D26) and,
+in the ablation of D75, the local map features of :class:`MapFeatures`, and
 returns actions in the square, mapped onto ``U`` by the environment (D15). A
 :class:`CommandWorker`, the MPC Worker, returns commanded accelerations; it
 also gets the steps left in each segment, since it plans to pass the target
@@ -50,6 +51,7 @@ from numpy.typing import ArrayLike, NDArray
 from hrlmpc.action_map import square_to_disk
 from hrlmpc.config import EnvConfig
 from hrlmpc.env import ACTION_TOL, EpisodeStats, NavigationEnv, ObservationMap, StepInfo
+from hrlmpc.geometry import Layout, ray_distances
 from hrlmpc.model import PhysicsParams
 from hrlmpc.rollout import PolicyFn, Rollout, ValueFn, compute_gae
 
@@ -148,6 +150,52 @@ def worker_inputs(obs: ArrayLike, positions: ArrayLike, targets: ArrayLike, radi
     return result
 
 
+BASE_WORKER_INPUT_SIZE = 6
+"""The learned Worker's input without map features: the observation and the target offset (D26)."""
+
+
+@dataclass(frozen=True, eq=False)
+class MapFeatures:
+    """Local map features of the learned Worker (D75): the distances to the first wall along ``K`` fixed
+    directions, clipped at a range and scaled by it, so that each feature lies in ``[0, 1]`` and equals 1 where
+    no wall is within range. The fair counterpart of the MPC Worker's knowledge of the map, restricted to the
+    Worker's surroundings; the Manager sees the same observation in every architecture.
+
+    Attributes:
+        layout: The layout whose walls the rays meet.
+        directions: ``(K, 2)`` unit vectors, in the frame of the plane.
+        max_range: The range [m].
+    """
+
+    layout: Layout
+    directions: FloatArray
+    max_range: float
+
+    @classmethod
+    def rays(cls, layout: Layout, count: int, max_range: float) -> MapFeatures:
+        """``count`` rays at equal angles, the first along ``+x``.
+
+        Raises:
+            ValueError: If ``count`` is not positive or the range is not positive and finite.
+        """
+        if count < 1:
+            raise ValueError(f"the number of rays must be positive, got {count}")
+        if not (math.isfinite(max_range) and max_range > 0.0):
+            raise ValueError(f"the range must be positive and finite, got {max_range}")
+        angles = 2.0 * np.pi * np.arange(count) / count
+        return cls(layout, np.stack([np.cos(angles), np.sin(angles)], axis=1), float(max_range))
+
+    @property
+    def size(self) -> int:
+        """``K``, the number of features."""
+        return len(self.directions)
+
+    def __call__(self, positions: ArrayLike) -> FloatArray:
+        """``(B, K)`` features at ``(B, 2)`` free positions."""
+        result: FloatArray = ray_distances(self.layout, positions, self.directions, self.max_range) / self.max_range
+        return result
+
+
 @dataclass(frozen=True, eq=False)
 class WorkerReward:
     """The Worker's reward of D25, by term.
@@ -207,11 +255,11 @@ def worker_reward(
 
 @dataclass(frozen=True)
 class LearnedWorker:
-    """A learned Worker (hPPO): a policy and a value function over the inputs of :func:`worker_inputs`.
+    """A learned Worker (hPPO): a policy and a value function over the inputs of :meth:`Hierarchy.worker_inputs`.
 
     Attributes:
-        policy: ``(B, 6)`` inputs to ``(B, 2)`` actions in the square and their log-probabilities.
-        value: ``(k, 6)`` inputs to ``(k,)`` value estimates.
+        policy: ``(B, 6 + K)`` inputs to ``(B, 2)`` actions in the square and their log-probabilities.
+        value: ``(k, 6 + K)`` inputs to ``(k,)`` value estimates.
     """
 
     policy: PolicyFn
@@ -252,6 +300,7 @@ class Hierarchy:
         obs_map: Positions and velocities of the observations.
         progress_coef: ``c_p`` of the Worker's reward (D25, D66), the price of
             the decrease of the distance to the target.
+        map_features: The local map features appended to the learned Worker's input (D75), or ``None``.
 
     Raises:
         ValueError: If ``segment_steps`` or ``progress_coef`` is not positive or ``discount`` lies outside
@@ -263,6 +312,7 @@ class Hierarchy:
     discount: float
     obs_map: ObservationMap
     progress_coef: float
+    map_features: MapFeatures | None = None
 
     def __post_init__(self) -> None:
         if self.segment_steps < 1:
@@ -272,14 +322,37 @@ class Hierarchy:
         if not (math.isfinite(self.progress_coef) and self.progress_coef > 0.0):
             raise ValueError(f"progress_coef must be positive and finite, got {self.progress_coef}")
 
+    @property
+    def worker_input_size(self) -> int:
+        """The width of the learned Worker's input: :data:`BASE_WORKER_INPUT_SIZE` plus the map features."""
+        return BASE_WORKER_INPUT_SIZE + (0 if self.map_features is None else self.map_features.size)
+
+    def worker_inputs(self, obs: ArrayLike, positions: ArrayLike, targets: ArrayLike) -> FloatArray:
+        """The learned Worker's input at ``(B, 4)`` observations, ``(B, 2)`` positions and targets: the inputs of
+        :func:`worker_inputs` with this hierarchy's radius, followed by the map features at the positions when the
+        hierarchy has them (D75)."""
+        base = worker_inputs(obs, positions, targets, self.targets.radius)
+        if self.map_features is None:
+            return base
+        result: FloatArray = np.concatenate([base, self.map_features(positions)], axis=-1)
+        return result
+
 
 def disk_hierarchy(
-    config: EnvConfig, *, segment_steps: int, reach_factor: float, discount: float, progress_coef: float
+    config: EnvConfig,
+    *,
+    segment_steps: int,
+    reach_factor: float,
+    discount: float,
+    progress_coef: float,
+    map_features: MapFeatures | None = None,
 ) -> Hierarchy:
     """The hierarchy of D24, D25 and D27: targets on the disk of radius ``reach_factor`` times the segment's
-    reach, the Worker paid ``progress_coef`` per metre of progress."""
+    reach, the Worker paid ``progress_coef`` per metre of progress, with the map features of D75 if given."""
     radius = reach_factor * segment_reach(config.physics, segment_steps)
-    return Hierarchy(DiskTargets(radius), segment_steps, discount, ObservationMap.from_config(config), progress_coef)
+    return Hierarchy(
+        DiskTargets(radius), segment_steps, discount, ObservationMap.from_config(config), progress_coef, map_features
+    )
 
 
 @dataclass(frozen=True, eq=False)
@@ -514,7 +587,6 @@ def collect_hierarchical_rollout(
     if state.obs.shape != (batch, 4):
         raise ValueError(f"the state holds {len(state.obs)} agents, the environment {batch}")
     obs_map, horizon, gamma = hierarchy.obs_map, hierarchy.segment_steps, hierarchy.discount
-    radius = hierarchy.targets.radius
     learned = isinstance(worker, LearnedWorker)
 
     obs, targets = state.obs.copy(), state.targets.copy()
@@ -533,7 +605,7 @@ def collect_hierarchical_rollout(
     }
     terms = {name: np.zeros(shape) for name in ("progress", "contact", "effort")}
     w = {
-        "obs": np.zeros((*shape, 6)),
+        "obs": np.zeros((*shape, hierarchy.worker_input_size)),
         "actions": np.zeros((*shape, 2)),
         "log_probs": np.zeros(shape),
         "values": np.zeros(shape),
@@ -543,12 +615,12 @@ def collect_hierarchical_rollout(
     episodes: list[EpisodeStats] = []
 
     if isinstance(worker, LearnedWorker):
-        start = worker_inputs(obs, obs_map.positions(obs), targets, radius)
+        start = hierarchy.worker_inputs(obs, obs_map.positions(obs), targets)
         current_values = _checked(worker.value(start), (batch,), "Worker's values")
     for t in range(num_steps):
         p = obs_map.positions(obs)
         if isinstance(worker, LearnedWorker):
-            inputs = worker_inputs(obs, p, targets, radius)
+            inputs = hierarchy.worker_inputs(obs, p, targets)
             actions_raw, log_probs_raw = worker.policy(inputs)
             actions = _checked(actions_raw, (batch, 2), "Worker's actions")
             log_probs = _checked(log_probs_raw, (batch,), "Worker's log-probabilities")
@@ -598,11 +670,11 @@ def collect_hierarchical_rollout(
             env.counter.add_manager_decisions(len(ending))
 
         if isinstance(worker, LearnedWorker):
-            upcoming_inputs = worker_inputs(out.obs, obs_map.positions(out.obs), new_targets, radius)
+            upcoming_inputs = hierarchy.worker_inputs(out.obs, obs_map.positions(out.obs), new_targets)
             upcoming = _checked(worker.value(upcoming_inputs), (batch,), "Worker's values")
             next_w = upcoming.copy()
             if done.any():  # D25: the Worker bootstraps under the target it had
-                final_inputs = worker_inputs(out.final_obs[done], reached[done], targets[done], radius)
+                final_inputs = hierarchy.worker_inputs(out.final_obs[done], reached[done], targets[done])
                 next_w[done] = _checked(worker.value(final_inputs), (int(done.sum()),), "Worker's values")
             w["obs"][t], w["actions"][t], w["log_probs"][t] = inputs, actions, log_probs
             w["values"][t], w["next_values"][t] = current_values, next_w
@@ -682,7 +754,7 @@ class HierarchicalController:
     Args:
         hierarchy: Targets and segments, as in training.
         manager: ``(B, 4)`` observations to ``(B, 2)`` actions in the square.
-        worker: For a learned Worker, ``(B, 6)`` inputs of :func:`worker_inputs`
+        worker: For a learned Worker, ``(B, 6 + K)`` inputs of :meth:`Hierarchy.worker_inputs`
             to ``(B, 2)`` actions in the square; or a :class:`CommandWorker`,
             whose accelerations call for ``evaluate(..., inputs=True)``.
     """
@@ -707,6 +779,12 @@ class HierarchicalController:
         self._agents = 0
         self._calls = 0
         self._targets = np.zeros((0, 2))
+
+    @property
+    def targets(self) -> FloatArray:
+        """``(B, 2)`` targets of the current segments (a copy): empty before the first call and after a reset,
+        those of the last decision otherwise; recorded step by step by :mod:`hrlmpc.trajectories`."""
+        return self._targets.copy()
 
     def reset(self, num_agents: int) -> None:
         """Start new episodes for ``num_agents`` agents: the next call re-plans, and a :class:`CommandWorker` resets."""
@@ -736,5 +814,5 @@ class HierarchicalController:
             left = np.full(len(o), h.segment_steps - step, dtype=np.int64)
             commanded = self.worker.command(o, p, self._targets, left)
             return _checked(commanded, (len(o), 2), "Worker's accelerations")
-        inputs = worker_inputs(o, p, self._targets, h.targets.radius)
+        inputs = h.worker_inputs(o, p, self._targets)
         return _checked(self.worker(inputs), (len(o), 2), "Worker's actions")

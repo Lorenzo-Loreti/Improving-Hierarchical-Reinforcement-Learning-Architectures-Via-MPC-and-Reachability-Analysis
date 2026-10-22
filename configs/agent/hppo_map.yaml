@@ -1,0 +1,63 @@
+# hPPO with a Worker that sees local map features (decision log D75, the
+# ablation of 2026-10-22): configs/agent/hppo.yaml with
+# hierarchy.worker_map_features set (a test checks that nothing else differs).
+# The Worker's input gains 16 ray distances to the first wall, at equal angles
+# from +x, clipped at 2 m and scaled to [0, 1]: the local counterpart of the
+# MPC Worker's knowledge of the map. The Manager is unchanged; nothing is
+# re-tuned (the configuration of D65, c3).
+# Write floats with a dot and a signed exponent (3.0e-4, 1.0e+5): YAML 1.1 reads 3e-4 and 1.0e5 as strings.
+
+hierarchy:                     # D24, D25, D27, D66
+  segment_steps: 10            # H: one Manager decision per segment of 1 s
+  target_reach_factor: 1.5     # targets within R = 1.5 v_max H dt = 1.8 m of the position
+  worker_progress_coef: 10.0   # c_p of the Worker's reward (D25, D66): the shaped reward's price (D13)
+  worker_map_features:         # D75: the Worker's local map features; absent in hppo.yaml
+    rays: 16                   # directions at equal angles, the first along +x
+    range: 2.0                 # distances clipped at this range [m] and divided by it; R = 1.8 m lies within it
+
+rollout:
+  num_envs: 8                  # parallel agents of NavigationEnv
+  num_steps: 256               # steps per agent and update: 2 048 samples per update
+
+manager:
+  network:
+    hidden_sizes: [64, 64]     # separate tanh MLPs for the actor and the critic
+  update:
+    discount: 0.99             # gamma_RL per step; gamma_RL^tau between decisions (D27)
+    epochs: 10
+    minibatches: 4             # about 51 segments per minibatch
+    learning_rate: 3.0e-4      # actor
+    anneal_learning_rate: false
+    critic_lr_mult: 3.0        # critic learning rate = 3 x learning_rate
+    adam_eps: 1.0e-5
+    gae_lambda: 0.95           # per decision
+    clip_coef: 0.2
+    entropy_coef: 0.03        # D65: c3; 0.01 before the tuning
+    max_grad_norm: 0.5         # per network
+    value_norm_horizon: 10     # updates in the running statistics of the critic's targets
+
+worker:
+  network:
+    hidden_sizes: [64, 64]
+  update:
+    discount: 0.99             # gamma per step; the Worker bootstraps at every end of an episode (D25)
+    epochs: 10
+    minibatches: 8             # 256 samples per minibatch
+    learning_rate: 3.0e-4
+    anneal_learning_rate: false
+    critic_lr_mult: 3.0
+    adam_eps: 1.0e-5
+    gae_lambda: 0.95
+    clip_coef: 0.2
+    entropy_coef: 0.01
+    max_grad_norm: 0.5
+    value_norm_horizon: 10
+
+evaluation:                    # decision log D20, D29
+  every: 10240                 # samples between evaluations (5 updates); the first is at 0
+  grid: [5, 5]                 # starts on the spawn box, at rest
+  seed: 12345                  # evaluation environment: the same for every run, distinct from the training seeds
+
+runtime:
+  device: cpu
+  torch_threads: 1

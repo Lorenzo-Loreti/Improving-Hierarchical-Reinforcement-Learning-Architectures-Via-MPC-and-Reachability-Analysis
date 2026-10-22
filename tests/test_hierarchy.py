@@ -16,6 +16,7 @@ from hrlmpc.action_map import square_to_disk
 from hrlmpc.config import EnvConfig, env_config_from_dict
 from hrlmpc.env import NavigationEnv, ObservationMap
 from hrlmpc.evaluation import evaluate
+from hrlmpc.geometry import Layout, ray_distances
 from hrlmpc.hierarchy import (
     CommandWorker,
     DiskTargets,
@@ -24,6 +25,7 @@ from hrlmpc.hierarchy import (
     Hierarchy,
     HierarchyState,
     LearnedWorker,
+    MapFeatures,
     collect_hierarchical_rollout,
     disk_hierarchy,
     segment_gae,
@@ -712,6 +714,27 @@ def test_the_controller_records_how_far_each_segment_ends_from_its_target() -> N
     assert controller.segment_ends == []
 
 
+def test_the_controller_exposes_the_targets_of_the_current_segments() -> None:
+    """The targets in force, ``(B, 2)``, for the replays of :mod:`hrlmpc.trajectories`: empty before the first call
+    and after a reset, those of the last decision otherwise (a copy)."""
+    config = _config()
+    obs_map = ObservationMap.from_config(config)
+    hierarchy = _hierarchy(config, segment_steps=3)
+    controller = HierarchicalController(hierarchy, lambda o: _manager_policy(o)[0], lambda w: _worker_policy(w)[0])
+    assert controller.targets.shape == (0, 2)
+    positions = np.array([[1.0, 0.0], [2.0, 0.5]])
+    obs = obs_map.observe(positions, np.zeros((2, 2)))
+    controller(obs)
+    expected = hierarchy.targets(_manager_policy(obs)[0], positions, np.zeros((2, 2)))
+    np.testing.assert_allclose(controller.targets, expected)
+    seen = controller.targets
+    seen[:] = 0.0  # a copy: the controller's targets are untouched
+    controller(obs_map.observe(positions + 0.1, np.zeros((2, 2))))  # the second call of the segment keeps them
+    np.testing.assert_allclose(controller.targets, expected)
+    controller.reset(2)
+    assert controller.targets.shape == (0, 2)
+
+
 def test_the_controller_with_a_command_worker() -> None:
     config = _config()
     obs_map = ObservationMap.from_config(config)
@@ -735,3 +758,84 @@ def test_the_controller_with_a_command_worker() -> None:
     np.testing.assert_array_equal(evaluation[:, 0], H - np.arange(len(evaluation)) % H)
     for b in range(3):  # within the first episode the steps left are those of training
         np.testing.assert_array_equal(evaluation[: first[b].length, b], training[: first[b].length, b])
+
+
+# --------------------------------------------------------------------------
+# The Worker's local map features (D75)
+# --------------------------------------------------------------------------
+
+
+def _map_hierarchy(config: EnvConfig, rays: int = 4, max_range: float = 2.0) -> Hierarchy:
+    layout = Layout.from_config(config.geometry)
+    return disk_hierarchy(config, segment_steps=H, reach_factor=1.5, discount=GAMMA, progress_coef=C_P,
+                          map_features=MapFeatures.rays(layout, rays, max_range))
+
+
+def test_map_features_are_the_scaled_ray_distances() -> None:
+    """D75: ``K`` rays at equal angles from ``+x``; each feature is the distance to the first wall along its ray,
+    clipped at the range and divided by it: 1 where nothing is within range, 0 against a wall."""
+    config = _config("slalom")  # arena [-1, 11] x [-2, 2]; gate 1 blocks [4, 5] x [-2, 0.25] and [4, 5] x [1.75, 2]
+    layout = Layout.from_config(config.geometry)
+    features = MapFeatures.rays(layout, 4, 2.0)
+    assert features.size == 4 and features.max_range == 2.0
+    np.testing.assert_allclose(features.directions, [[1, 0], [0, 1], [-1, 0], [0, -1]], atol=1e-15)
+    values = features([[2.0, 0.0], [4.5, 1.0], [-1.0, 0.0]])
+    assert values.shape == (3, 4)
+    np.testing.assert_allclose(values[0], [1.0, 1.0, 1.0, 1.0])  # the block 2 m east is at the range, walls 2 m away
+    np.testing.assert_allclose(values[1], [1.0, 0.375, 1.0, 0.375])  # inside the gate: the blocks 0.75 m up and down
+    np.testing.assert_allclose(values[2], [1.0, 1.0, 0.0, 1.0])  # against the west wall
+    np.testing.assert_array_equal(ray_distances(layout, [[4.5, 1.0]], features.directions, 2.0), 2.0 * values[1:2])
+    with pytest.raises(ValueError, match="rays"):
+        MapFeatures.rays(layout, 0, 2.0)
+    with pytest.raises(ValueError, match="range"):
+        MapFeatures.rays(layout, 4, 0.0)
+
+
+def test_the_hierarchy_appends_the_map_features_to_the_workers_input() -> None:
+    """Without features the hierarchy's inputs are those of :func:`worker_inputs`, width 6; with ``K`` features
+    the width is ``6 + K`` and the last ``K`` entries are the features at the positions."""
+    config = _config("slalom")
+    plain, mapped = _hierarchy(config), _map_hierarchy(config)
+    assert plain.map_features is None and plain.worker_input_size == 6 and mapped.worker_input_size == 10
+    obs = np.array([[0.1, -0.2, 0.3, -0.4], [0.0, 0.5, -1.0, 1.0]])
+    p, g = np.array([[2.0, 0.0], [4.5, 1.0]]), np.array([[3.8, 0.0], [4.1, 1.9]])
+    np.testing.assert_array_equal(plain.worker_inputs(obs, p, g), worker_inputs(obs, p, g, plain.targets.radius))
+    inputs = mapped.worker_inputs(obs, p, g)
+    assert inputs.shape == (2, 10)
+    np.testing.assert_array_equal(inputs[:, :6], worker_inputs(obs, p, g, mapped.targets.radius))
+    assert mapped.map_features is not None
+    np.testing.assert_array_equal(inputs[:, 6:], mapped.map_features(p))
+
+
+def test_the_rollout_and_the_controller_feed_the_map_features_to_the_worker() -> None:
+    """The learned Worker's transitions and the evaluation's controller carry the ``6 + K`` inputs, with the
+    features of the positions the Worker acted at; the Manager's inputs stay the observations."""
+    config = _config("slalom")
+    hierarchy = _map_hierarchy(config)
+    seen: list[np.ndarray] = []
+
+    def policy(inputs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        seen.append(np.asarray(inputs).copy())
+        assert inputs.shape[1] == 10
+        x = np.clip(2.0 * inputs[:, 4:6] - 0.3 * inputs[:, 2:4], -1.0, 1.0)
+        return x, -np.sum(x**2, axis=1)
+
+    def value(inputs: np.ndarray) -> np.ndarray:
+        return np.asarray(inputs)[:, :6] @ W_WEIGHTS + np.asarray(inputs)[:, 6:].sum(axis=1)
+
+    worker = LearnedWorker(policy=policy, value=value)
+    env = NavigationEnv(config, 3, seed=0)
+    state = start_segments(env, hierarchy, _manager_policy, _manager_value, positions=STARTS)
+    rollout, after = collect_hierarchical_rollout(env, state, 25, hierarchy, _manager_policy, _manager_value, worker)
+    assert rollout.worker is not None and rollout.worker.obs.shape == (25, 3, 10)
+    assert rollout.segments.obs.shape[1] == 4 and state.obs.shape == (3, 4)
+    assert hierarchy.map_features is not None
+    for t in range(25):
+        positions = hierarchy.obs_map.positions(rollout.obs[t])
+        np.testing.assert_allclose(rollout.worker.obs[t, :, 6:], hierarchy.map_features(positions))
+        np.testing.assert_allclose(rollout.worker.obs[t], seen[t])
+    assert np.any(rollout.worker.obs[:, :, 6:] < 1.0)  # some wall came within range
+    seen.clear()
+    controller = HierarchicalController(hierarchy, lambda o: _manager_policy(o)[0], lambda w: policy(w)[0])
+    result = evaluate(controller, config, STARTS, seed=99)
+    assert len(result.episodes) == 3 and seen and all(inputs.shape == (3, 10) for inputs in seen)

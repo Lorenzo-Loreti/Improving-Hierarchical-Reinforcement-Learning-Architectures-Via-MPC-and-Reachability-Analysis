@@ -340,6 +340,28 @@ def test_the_exploration_setting_of_the_trap_is_the_trap_without_the_curriculum(
     assert plain == dataclasses.replace(main, task=dataclasses.replace(main.task, curriculum=None))
 
 
+@pytest.mark.parametrize(
+    ("base", "disturbed"),
+    [("slalom_sparse_nocur", "slalom_sparse_nocur_d10"), ("trap_sparse", "trap_sparse_d10"),
+     ("trap_sparse_nocur", "trap_sparse_nocur_d10"), ("trap", "trap_d10"),
+     ("tunnel_sparse_nocur", "tunnel_sparse_nocur_d10"), ("slalom", "slalom_d10"), ("tunnel", "tunnel_d10")],
+)
+def test_the_disturbed_files_of_d72_and_d73_change_the_radius_of_the_disturbance_set_only(base: str, disturbed: str) -> None:
+    """D72, D73: each setting of the matrix at d_bar = 1.0 is its file at d_bar = 0 with the radius of the
+    disturbance set changed and nothing else (the dense files of the slalom and the tunnel predate D73)."""
+    plain = load_env_config(CONFIG_DIR / f"{base}.yaml")
+    cfg = load_env_config(CONFIG_DIR / f"{disturbed}.yaml")
+    assert plain.physics.d_bar == 0.0
+    assert cfg == dataclasses.replace(plain, physics=dataclasses.replace(plain.physics, d_bar=1.0))
+
+
+def test_the_disturbed_exploration_file_of_the_slalom_is_the_disturbed_main_file_without_the_curriculum() -> None:
+    """D72: `slalom_sparse_nocur_d10.yaml` equals `slalom_sparse_d10.yaml` without the curriculum."""
+    disturbed = load_env_config(CONFIG_DIR / "slalom_sparse_nocur_d10.yaml")
+    main_d10 = load_env_config(CONFIG_DIR / "slalom_sparse_d10.yaml")
+    assert disturbed == dataclasses.replace(main_d10, task=dataclasses.replace(main_d10.task, curriculum=None))
+
+
 def test_the_dense_setting_of_the_trap_is_the_trap_exploration_file_with_the_progress_term() -> None:
     """D71: `trap.yaml`, the dense (shaped) setting of the trap restored on 2026-10-20, is `trap_sparse_nocur.yaml`
     with the progress term of D22 added back (coefficient 10, undiscounted); nothing else differs, as for the

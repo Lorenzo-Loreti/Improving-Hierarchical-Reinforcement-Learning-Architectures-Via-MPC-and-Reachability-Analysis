@@ -13,6 +13,7 @@ import yaml
 from hrlmpc.hppo_config import (
     SHAPED_PROGRESS_COEF,
     HPPOConfig,
+    MapFeaturesConfig,
     hppo_config_from_dict,
     hppo_config_to_dict,
     load_hppo_config,
@@ -189,3 +190,51 @@ def test_a_configuration_from_before_the_workers_price_gets_the_shaped_one() -> 
     present = _data()
     assert with_worker_price(present) is present
     assert with_worker_price("text") == "text" and with_worker_price({"rollout": {}}) == {"rollout": {}}
+
+
+# --------------------------------------------------------------------------
+# The Worker's local map features (D75)
+# --------------------------------------------------------------------------
+
+
+def test_the_map_features_are_optional_and_absent_from_the_shipped_file() -> None:
+    """D75: ``hierarchy.worker_map_features`` may be absent or null (the Worker of D26), or give the rays and the
+    range; the shipped file has none, and the loaded configuration round-trips with the key written as null."""
+    config = load_hppo_config(SHIPPED)
+    assert config.hierarchy.worker_map_features is None
+    assert "worker_map_features" not in _data()["hierarchy"]
+    assert hppo_config_to_dict(config)["hierarchy"]["worker_map_features"] is None
+    assert hppo_config_from_dict(_with(("hierarchy", "worker_map_features"), None)) == config
+    with_features = hppo_config_from_dict(_with(("hierarchy", "worker_map_features"), {"rays": 8, "range": 1.5}))
+    assert with_features.hierarchy.worker_map_features == MapFeaturesConfig(rays=8, range=1.5)
+    assert with_features != config
+    assert hppo_config_from_dict(hppo_config_to_dict(with_features)) == with_features
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ({"rays": 0, "range": 2.0}, "rays"),
+        ({"rays": 8.0, "range": 2.0}, "integer"),
+        ({"rays": True, "range": 2.0}, "integer"),
+        ({"rays": 8, "range": 0.0}, "range"),
+        ({"rays": 8, "range": "2"}, "number"),
+        ({"rays": 8}, "missing"),
+        ({"rays": 8, "range": 2.0, "extra": 1}, "unknown"),
+        (3, "mapping"),
+    ],
+)
+def test_invalid_map_features_are_rejected(value: Any, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        hppo_config_from_dict(_with(("hierarchy", "worker_map_features"), value))
+
+
+def test_the_map_file_is_the_shipped_file_with_the_workers_map_features() -> None:
+    """D75: ``hppo_map.yaml`` differs from ``hppo.yaml`` in the Worker's map features only: 16 rays, range 2 m, which
+    covers the targets' radius of 1.8 m."""
+    base, ablation = load_hppo_config(SHIPPED), load_hppo_config(SHIPPED.with_name("hppo_map.yaml"))
+    features = ablation.hierarchy.worker_map_features
+    assert features == MapFeaturesConfig(rays=16, range=2.0)
+    hierarchy = dataclasses.replace(base.hierarchy, worker_map_features=features)
+    assert ablation == dataclasses.replace(base, hierarchy=hierarchy)
+    assert features.range >= base.hierarchy.target_reach_factor * 1.2 * base.hierarchy.segment_steps * 0.1  # R = 1.8 m

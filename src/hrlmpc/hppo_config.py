@@ -1,8 +1,9 @@
 """Typed configuration of hPPO, loaded from YAML (code rule C2, decision log D24, D27, D28).
 
 ``configs/agent/hppo.yaml`` holds the hierarchy (segment length ``H``, the
-targets' radius as a multiple of a segment's reach and the price of the
-Worker's progress, D66), the rollout, one network
+targets' radius as a multiple of a segment's reach, the price of the
+Worker's progress, D66, and optionally the Worker's local map features,
+D75), the rollout, one network
 and one PPO update for each level, the evaluation protocol and the runtime. The
 sections shared with flat PPO are validated by :mod:`hrlmpc.ppo_config`. Each
 level has its own discount: the Worker's per step, the Manager's per step
@@ -31,8 +32,27 @@ from hrlmpc.utils.strict_yaml import load_yaml
 
 
 @dataclass(frozen=True)
+class MapFeaturesConfig:
+    """The learned Worker's local map features (D75): ``rays`` distances to the first wall along as many fixed
+    directions, clipped at ``range`` metres and scaled by it (:class:`hrlmpc.hierarchy.MapFeatures`).
+
+    Raises:
+        ValueError: If ``rays`` is not positive or ``range`` is not positive and finite.
+    """
+
+    rays: int
+    range: float
+
+    def __post_init__(self) -> None:
+        if self.rays < 1:
+            raise ValueError(f"rays must be positive, got {self.rays}")
+        if not (math.isfinite(self.range) and self.range > 0.0):
+            raise ValueError(f"range must be positive and finite, got {self.range}")
+
+
+@dataclass(frozen=True)
 class HierarchyConfig:
-    """Segments, targets and the Worker's price (D24, D25, D27, D66).
+    """Segments, targets, the Worker's price and the Worker's map features (D24, D25, D27, D66, D75).
 
     Attributes:
         segment_steps: ``H``, the steps of a full segment.
@@ -44,11 +64,15 @@ class HierarchyConfig:
             sparse reward of D51 has no progress term (``progress_coef`` 0),
             and the Worker keeps its dense reward (D66). The shipped value is
             the shaped reward's, 10.
+        worker_map_features: The local map features appended to the Worker's
+            input (D75), or ``None`` for the Worker of D26, which knows no
+            walls; absent from the file means ``None``.
     """
 
     segment_steps: int
     target_reach_factor: float
     worker_progress_coef: float
+    worker_map_features: MapFeaturesConfig | None = None
 
     def __post_init__(self) -> None:
         if self.segment_steps < 1:
@@ -129,10 +153,27 @@ SHAPED_PROGRESS_COEF = 10.0
 
 _TOP = ("hierarchy", "rollout", "manager", "worker", "evaluation", "runtime")
 _LEVEL = ("network", "update")
-_HIERARCHY = ("segment_steps", "target_reach_factor", "worker_progress_coef")
+_HIERARCHY = ("segment_steps", "target_reach_factor", "worker_progress_coef", "worker_map_features")
+_OPTIONAL_HIERARCHY = ("worker_map_features",)
+_MAP_FEATURES = ("rays", "range")
+
+
+def _map_features(data: Any) -> MapFeaturesConfig | None:
+    if data is None:
+        return None
+    raw = check_keys(data, _MAP_FEATURES, "hierarchy.worker_map_features")
+    rays = raw["rays"]
+    if isinstance(rays, bool) or not isinstance(rays, int):
+        raise ValueError(f"hierarchy.worker_map_features.rays must be an integer, got {rays!r}")
+    span = raw["range"]
+    if isinstance(span, bool) or not isinstance(span, (int, float)) or not math.isfinite(span):
+        raise ValueError(f"hierarchy.worker_map_features.range must be a finite number, got {span!r}")
+    return MapFeaturesConfig(rays=rays, range=float(span))
 
 
 def _hierarchy(data: Any) -> HierarchyConfig:
+    if isinstance(data, Mapping):
+        data = {**{key: None for key in _OPTIONAL_HIERARCHY}, **data}  # an absent optional key reads as None
     raw = check_keys(data, _HIERARCHY, "hierarchy")
     steps = raw["segment_steps"]
     if isinstance(steps, bool) or not isinstance(steps, int):
@@ -147,6 +188,7 @@ def _hierarchy(data: Any) -> HierarchyConfig:
         segment_steps=steps,
         target_reach_factor=float(raw["target_reach_factor"]),
         worker_progress_coef=float(raw["worker_progress_coef"]),
+        worker_map_features=_map_features(raw["worker_map_features"]),
     )
 
 
