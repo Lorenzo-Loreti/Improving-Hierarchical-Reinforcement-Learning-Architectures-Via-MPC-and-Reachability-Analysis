@@ -203,6 +203,11 @@ def test_a_run_is_classified_from_its_configuration() -> None:
                     ).variant == "map"
     assert classify(_fake_run("ppo", "configs/env/tunnel.yaml", None, _env("tunnel"))) == Cell(
         "tunnel", "dense", 0.0, "", "ppo")
+    doubled = _fake_run("ppo_mpc", "configs/env/trap_sparse.yaml", "configs/agent/ppo_mpc.yaml", _env("trap_sparse"))
+    doubled.config["budget"] = 2 * BUDGET  # D79: a budget other than the matrix's is a variant of its own
+    assert classify(doubled) == Cell("trap", "main", 0.0, "b2", "ppo_mpc")
+    doubled.config["agent_file"] = "configs/agent/ppo_mpc_h6.yaml"
+    assert classify(doubled).variant == "h6_b2"
     cell = Cell("slalom", "main", 0.5, "", "ppo")
     assert cell.key == "slalom/main/d0.5/base/ppo" and not cell.base
     assert Cell("slalom", "main", 0.0, "", "ppo").base and not Cell("slalom", "main", 0.0, "h6", "ppo").base
@@ -254,6 +259,11 @@ def test_fisher_and_log_rank() -> None:
     assert p is not None and p < 0.01
     assert logrank(early, late) == logrank(late, early)
     assert logrank(early, early) == pytest.approx(1.0)
+    # a group censored at twice the budget: its unsolved seeds are censored later, the solved ones compared as before
+    doubled = [102400, 300000, None, None, None]
+    assert logrank(early, doubled, BUDGET, 2 * BUDGET) is not None
+    with pytest.raises(ValueError, match="budget"):
+        logrank(early, doubled)  # a time beyond the budget without saying so
 
 
 def test_confidence_intervals_skip_missing_values() -> None:

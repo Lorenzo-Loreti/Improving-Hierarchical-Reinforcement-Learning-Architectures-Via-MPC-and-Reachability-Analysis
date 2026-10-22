@@ -346,7 +346,9 @@ def test_the_exploration_setting_of_the_trap_is_the_trap_without_the_curriculum(
      ("trap_sparse_nocur", "trap_sparse_nocur_d10"), ("trap", "trap_d10"),
      ("tunnel_sparse_nocur", "tunnel_sparse_nocur_d10"), ("slalom", "slalom_d10"), ("tunnel", "tunnel_d10")],
 )
-def test_the_disturbed_files_of_d72_and_d73_change_the_radius_of_the_disturbance_set_only(base: str, disturbed: str) -> None:
+def test_the_disturbed_files_of_d72_and_d73_change_the_radius_of_the_disturbance_set_only(
+    base: str, disturbed: str
+) -> None:
     """D72, D73: each setting of the matrix at d_bar = 1.0 is its file at d_bar = 0 with the radius of the
     disturbance set changed and nothing else (the dense files of the slalom and the tunnel predate D73)."""
     plain = load_env_config(CONFIG_DIR / f"{base}.yaml")
@@ -355,11 +357,14 @@ def test_the_disturbed_files_of_d72_and_d73_change_the_radius_of_the_disturbance
     assert cfg == dataclasses.replace(plain, physics=dataclasses.replace(plain.physics, d_bar=1.0))
 
 
-def test_the_disturbed_exploration_file_of_the_slalom_is_the_disturbed_main_file_without_the_curriculum() -> None:
-    """D72: `slalom_sparse_nocur_d10.yaml` equals `slalom_sparse_d10.yaml` without the curriculum."""
-    disturbed = load_env_config(CONFIG_DIR / "slalom_sparse_nocur_d10.yaml")
-    main_d10 = load_env_config(CONFIG_DIR / "slalom_sparse_d10.yaml")
-    assert disturbed == dataclasses.replace(main_d10, task=dataclasses.replace(main_d10.task, curriculum=None))
+@pytest.mark.parametrize("level", ["d05", "d10"])
+def test_the_disturbed_exploration_files_of_the_slalom_are_the_disturbed_main_files_without_the_curriculum(
+    level: str,
+) -> None:
+    """D72, D78: `slalom_sparse_nocur_<level>.yaml` equals `slalom_sparse_<level>.yaml` without the curriculum."""
+    disturbed = load_env_config(CONFIG_DIR / f"slalom_sparse_nocur_{level}.yaml")
+    main = load_env_config(CONFIG_DIR / f"slalom_sparse_{level}.yaml")
+    assert disturbed == dataclasses.replace(main, task=dataclasses.replace(main.task, curriculum=None))
 
 
 def test_the_dense_setting_of_the_trap_is_the_trap_exploration_file_with_the_progress_term() -> None:

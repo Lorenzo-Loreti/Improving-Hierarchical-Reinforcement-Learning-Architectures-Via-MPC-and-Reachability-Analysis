@@ -79,7 +79,7 @@ LABELS_TEX = {
 LABELS_TXT = {"ppo": "PPO", "hppo": "hPPO", "ppo_mpc": "PPO_MPC", "ppo_mpc_reachability": "PPO_MPC_reach"}
 """The architectures' names in plain text (the report)."""
 
-VARIANT_LABELS = {"": "", "map": " (map)", "h6": " ($H = 6$)", "h4": " ($H = 4$)"}
+VARIANT_LABELS = {"": "", "map": " (map)", "h6": " ($H = 6$)", "h4": " ($H = 4$)", "b2": " (twice the budget)"}
 
 COLORS = {"ppo": "#2a78d6", "hppo": "#c98500", "ppo_mpc": "#008300", "ppo_mpc_reachability": "#e34948"}
 """One colour per architecture: blue, amber, green, red (validated for colour-vision deficiencies)."""
@@ -169,6 +169,9 @@ def classify(run: Run) -> Cell:
     agent_file = config.get("agent_file")
     stem = PureWindowsPath(str(agent_file)).stem if agent_file else algorithm
     variant = stem[len(algorithm) + 1 :] if stem.startswith(algorithm + "_") else ""
+    budget = run.budget
+    if budget is not None and budget != BUDGET:  # a budget other than the matrix's is a variant of its own (D79)
+        variant = (variant + "_" if variant else "") + f"b{budget / BUDGET:g}"
     return Cell(layout, setting, d_bar, variant, algorithm)
 
 
@@ -235,6 +238,7 @@ def run_metrics(run: Run) -> dict[str, Any]:
         "seed": int(run.seed),
         "run": run.name,
         "complete": run.complete,
+        "budget": BUDGET if run.budget is None else int(run.budget),
         "horizon": int(run.config["env"]["task"]["horizon"]),
         "t_success": times["success"],
         "t_gap10": times["gap_10"],
@@ -322,20 +326,33 @@ def fisher(solved_a: int, n_a: int, solved_b: int, n_b: int) -> float:
     return float(stats.fisher_exact([[solved_a, n_a - solved_a], [solved_b, n_b - solved_b]])[1])
 
 
-def logrank(times_a: Sequence[int | None], times_b: Sequence[int | None], budget: int = BUDGET) -> float | None:
-    """The two-sided p-value of the log-rank test between two groups of times to solve, censored at ``budget``;
-    ``None`` when no seed of either group solved (the test is undefined), 1 when every time of both groups is the
-    same (the statistic is 0/0: no evidence of a difference)."""
+def logrank(
+    times_a: Sequence[int | None],
+    times_b: Sequence[int | None],
+    budget: int = BUDGET,
+    budget_b: int | None = None,
+) -> float | None:
+    """The two-sided p-value of the log-rank test between two groups of times to solve, censored at ``budget``
+    (group b at ``budget_b`` when given); ``None`` when no seed of either group solved (the test is undefined),
+    1 when every time of both groups is the same (the statistic is 0/0: no evidence of a difference).
 
-    def censored(times: Sequence[int | None]) -> Any:
+    Raises:
+        ValueError: If a time lies beyond its group's budget.
+    """
+
+    def censored(times: Sequence[int | None], at: int) -> Any:
         uncensored = np.array([x for x in times if x is not None], dtype=np.float64)
-        right = np.array([budget for x in times if x is None], dtype=np.float64)
+        if np.any(uncensored > at):
+            raise ValueError(f"every time must lie within its budget {at}, got {list(times)}")
+        right = np.array([at for x in times if x is None], dtype=np.float64)
         return stats.CensoredData(uncensored=uncensored, right=right)
 
     if all(x is None for x in times_a) and all(x is None for x in times_b):
         return None
     with np.errstate(invalid="ignore"):
-        p = float(stats.logrank(censored(times_a), censored(times_b)).pvalue)
+        p = float(
+            stats.logrank(censored(times_a, budget), censored(times_b, budget if budget_b is None else budget_b)).pvalue
+        )
     return 1.0 if math.isnan(p) else p  # NaN when every time of both groups coincides: no evidence of a difference
 
 
@@ -364,9 +381,11 @@ def group_stats(metrics: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "seeds": [int(m["seed"]) for m in metrics],
         "complete": all(bool(m["complete"]) for m in metrics),
     }
+    budget = max(int(m["budget"]) for m in metrics)
+    g["budget"] = budget
     for level in ("t_success", "t_gap10", "t_strict", "t_contact_free"):
         ts = [m[level] for m in metrics]
-        _, _, median = km(ts)
+        _, _, median = km(ts, budget)
         done = [t for t in ts if t is not None]
         g[level] = {
             "times": ts,
@@ -447,13 +466,18 @@ def pairwise_tests(metrics: Mapping[Cell, Sequence[Mapping[str, Any]]]) -> dict[
                     "fisher_success": fisher(
                         sum(x is not None for x in ta), len(ta), sum(x is not None for x in tb), len(tb)
                     ),
-                    "logrank_success": logrank(ta, tb),
+                    "logrank_success": logrank(ta, tb, _budget(ma), _budget(mb)),
                     "fisher_contact_free": fisher(
                         sum(x is not None for x in ca), len(ca), sum(x is not None for x in cb), len(cb)
                     ),
                 }
         tests[context] = t
     return tests
+
+
+def _budget(metrics: Sequence[Mapping[str, Any]]) -> int:
+    """The censoring time of a group of runs: the largest budget among them."""
+    return max(int(m.get("budget", BUDGET)) for m in metrics)
 
 
 def ablation_tests(metrics: Mapping[Cell, Sequence[Mapping[str, Any]]]) -> dict[str, dict[str, Any]]:
@@ -470,7 +494,7 @@ def ablation_tests(metrics: Mapping[Cell, Sequence[Mapping[str, Any]]]) -> dict[
         tests[cell.key] = {
             "base": base.key,
             "fisher_success": fisher(sum(x is not None for x in tb), len(tb), sum(x is not None for x in ta), len(ta)),
-            "logrank_success": logrank(tb, ta),
+            "logrank_success": logrank(tb, ta, _budget(ms), _budget(metrics[base])),
         }
     return tests
 
@@ -843,6 +867,7 @@ def write_tables(summary: Summary, directory: Path) -> list[Path]:
         "compute": compute_table(summary),
         "disturbance": disturbance_table(summary),
         "sweep": sweep_table(summary),
+        "sweep_exploration": sweep_table(summary, "slalom", "exploration"),
         "ablation_map": ablation_table(summary),
     }
     written = []
@@ -893,8 +918,9 @@ def _plt() -> Any:
 
 
 def _save(fig: Any, path: Path) -> None:
+    """Write the figure as PDF (without creation date, so that the same data gives the same file) and PNG."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path.with_suffix(".pdf"))
+    fig.savefig(path.with_suffix(".pdf"), metadata={"CreationDate": None})
     fig.savefig(path.with_suffix(".png"), dpi=200)
     import matplotlib.pyplot as plt
 
@@ -918,7 +944,7 @@ def _legend(fig: Any, ax: Any, ncol: int = 4, bottom: float = 0.12, handlelength
 
 def learning_curves_figure(
     summary: Summary,
-    layout: str,
+    layout: str | Sequence[str],
     settings: Sequence[str],
     key: str,
     ylabel: str,
@@ -929,14 +955,17 @@ def learning_curves_figure(
     d_bar: float = 0.0,
     variant: str = "",
 ) -> None:
-    """One panel per setting: the mean over seeds of an evaluation metric of the mode against the samples, with
-    the 95 % Student-t band, one line per architecture."""
+    """One panel per setting of a layout, or per (layout, setting) when several layouts are given, in one row:
+    the mean over seeds of an evaluation metric of the mode against the samples, with the 95 % Student-t band,
+    one line per architecture."""
+    layouts = [layout] if isinstance(layout, str) else list(layout)
+    panels = [(lay, s) for lay in layouts for s in settings]
     plt = _plt()
-    fig, axes = plt.subplots(1, len(settings), figsize=(TEXT_WIDTH_IN, height), sharex=True, sharey=True)
+    fig, axes = plt.subplots(1, len(panels), figsize=(TEXT_WIDTH_IN, height), sharex=True, sharey=True)
     axes = np.atleast_1d(axes)
-    for ax, setting in zip(axes, settings, strict=True):
+    for ax, (lay, setting) in zip(axes, panels, strict=True):
         for arch in ARCHS:
-            cell = summary.cell(layout, setting, arch, d_bar, variant)
+            cell = summary.cell(lay, setting, arch, d_bar, variant)
             if cell is None:
                 continue
             curve = mean_curve(summary.cells[cell], key)
@@ -945,7 +974,7 @@ def learning_curves_figure(
             low = np.where(np.isnan(curve.low), curve.mean, curve.low)
             high = np.where(np.isnan(curve.high), curve.mean, curve.high)
             ax.fill_between(x, low, high, color=COLORS[arch], alpha=0.15, linewidth=0)
-        ax.set_title(SETTING_LABELS[setting])
+        ax.set_title(SETTING_LABELS[setting] if len(layouts) == 1 else f"{lay}, {SETTING_LABELS[setting]}")
         ax.set_xlabel("samples [$\\times 10^3$]")
         ax.set_xlim(0, BUDGET / 1000)
         if ylim is not None:
@@ -1038,12 +1067,16 @@ def time_to_success_figure(summary: Summary, path: Path, d_bar: float = 0.0) -> 
     return True
 
 
-def levels_figure(summary: Summary, path: Path, layout: str = "slalom", setting: str = "main") -> None:
+def levels_figure(summary: Summary, path: Path, layout: str = "slalom", setting: str = "main") -> bool:
     """The disturbance levels and the agility sweep on one layout and setting: the samples to full success as
-    grouped bars."""
+    grouped bars; returns whether the setting has more than one level or a sweep variant (nothing is drawn
+    otherwise)."""
+    levels = sorted({c.d_bar for c in summary.cells if c.layout == layout and c.setting == setting and c.variant == ""})
+    swept = any(c.layout == layout and c.setting == setting and c.variant in ("h6", "h4") for c in summary.cells)
+    if len(levels) < 2 and not swept:
+        return False
     plt = _plt()
     fig, axes = plt.subplots(1, 2, figsize=(TEXT_WIDTH_IN, 1.95))
-    levels = sorted({c.d_bar for c in summary.cells if c.layout == layout and c.setting == setting and c.variant == ""})
     cells_d = [(f"$\\bar d = {d:g}$", (lambda a, d=d: summary.cell(layout, setting, a, d))) for d in levels]
     cells_h = [
         (label, (lambda a, v=v: summary.cell(layout, setting, a, 0.0, v)))
@@ -1055,6 +1088,7 @@ def levels_figure(summary: Summary, path: Path, layout: str = "slalom", setting:
     axes[1].set_title(f"segment length ({layout}, {setting})")
     _legend(fig, axes[0], bottom=0.1, handlelength=1.4)
     _save(fig, path)
+    return True
 
 
 def training_curve_figure(
@@ -1322,6 +1356,12 @@ def write_figures(summary: Summary, directory: Path, replay_roots: Sequence[str 
         lambda p: learning_curves_figure(summary, "tunnel", two, "eval_mode/success_rate", "success rate", p),
     )
     draw(
+        "learning_curves_main",
+        lambda p: learning_curves_figure(
+            summary, ("slalom", "trap"), ("main",), "eval_mode/success_rate", "success rate", p, height=1.7
+        ),
+    )
+    draw(
         "slalom_return",
         lambda p: learning_curves_figure(
             summary, "slalom", SETTINGS, "eval_mode/unshaped_return", "return", p, ylim=None
@@ -1336,6 +1376,7 @@ def write_figures(summary: Summary, directory: Path, replay_roots: Sequence[str 
     draw("time_to_success", lambda p: time_to_success_figure(summary, p))
     draw("time_to_success_d1", lambda p: time_to_success_figure(summary, p, 1.0))
     draw("levels_sweep", lambda p: levels_figure(summary, p))
+    draw("levels_sweep_exploration", lambda p: levels_figure(summary, p, "slalom", "exploration"))
     draw(
         "training_contact",
         lambda p: training_curve_figure(summary, "rollout/contact_fraction", "episodes with contact", p, ylim=(0, 1)),
