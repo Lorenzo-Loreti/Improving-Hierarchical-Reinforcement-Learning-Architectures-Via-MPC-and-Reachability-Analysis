@@ -1,7 +1,7 @@
 # Slalom, exploration setting (D63) at the disturbance level d_bar = 1.0 (D45):
 # configs/env/slalom_sparse_nocur.yaml with only the radius of the disturbance set
 # changed (a test), equivalently slalom_sparse_d10.yaml without the curriculum. Added on
-# 2026-10-23 as the additional experiment of D72: the setting in which the reachable
+# 2026-10-21 as the additional experiment of D72: the setting in which the reachable
 # targets helped at d_bar = 0, now with a tube that shrinks the reachable set.
 # Values from the thesis decision log: D9 (physics), D11 (geometry), D13 (task and reward),
 # D14 (contact penalty), D45 (levels), D51 (sparse reward), D63 (exploration setting), D72.

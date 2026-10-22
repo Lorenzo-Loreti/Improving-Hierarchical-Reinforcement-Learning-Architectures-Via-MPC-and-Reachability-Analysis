@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from hrlmpc.config import Box, load_env_config
-from hrlmpc.geometry import EXTENSION, MIN_GAP, TOL, ConvexPolygon, Layout
+from hrlmpc.geometry import EXTENSION, MIN_GAP, TOL, ConvexPolygon, Layout, ray_distances
 
 CONFIG_DIR = Path(__file__).resolve().parents[1] / "configs" / "env"
 
@@ -193,3 +193,64 @@ def test_overlapping_obstacles_are_allowed() -> None:
 def test_degenerate_layouts_are_rejected(obstacles: list[ConvexPolygon], goal_x: float, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         Layout.build(_box(0, 0, 10, 4), obstacles, goal_x=goal_x)
+
+
+# --------------------------------------------------------------------------
+# Ray distances to the walls (decision log D75: the local map features of the learned Worker)
+# --------------------------------------------------------------------------
+
+
+def _directions(count: int) -> np.ndarray:
+    angles = 2.0 * np.pi * np.arange(count) / count
+    return np.stack([np.cos(angles), np.sin(angles)], axis=1)
+
+
+def test_ray_distances_in_the_tunnel_reach_the_walls() -> None:
+    """Without obstacles every ray ends on the arena's boundary: the exit distance along the ray, clipped at the
+    range; a ray that leaves the arena beyond the range reports the range itself."""
+    layout = _layout("tunnel")  # arena [-1, 11] x [-2, 2]
+    points = np.array([[0.0, 0.0], [10.0, 1.5]])
+    east, north, west, south = _directions(4)
+    d = ray_distances(layout, points, [east, north, west, south], max_range=5.0)
+    np.testing.assert_allclose(d[0], [5.0, 2.0, 1.0, 2.0])
+    np.testing.assert_allclose(d[1], [1.0, 0.5, 5.0, 3.5])
+    diagonal = np.array([[np.sqrt(0.5), np.sqrt(0.5)]])
+    np.testing.assert_allclose(ray_distances(layout, points[:1], diagonal, max_range=5.0), [[2.0 * np.sqrt(2.0)]])
+
+
+def test_ray_distances_stop_at_the_first_obstacle_and_see_through_the_gates() -> None:
+    layout = _layout("slalom")  # gate 1: blocks [4, 5] x [-2, 0.25] and [4, 5] x [1.75, 2]
+    east, north, west, south = _directions(4)
+    d = ray_distances(layout, [[2.0, 0.0], [2.0, 1.0]], [east, north, south], max_range=10.0)
+    np.testing.assert_allclose(d[0], [2.0, 2.0, 2.0])  # the lower block of gate 1 is 2 m east; walls 2 m away
+    np.testing.assert_allclose(d[1], [5.0, 1.0, 3.0])  # through the gate, the ray meets the upper block of gate 2
+    # from inside the gate, looking up and down, the blocks are close; looking west the arena is free
+    d = ray_distances(layout, [[4.5, 1.0]], [north, south, west], max_range=10.0)
+    np.testing.assert_allclose(d[0], [0.75, 0.75, 5.5])
+
+
+def test_ray_distances_on_a_wall_and_along_it() -> None:
+    """On a face, the ray into the wall has distance 0 and the ray along the face is free: the agent slides."""
+    layout = _layout("slalom")
+    east, north, west, south = _directions(4)
+    d = ray_distances(layout, [[3.0, 0.25], [3.0, 0.2]], [east], max_range=10.0)
+    np.testing.assert_allclose(d, [[4.0], [1.0]])  # level with the top face of the lower block the ray grazes it and
+    # goes on to gate 2 (an agent on that line slides along the face); 5 cm lower it meets the block's west face
+    top = np.array([[4.5, 0.25]])  # on the top face of the lower block of gate 1
+    d = ray_distances(layout, top, [south, east, west, north], max_range=10.0)
+    # into the block; along the face on to gate 2 and to the west wall; up to the upper block
+    np.testing.assert_allclose(d[0], [0.0, 2.5, 5.5, 1.5])
+    corner = np.array([[-1.0, -2.0]])  # the arena's corner
+    d = ray_distances(layout, corner, [west, south, east, north], max_range=3.0)
+    np.testing.assert_allclose(d[0], [0.0, 0.0, 3.0, 3.0])
+
+
+def test_ray_distances_check_their_arguments() -> None:
+    layout = _layout("tunnel")
+    with pytest.raises(ValueError):
+        ray_distances(layout, [[0.0, 0.0]], [[2.0, 0.0]], max_range=1.0)  # not a unit vector
+    with pytest.raises(ValueError):
+        ray_distances(layout, [[0.0, 0.0]], [[1.0, 0.0]], max_range=0.0)
+    with pytest.raises(ValueError):
+        ray_distances(layout, [[0.0]], [[1.0, 0.0]], max_range=1.0)
+    assert ray_distances(layout, np.zeros((0, 2)), [[1.0, 0.0]], max_range=1.0).shape == (0, 1)

@@ -317,3 +317,40 @@ def test_training_leaves_the_global_torch_settings_as_they_were(tmp_path: Path) 
         assert not torch.are_deterministic_algorithms_enabled() and torch.get_num_threads() == 2
     finally:
         torch.set_num_threads(threads)
+
+
+def test_a_worker_with_map_features_trains_and_reloads(tmp_path: Path) -> None:
+    """D75: with ``hierarchy.worker_map_features`` the Worker's networks take ``6 + K`` inputs, the run records the
+    features in its ``config.yaml``, the reload rebuilds the same hierarchy and the checkpoint reproduces the last
+    evaluation; a run without the key reloads with the Worker of D26 (6 inputs)."""
+    env = _env()
+    hppo = _hppo(hierarchy__worker_map_features={"rays": 8, "range": 1.5})
+    assert hppo.hierarchy.worker_map_features is not None and hppo.hierarchy.worker_map_features.rays == 8
+    run_dir = train(env, hppo, budget=80, seed=3, run_dir=tmp_path / "map", echo=None)
+    raw = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    assert raw["agent"]["hierarchy"]["worker_map_features"] == {"rays": 8, "range": 1.5}
+    manager, worker, hierarchy = load_hierarchy(run_dir)
+    assert hierarchy.map_features is not None and hierarchy.map_features.size == 8
+    assert hierarchy.worker_input_size == 14 and worker.obs_size == 14 and manager.obs_size == 4
+    lines = [json.loads(line) for line in (run_dir / "evaluations.jsonl").read_text(encoding="utf-8").splitlines()]
+    for action in EVAL_ACTIONS:
+        controller = deterministic_controller(manager, worker, hierarchy, action)
+        result = evaluate(controller, env, spawn_grid(env.task.spawn, (2, 2)), seed=hppo.evaluation.seed)
+        last = [line for line in lines if line["action"] == action][-1]
+        assert result.details()["length"] == last["length"]
+    plain_dir = train(env, _hppo(), budget=40, seed=3, run_dir=tmp_path / "plain", echo=None)
+    assert yaml.safe_load((plain_dir / "config.yaml").read_text(encoding="utf-8"))["agent"]["hierarchy"][
+        "worker_map_features"] is None
+    _, plain_worker, plain_hierarchy = load_hierarchy(plain_dir)
+    assert plain_hierarchy.map_features is None and plain_worker.obs_size == 6
+    # the ablation file trains as well
+    data = yaml.safe_load((REPO / "configs" / "agent" / "hppo_map.yaml").read_text(encoding="utf-8"))
+    data["rollout"].update(num_envs=2, num_steps=20)
+    data["manager"]["update"].update(epochs=2, minibatches=2)
+    data["worker"]["update"].update(epochs=2, minibatches=2)
+    data["evaluation"].update(every=40, grid=[2, 2], seed=99)
+    ablation = hppo_config_from_dict(data)
+    assert ablation.hierarchy.worker_map_features is not None
+    run_dir = train(env, ablation, budget=40, seed=3, run_dir=tmp_path / "ablation", echo=None)
+    _, ablation_worker, _ = load_hierarchy(run_dir)
+    assert ablation_worker.obs_size == 22

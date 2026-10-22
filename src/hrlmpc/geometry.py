@@ -49,6 +49,9 @@ MIN_GAP = 1e-6
 EXTENSION = 1.0
 """Distance [m] by which an obstacle touching a wall is pushed beyond it (D16), unless its shape allows less."""
 
+RAY_TOL = 1e-9
+"""Cosine below which a ray counts as parallel to a face (:func:`ray_distances`)."""
+
 
 def _frozen(array: ArrayLike, dtype: type = np.float64) -> NDArray:
     out = np.array(array, dtype=dtype)
@@ -367,3 +370,56 @@ class Layout:
         """Whether each point lies in the goal half-plane ``p_x >= goal_x`` (the point is assumed free)."""
         result: BoolArray = _points(points)[:, 0] >= self.goal_x
         return result
+
+
+def ray_distances(layout: Layout, points: ArrayLike, directions: ArrayLike, max_range: float) -> FloatArray:
+    """``(n, K)`` distances from free points along unit directions to the first wall, clipped at ``max_range``.
+
+    The distance along a ray is the length of its longest initial part that
+    stays in the free space: the ray leaves the arena when it crosses an arena
+    face outward, and meets a blocked polygon when it enters that polygon's
+    interior (the slab test of its half-planes). A ray that starts on a face
+    and points into the wall has distance 0; one that runs along the face is
+    free beyond it, so a sliding agent sees the way along the wall open. The
+    local map features of the learned Worker (decision log D75) scale these
+    distances by the range.
+
+    Args:
+        layout: The layout.
+        points: ``(n, 2)`` positions in the free space.
+        directions: ``(K, 2)`` unit vectors.
+        max_range: Largest distance reported [m], positive.
+
+    Raises:
+        ValueError: If the shapes are wrong, a direction is not a unit vector or the range is not positive.
+    """
+    p = _points(points)
+    e = np.asarray(directions, dtype=np.float64)
+    if e.ndim != 2 or e.shape[1] != 2:
+        raise ValueError(f"directions must be a (K, 2) array, got shape {e.shape}")
+    if np.any(np.abs(np.hypot(e[:, 0], e[:, 1]) - 1.0) > 1e-9):
+        raise ValueError("every direction must be a unit vector")
+    if not (np.isfinite(max_range) and max_range > 0.0):
+        raise ValueError(f"max_range must be positive, got {max_range}")
+    faces = layout.faces
+    s0 = faces.signed_distances(p)[:, None, :]  # (n, 1, F): >= 0 on the free side
+    rate = dot(e, faces.normal)[None, :, :]  # (1, K, F): how the signed distance changes along the ray
+    towards, away = rate < -RAY_TOL, rate > RAY_TOL  # a ray within RAY_TOL of parallel keeps its distance
+    with np.errstate(divide="ignore", invalid="ignore"):
+        crossing = np.where(towards | away, -s0 / rate, np.inf)  # (n, K, F): where the ray meets each face line
+    # The arena: the ray exits at the first face whose signed distance decreases to zero.
+    arena = slice(0, faces.n_arena)
+    exits = np.where(towards[..., arena], np.maximum(crossing[..., arena], 0.0), np.inf)
+    distance = exits.min(axis=2) if faces.n_arena else np.full(p.shape[:1] + e.shape[:1], np.inf)
+    # Each blocked polygon: the ray is inside it where every face's signed distance is negative.
+    for start, size in zip(faces.group_starts, faces.group_sizes, strict=True):
+        group = slice(faces.n_arena + int(start), faces.n_arena + int(start) + int(size))
+        s, c = s0[..., group], crossing[..., group]
+        entry = np.where(towards[..., group], np.maximum(c, 0.0), 0.0).max(axis=2)  # the last decreasing face
+        exit_ = np.where(away[..., group], c, np.inf).min(axis=2)  # the first increasing face
+        parallel = ~(towards[..., group] | away[..., group])
+        blocked = np.where(parallel, s < -TOL, True).all(axis=2)  # a parallel face must already be passed
+        hit = blocked & (entry < exit_ - TOL)
+        distance = np.where(hit, np.minimum(distance, entry), distance)
+    result: FloatArray = np.minimum(distance, max_range)
+    return result

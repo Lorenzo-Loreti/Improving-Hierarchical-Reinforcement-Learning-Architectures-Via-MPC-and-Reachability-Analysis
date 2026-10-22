@@ -1,0 +1,37 @@
+# Trap, exploration setting (D63, D69), at the disturbance level d_bar = 1.0 (D45):
+# configs/env/trap_sparse_nocur.yaml with only the radius of the disturbance set changed (a test).
+# Added on 2026-10-22 as one of the disturbed cells of D73.
+# Values from the thesis decision log: D9 (physics), D13 (task and reward), D14 (contact penalty),
+# D45 (levels), D51 (sparse reward), D63 (exploration setting), D69 (layout) and D73.
+
+physics:
+  dt: 0.1          # sampling time T_s [s]
+  a_max: 2.5       # radius of the input set U [m/s^2]
+  v_max: 1.2       # radius of the velocity set V [m/s]
+  gamma: 0.5       # viscous friction [1/s]
+  gamma_w: 1.0     # wall friction on the sliding velocity [1/s]
+  d_bar: 1.0       # radius of the disturbance set D [m/s^2]; levels used: 0, 0.5, 1.0
+
+geometry:
+  arena: {x: [-1.0, 11.0], y: [-2.0, 2.0]}
+  obstacles:                              # every face is a wall
+    - {x: [5.25, 5.75], y: [-1.2, 1.2]}   # the U: back wall
+    - {x: [3.75, 5.75], y: [0.8, 1.2]}    # the U: upper arm (corridor of 0.8 m above it)
+    - {x: [3.75, 5.75], y: [-1.2, -0.8]}  # the U: lower arm (corridor of 0.8 m below it)
+    - {x: [8.0, 8.5], y: [-2.0, -0.375]}  # the gate, lower block
+    - {x: [8.0, 8.5], y: [0.375, 2.0]}    # the gate, upper block: a gate of 0.75 m centred on y = 0
+  goal_x: 10.0     # goal region: p_x >= goal_x
+
+task:
+  spawn: {x: [0.0, 2.0], y: [-1.0, 1.0]}  # initial position uniform on this box, at rest (the evaluation's starts)
+  horizon: 200     # truncation after this many steps
+  curriculum: null  # the exploration setting: no curriculum (D63)
+
+reward:            # all coefficients non-negative; signs in hrlmpc.config.RewardConfig
+  time_penalty: 1.0
+  success_bonus: 1000.0
+  progress_coef: 0.0           # sparse reward (D51): no progress term; 10.0 in the shaped files
+  shaping_discount: 1.0        # no effect with progress_coef 0; kept as in the shaped files (D22)
+  effort_coef: 0.01            # times ||u||^2 / a_max^2
+  contact_impulse_coef: 50.0   # c_n [s/m], times the wall's velocity correction
+  contact_step_coef: 1.0       # c_s, per step in contact
