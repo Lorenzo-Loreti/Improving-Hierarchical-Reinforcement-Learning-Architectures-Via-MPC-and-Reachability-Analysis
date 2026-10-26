@@ -499,6 +499,34 @@ def ablation_tests(metrics: Mapping[Cell, Sequence[Mapping[str, Any]]]) -> dict[
     return tests
 
 
+def variant_tests(metrics: Mapping[Cell, Sequence[Mapping[str, Any]]]) -> dict[str, dict[str, dict[str, Any]]]:
+    """The tests between a variant of an architecture and the other architectures of its layout, setting and
+    level without a variant (the map-aware hPPO Worker of D75 against PPO and the MPC hierarchies, say): per
+    variant cell, by the architecture compared with, Fisher on the counts of seeds at full success and the
+    log-rank test on the times, the variant first."""
+    tests: dict[str, dict[str, dict[str, Any]]] = {}
+    for cell, ms in metrics.items():
+        if not cell.variant:
+            continue
+        against: dict[str, dict[str, Any]] = {}
+        for arch in ARCHS:
+            if arch == cell.arch:
+                continue
+            other = dataclasses.replace(cell, variant="", arch=arch)
+            if other not in metrics:
+                continue
+            ta, tb = [m["t_success"] for m in ms], [m["t_success"] for m in metrics[other]]
+            against[arch] = {
+                "fisher_success": fisher(
+                    sum(x is not None for x in ta), len(ta), sum(x is not None for x in tb), len(tb)
+                ),
+                "logrank_success": logrank(ta, tb, _budget(ms), _budget(metrics[other])),
+            }
+        if against:
+            tests[cell.key] = against
+    return tests
+
+
 # --------------------------------------------------------------------------- the summary
 
 
@@ -512,6 +540,7 @@ class Summary:
         stats: The statistics of every cell.
         tests: The pairwise tests between architectures, by context.
         ablations: The tests between the variants and their bases.
+        variants: The tests between the variants and the other architectures of their context.
     """
 
     cells: dict[Cell, list[Run]]
@@ -519,6 +548,7 @@ class Summary:
     stats: dict[Cell, dict[str, Any]]
     tests: dict[str, dict[str, Any]]
     ablations: dict[str, dict[str, Any]]
+    variants: dict[str, dict[str, dict[str, Any]]] = dataclasses.field(default_factory=dict)
 
     def cell(self, layout: str, setting: str, arch: str, d_bar: float = 0.0, variant: str = "") -> Cell | None:
         """The cell with these coordinates, if it has runs."""
@@ -531,6 +561,7 @@ class Summary:
             "cells": {c.key: {"runs": self.metrics[c], "stats": self.stats[c]} for c in self.cells},
             "tests": self.tests,
             "ablations": self.ablations,
+            "variants": self.variants,
         }
 
 
@@ -539,7 +570,7 @@ def summarize(runs: Iterable[Run]) -> Summary:
     cells = cells_of(runs)
     metrics = {cell: [run_metrics(run) for run in members] for cell, members in cells.items()}
     stats_ = {cell: group_stats(ms) for cell, ms in metrics.items()}
-    return Summary(cells, metrics, stats_, pairwise_tests(metrics), ablation_tests(metrics))
+    return Summary(cells, metrics, stats_, pairwise_tests(metrics), ablation_tests(metrics), variant_tests(metrics))
 
 
 # --------------------------------------------------------------------------- formatting
@@ -718,13 +749,16 @@ def _pooled_worker(summary: Summary, cells: Sequence[Cell]) -> dict[str, float |
 
 def worker_table(summary: Summary) -> str:
     """The MPC Worker's solves, pooled over the settings of each layout without disturbance and over every cell
-    with disturbance: the fraction of steps whose search converged, ended with every binary fixed, applied a
-    fallback plan (the relaxation's or the best uncertified one), or found no plan (the brake), the solver
-    errors per step and the braking episodes per run (emergency steps over the horizon)."""
+    with disturbance, in percent of the steps: the searches that converged, that ended with every binary fixed,
+    that applied an uncertified plan (the relaxation's or the cheapest exact one found when the rounds ran out)
+    and that found no new plan (the rounds ran out without an exact plan, a relaxation or a convex solve had no
+    solution, or a solver failure ended the search: the shifted plan or the brake was applied); the solver
+    failures during the search, survived or not, per step; and the braking episodes per run (emergency steps
+    over the time limit)."""
     lines = [
         _tabular("llrrrrrrr"),
         "\\toprule",
-        "Layout & Architecture & steps & converged & fixed & fallback & no plan & errors & braking \\\\",
+        "Layout & Architecture & steps & converged & fixed & uncertified & no plan & errors & brake \\\\",
         "\\midrule",
     ]
     blocks: list[tuple[str, Callable[[Cell], bool]]] = [
@@ -743,13 +777,11 @@ def worker_table(summary: Summary) -> str:
             if not cells:
                 continue
             w = _pooled_worker(summary, cells)
-            fallback = (w["exit_relaxation_count"] or 0.0) + (w["exit_best_count"] or 0.0)
-            no_plan = (
-                (w["exit_unsolved_count"] or 0.0) + (w["exit_empty_count"] or 0.0) + (w["exit_rounds_count"] or 0.0)
-            )
+            uncertified = (w["exit_relaxation_count"] or 0.0) + (w["exit_best_count"] or 0.0)
+            no_plan = sum((w[f"exit_{name}_count"] or 0.0) for name in ("rounds", "empty", "unsolved", "error"))
             lines.append(
                 f"{label} & {LABELS_TEX[arch]} & {w['steps'] / 1e6:.2f}M & {pct(w['exit_converged_count'], 1)} & "
-                f"{pct(w['exit_fixed_count'], 1)} & {pct(fallback, 2)} & {pct(no_plan, 2)} & "
+                f"{pct(w['exit_fixed_count'], 1)} & {pct(uncertified, 2)} & {pct(no_plan, 2)} & "
                 f"{pct(w['solver_error_count'], 2)} & {w['emergency_per_run']:.1f} \\\\"
             )
     lines += ["\\bottomrule", "\\end{tabular}"]
@@ -1447,11 +1479,13 @@ def write_report(summary: Summary, path: Path) -> None:
                 f"- targets reached (final evaluation) {mean_ci(g['reached_rate_eval_final'], 2)}, training "
                 f"tail {mean_ci(g['reached_rate_train_tail'], 2)}"
             )
-        if "end_distance_eval_final" in g:
-            lines.append(
-                f"- distance from the target at the segments' end (final evaluation) "
-                f"{mean_ci(g['end_distance_eval_final'], 2)} m"
-            )
+        distance_keys = (
+            ("target_distance_train_tail", "training tail"),
+            ("end_distance_eval_final", "final evaluation"),
+        )
+        distances = [f"{name} {mean_ci(g[key], 2)} m" for key, name in distance_keys if key in g]
+        if distances:
+            lines.append("- distance from the target at the segments' end: " + ", ".join(distances))
         if "mpc_steps" in g:
             exits = ", ".join(
                 f"{name} {pct(g[f'mpc_exit_{name}_count_rate'], 3)} %"
@@ -1493,6 +1527,16 @@ def write_report(summary: Summary, path: Path) -> None:
         for key, v in summary.ablations.items():
             lines.append(
                 f"- {key} vs {v['base']}: Fisher p={pfmt(v['fisher_success'])}, log-rank p={pfmt(v['logrank_success'])}"
+            )
+    if summary.variants:
+        lines += ["", "## Variants against the other architectures of their cell", ""]
+        for key, against in summary.variants.items():
+            lines.append(
+                f"- {key}: "
+                + "; ".join(
+                    f"vs {arch}: Fisher p={pfmt(v['fisher_success'])}, log-rank p={pfmt(v['logrank_success'])}"
+                    for arch, v in against.items()
+                )
             )
     escape = escape_rates(summary)
     if escape:

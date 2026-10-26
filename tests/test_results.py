@@ -328,10 +328,15 @@ def test_group_stats_and_the_summary(tmp_path: Path) -> None:
     assert "slalom/main/d1/base" in summary.tests and "slalom/main/d0/h6" in summary.tests
     assert summary.ablations["slalom/main/d0/map/hppo"]["base"] == "slalom/main/d0/base/hppo"
     assert summary.ablations["slalom/main/d0/h6/ppo_mpc"]["base"] == "slalom/main/d0/base/ppo_mpc"
+    against = summary.variants["slalom/main/d0/map/hppo"]
+    assert set(against) == {"ppo", "ppo_mpc", "ppo_mpc_reachability"}  # the variant against the other architectures
+    assert against["ppo"]["fisher_success"] == 1.0 and 0.0 < against["ppo_mpc"]["logrank_success"] <= 1.0
+    assert set(summary.variants["slalom/main/d0/h6/ppo_mpc"]) == {"ppo", "hppo", "ppo_mpc_reachability"}
     assert summary.cell("slalom", "main", "ppo") == Cell("slalom", "main", 0.0, "", "ppo")
     assert summary.cell("trap", "main", "ppo") is None
     as_json = summary.as_json()
-    assert set(as_json) == {"cells", "tests", "ablations"} and "slalom/main/d0/base/ppo" in as_json["cells"]
+    assert set(as_json) == {"cells", "tests", "ablations", "variants"}
+    assert "slalom/main/d0/base/ppo" in as_json["cells"]
     json.dumps(as_json, default=float)
 
 
@@ -372,7 +377,9 @@ def test_the_tables_are_tabular_bodies_with_one_row_per_cell(tmp_path: Path) -> 
     assert "hPPO (map) &" in ablation and ablation.count("\\emph{") == 1 and "& log-rank" in ablation
     worker = worker_table(summary)
     assert "Slalom, $\\bar d = 0$ & PPO\\textsubscript{MPC} &" in worker and "All layouts, $\\bar d > 0$" in worker
-    assert "73.2" in worker  # converged 1500 of 2048 steps
+    assert "& uncertified & no plan & errors & brake" in worker
+    # converged 1500 and fixed 540 of 2048 steps; uncertified 2 + 2, no plan 2 + 1 + 1 + 0, errors 2; no brake
+    assert "73.2 & 26.4 & 0.20 & 0.20 & 0.10 & 0.0" in worker
     compute = compute_table(summary)
     assert "Slalom and trap, $\\bar d = 0$ & PPO &" in compute and "Tunnel, $\\bar d = 0$" in compute
     assert "50 + 30" in compute  # support + projection of the reachable targets
@@ -421,6 +428,10 @@ def test_the_figures_and_the_report_are_written(tmp_path: Path) -> None:
     report = (tmp_path / "report.md").read_text(encoding="utf-8")
     assert "## slalom/main/d0/base/ppo" in report and "INCOMPLETE" in report  # the synthetic runs stop early
     assert "## Tests (two-sided)" in report and "## Variants against their bases" in report
+    assert "## Variants against the other architectures of their cell" in report
+    assert "- slalom/main/d0/map/hppo: vs ppo: Fisher p=" in report
+    assert "- distance from the target at the segments' end: training tail 0.60 [0.60, 0.60] m" in report  # hPPO
+    assert "training tail 0.60 [0.60, 0.60] m, final evaluation 0.60 [0.60, 0.60] m" in report  # the MPC Worker
 
 
 def test_the_trajectories_figure_draws_the_replays(tmp_path: Path) -> None:
