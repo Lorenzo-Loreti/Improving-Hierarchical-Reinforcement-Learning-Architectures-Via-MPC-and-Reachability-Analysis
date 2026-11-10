@@ -88,7 +88,7 @@ STYLES = {"ppo": "-", "hppo": "--", "ppo_mpc": "-.", "ppo_mpc_reachability": ":"
 MARKERS = {"ppo": "o", "hppo": "s", "ppo_mpc": "^", "ppo_mpc_reachability": "D"}
 
 SETTINGS: tuple[str, ...] = ("main", "exploration", "dense")
-SETTING_LABELS = {"main": "main (curriculum)", "exploration": "exploration", "dense": "dense reward"}
+SETTING_LABELS = {"main": "curriculum", "exploration": "sparse", "dense": "dense"}
 LAYOUTS: tuple[str, ...] = ("slalom", "trap", "tunnel")
 LEVELS: tuple[str, ...] = ("success", "gap_10", "strict", "contact_free")
 
@@ -577,10 +577,10 @@ def summarize(runs: Iterable[Run]) -> Summary:
 
 
 def k(x: float | int | None) -> str:
-    """Samples in thousands (``41k``), ``--`` for none."""
+    """Samples in thousands with a thin space before the suffix (``41\\,k``), ``--`` for none."""
     if x is None:
         return "--"
-    return f"{x / 1000:.0f}k" if x >= 1000 else str(int(x))
+    return f"{x / 1000:.0f}\\,k" if x >= 1000 else str(int(x))
 
 
 def pct(x: float | None, digits: int = 0) -> str:
@@ -758,7 +758,7 @@ def worker_table(summary: Summary) -> str:
     lines = [
         _tabular("llrrrrrrr"),
         "\\toprule",
-        "Layout & Architecture & steps & converged & fixed & uncertified & no plan & errors & brake \\\\",
+        "Layout & Architecture & steps [$10^{6}$] & converged & fixed & uncertified & no plan & errors & brake \\\\",
         "\\midrule",
     ]
     blocks: list[tuple[str, Callable[[Cell], bool]]] = [
@@ -780,7 +780,7 @@ def worker_table(summary: Summary) -> str:
             uncertified = (w["exit_relaxation_count"] or 0.0) + (w["exit_best_count"] or 0.0)
             no_plan = sum((w[f"exit_{name}_count"] or 0.0) for name in ("rounds", "empty", "unsolved", "error"))
             lines.append(
-                f"{label} & {LABELS_TEX[arch]} & {w['steps'] / 1e6:.2f}M & {pct(w['exit_converged_count'], 1)} & "
+                f"{label} & {LABELS_TEX[arch]} & {w['steps'] / 1e6:.2f} & {pct(w['exit_converged_count'], 1)} & "
                 f"{pct(w['exit_fixed_count'], 1)} & {pct(uncertified, 2)} & {pct(no_plan, 2)} & "
                 f"{pct(w['solver_error_count'], 2)} & {w['emergency_per_run']:.1f} \\\\"
             )
@@ -795,7 +795,7 @@ def compute_table(summary: Summary) -> str:
     lines = [
         _tabular("llrrr"),
         "\\toprule",
-        "Cells & Architecture & run [min] & Worker [ms/step] & targets [ms/decision] \\\\",
+        "Cells & Architecture & run [\\si{\\minute}] & Worker [\\si{\\milli\\second}/step] & targets [\\si{\\milli\\second}/decision] \\\\",
         "\\midrule",
     ]
     blocks: list[tuple[str, Callable[[Cell], bool]]] = [
@@ -821,11 +821,12 @@ def compute_table(summary: Summary) -> str:
     return "\n".join(lines) + "\n"
 
 
-def disturbance_table(summary: Summary) -> str:
+def disturbance_table(summary: Summary, layouts: Sequence[str] = LAYOUTS, nominal: bool = True) -> str:
     """The cells with disturbance beside their cells without: per layout, setting and level, the rows of
-    :func:`results_table`."""
+    :func:`results_table`; ``layouts`` restricts the layouts and ``nominal=False`` leaves out the blocks at
+    ``d_bar = 0`` (which the results tables already hold). The level is written ``0``, ``0.5``, ``1.0``."""
     lines = [_tabular("lcccccc"), "\\toprule", _RESULTS_HEADER]
-    for layout in LAYOUTS:
+    for layout in layouts:
         for setting in SETTINGS:
             levels = sorted(
                 {c.d_bar for c in summary.cells if c.layout == layout and c.setting == setting and c.variant == ""}
@@ -833,11 +834,14 @@ def disturbance_table(summary: Summary) -> str:
             if len(levels) < 2:
                 continue
             for d_bar in levels:
+                if d_bar == 0.0 and not nominal:
+                    continue
                 cells = [c for a in ARCHS if (c := summary.cell(layout, setting, a, d_bar)) is not None]
+                level = "0" if d_bar == 0.0 else f"{d_bar:.1f}"
                 lines.append("\\midrule")
                 lines.append(
                     f"\\multicolumn{{7}}{{@{{}}l}}{{\\emph{{{layout.capitalize()}, {SETTING_LABELS[setting]}, "
-                    f"$\\bar d = {d_bar:g}$}}}} \\\\"
+                    f"$\\bar d = {level}$}}}} \\\\"
                 )
                 lines.extend(_row_of(summary, c, LABELS_TEX[c.arch]) for c in cells)
     lines += ["\\bottomrule", "\\end{tabular}"]
@@ -898,6 +902,8 @@ def write_tables(summary: Summary, directory: Path) -> list[Path]:
         "worker_solves": worker_table(summary),
         "compute": compute_table(summary),
         "disturbance": disturbance_table(summary),
+        "disturbance_slalom": disturbance_table(summary, ("slalom",), nominal=False),
+        "disturbance_trap_tunnel": disturbance_table(summary, ("trap", "tunnel"), nominal=False),
         "sweep": sweep_table(summary),
         "sweep_exploration": sweep_table(summary, "slalom", "exploration"),
         "ablation_map": ablation_table(summary),
@@ -1054,7 +1060,7 @@ def _bars(
                     ax.annotate(
                         f"{len(done)}/{len(ts)}",
                         (x, max(done)),
-                        xytext=(0, 3),
+                        xytext=(0, 3 + (6 if j % 2 else 0)),  # adjacent bars alternate the height of the label
                         textcoords="offset points",
                         ha="center",
                         va="bottom",
@@ -1089,7 +1095,7 @@ def time_to_success_figure(summary: Summary, path: Path, d_bar: float = 0.0) -> 
         return False
     plt = _plt()
     fig, axes = plt.subplots(1, 3, figsize=(TEXT_WIDTH_IN, 2.0), sharey=True, gridspec_kw={"width_ratios": [3, 3, 2]})
-    short = {"main": "main", "exploration": "explor.", "dense": "dense"}
+    short = {"main": "curric.", "exploration": "sparse", "dense": "dense"}
     for ax, (layout, settings) in zip(axes, panels, strict=True):
         cells = [(short[s], (lambda a, s=s, lay=layout: summary.cell(lay, s, a, d_bar))) for s in settings]
         _bars(ax, cells, summary, "samples to full success [$\\times 10^3$]" if layout == "slalom" else "")
@@ -1116,8 +1122,8 @@ def levels_figure(summary: Summary, path: Path, layout: str = "slalom", setting:
     ]
     _bars(axes[0], cells_d, summary, "samples to full success [$\\times 10^3$]")
     _bars(axes[1], cells_h, summary, "", archs=ARCHS[1:])
-    axes[0].set_title(f"disturbance ({layout}, {setting})")
-    axes[1].set_title(f"segment length ({layout}, {setting})")
+    axes[0].set_title(f"disturbance ({layout}, {SETTING_LABELS[setting]})")
+    axes[1].set_title(f"segment length ({layout}, {SETTING_LABELS[setting]})")
     _legend(fig, axes[0], bottom=0.1, handlelength=1.4)
     _save(fig, path)
     return True

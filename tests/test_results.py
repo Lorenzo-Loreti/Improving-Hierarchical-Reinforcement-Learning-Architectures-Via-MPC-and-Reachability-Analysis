@@ -273,7 +273,7 @@ def test_confidence_intervals_skip_missing_values() -> None:
     assert ci([None]) == {"mean": None, "low": None, "high": None, "n": 0}
     assert mean_pm(ci([1.0, None, 3.0]), 1) == "2.0 $\\pm$ 12.7" and mean_pm(ci([2.0]), 1) == "2.0"
     assert mean_pm(ci([]), 1) == "--"
-    assert k(None) == "--" and k(40960) == "41k" and k(512) == "512"
+    assert k(None) == "--" and k(40960) == "41\\,k" and k(512) == "512"
     assert pfmt(None) == "--" and pfmt(0.0004) == "$<0.001$" and pfmt(0.0051) == "0.005" and pfmt(0.25) == "0.25"
 
 
@@ -362,22 +362,24 @@ def test_the_tables_are_tabular_bodies_with_one_row_per_cell(tmp_path: Path) -> 
     assert table.startswith("\\begin{tabular}") and table.rstrip().endswith("\\end{tabular}")
     assert table.count("\\emph{") == 3  # slalom main, slalom exploration, tunnel dense
     assert table.count("PPO\\textsubscript{MPC} &") == 3 and "9/10" not in table
-    assert "PPO & 2/2 & 31k & 31k--41k & 0/2 &" in table  # the slalom's main setting: solved late, with contact
+    assert "PPO & 2/2 & 31\\,k & 31\\,k--41\\,k & 0/2 &" in table  # the slalom's main setting: solved late, with contact
     assert "hPPO & 0/2 & -- & -- & 0/2 & -- &" in table
     assert results_table(summary, ("tunnel",)).count("\\emph{") == 1
     assert results_table(summary, ("trap",)).count("\\emph{") == 0
     tests = logrank_table(summary)
     assert tests.count(" \\\\") == 1 + 3  # the header and three contexts
-    assert "Slalom, main (curriculum) & 1.00 &" in tests or "Slalom, main (curriculum) & 0." in tests
+    assert "Slalom, curriculum & 1.00 &" in tests or "Slalom, curriculum & 0." in tests
     sweep = sweep_table(summary)
     assert "$H = 10$" in sweep and "$H = 6$" in sweep and "$H = 4$" not in sweep
     disturbed = disturbance_table(summary)
-    assert "$\\bar d = 0$" in disturbed and "$\\bar d = 1$" in disturbed and disturbed.count("\\emph{") == 2
+    assert "$\\bar d = 0$" in disturbed and "$\\bar d = 1.0$" in disturbed and disturbed.count("\\emph{") == 2
+    halves = disturbance_table(summary, ("slalom",), nominal=False)
+    assert "$\\bar d = 0$" not in halves and halves.count("\\emph{") == 1
     ablation = ablation_table(summary)
     assert "hPPO (map) &" in ablation and ablation.count("\\emph{") == 1 and "& log-rank" in ablation
     worker = worker_table(summary)
     assert "Slalom, $\\bar d = 0$ & PPO\\textsubscript{MPC} &" in worker and "All layouts, $\\bar d > 0$" in worker
-    assert "& uncertified & no plan & errors & brake" in worker
+    assert "steps [$10^{6}$] & converged & fixed & uncertified & no plan & errors & brake" in worker
     # converged 1500 and fixed 540 of 2048 steps; uncertified 2 + 2, no plan 2 + 1 + 1 + 0, errors 2; no brake
     assert "73.2 & 26.4 & 0.20 & 0.20 & 0.10 & 0.0" in worker
     compute = compute_table(summary)
@@ -385,7 +387,8 @@ def test_the_tables_are_tabular_bodies_with_one_row_per_cell(tmp_path: Path) -> 
     assert "50 + 30" in compute  # support + projection of the reachable targets
     written = write_tables(summary, tmp_path / "tables")
     assert {p.name for p in written} >= {"results_all.tex", "tests.tex", "escape.tex", "worker_solves.tex",
-                                         "compute.tex", "disturbance.tex", "sweep.tex", "ablation_map.tex"}
+                                         "compute.tex", "disturbance.tex", "disturbance_slalom.tex",
+                                         "disturbance_trap_tunnel.tex", "sweep.tex", "ablation_map.tex"}
 
 
 def test_the_escape_evaluation_is_read_from_the_runs(tmp_path: Path) -> None:
