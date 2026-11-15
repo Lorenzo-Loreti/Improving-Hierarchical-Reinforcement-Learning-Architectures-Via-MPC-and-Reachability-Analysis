@@ -317,7 +317,9 @@ def km(times: Sequence[int | None], budget: int = BUDGET) -> tuple[FloatArray, F
             ys.append(1.0 - survival)
     xs.append(float(budget))
     ys.append(ys[-1])
-    median = next((x for x, y in zip(xs, ys, strict=True) if y >= 0.5), None)
+    # The fraction is a floating-point product: five solving seeds of ten can give 0.4999999999999999, so the
+    # test for one half carries a tolerance far below the smallest step of the estimate, which is 1/n.
+    median = next((x for x, y in zip(xs, ys, strict=True) if y >= 0.5 - 1e-9), None)
     return np.array(xs), np.array(ys), median
 
 

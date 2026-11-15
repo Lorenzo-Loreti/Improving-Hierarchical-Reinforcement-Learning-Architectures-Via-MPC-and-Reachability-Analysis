@@ -249,6 +249,18 @@ def test_kaplan_meier_fraction_solved_and_median() -> None:
         km([150], budget=100)
 
 
+def test_kaplan_meier_median_at_exactly_one_half() -> None:
+    """The fraction solved is a floating-point product, so one half is tested with a tolerance: with ties, five
+    solving seeds of ten gave 0.4999999999999999 and no median (the two patterns are those of the trap in the
+    curriculum setting at d_bar = 1.0)."""
+    times: list[int | None] = [112640, 112640, 133120, 184320, 204800, None, None, None, None, None]
+    _, ys, median = km(times)
+    assert ys[-1] == pytest.approx(0.5)
+    assert median == 204800  # the fifth of the ten seeds, which solves at the budget
+    _, _, median = km([163840, 92160, 81920, 102400, 122880, 61440, 40960, 81920, 133120, 61440])
+    assert median == 81920  # the fifth time, not the sixth
+
+
 def test_fisher_and_log_rank() -> None:
     assert fisher(5, 5, 0, 5) == pytest.approx(0.00793650793650794)
     assert fisher(3, 5, 3, 5) == 1.0
