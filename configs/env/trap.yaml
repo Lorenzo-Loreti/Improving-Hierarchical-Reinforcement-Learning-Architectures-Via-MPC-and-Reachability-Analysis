@@ -1,12 +1,9 @@
-# Trap layout with the dense (shaped) reward of decision log D22 (D71): the
-# third setting of the comparison, restored at M. Manenti's request of
-# 2026-10-20. trap_sparse_nocur.yaml with the progress term of D13/D22 added
-# back (progress_coef 10, undiscounted), so the training starts are the spawn
+# Trap layout with the dense (shaped) reward: the
+# third setting of the comparison: trap_sparse_nocur.yaml with the progress term added
+#  (progress_coef 10, undiscounted), so the training starts are the spawn
 # box's and the reward points along x, into the cavity of the U. Nothing else
 # differs (a test). The shaped files of the other layouts are slalom.yaml and
 # tunnel.yaml.
-# Values from the decision log: D9 (physics), D13 (task and reward), D14
-# (contact penalty), D22 (undiscounted shaping), D69 (layout), D71 (scope).
 
 physics:
   dt: 0.1          # sampling time T_s [s]
@@ -29,13 +26,13 @@ geometry:
 task:
   spawn: {x: [0.0, 2.0], y: [-1.0, 1.0]}  # initial position uniform on this box, at rest (the evaluation's starts)
   horizon: 200     # truncation after this many steps
-  curriculum: null  # no curriculum: the dense reward is the alternative to it (D71)
+  curriculum: null  # no curriculum: the dense reward is the alternative to it
 
 reward:            # all coefficients non-negative; signs in hrlmpc.config.RewardConfig
   time_penalty: 1.0
   success_bonus: 1000.0
-  progress_coef: 10.0          # Phi(p) = -progress_coef * max(goal_x - p_x, 0): the dense reward (D13, D22)
-  shaping_discount: 1.0        # 1: undiscounted progress, Phi(p+) - Phi(p) (D22); the learners' discount is in configs/agent
+  progress_coef: 10.0          # Phi(p) = -progress_coef * max(goal_x - p_x, 0): the dense reward
+  shaping_discount: 1.0        # 1: undiscounted progress, Phi(p+) - Phi(p); the learners' discount is in configs/agent
   effort_coef: 0.01            # times ||u||^2 / a_max^2
   contact_impulse_coef: 50.0   # c_n [s/m], times the wall's velocity correction
   contact_step_coef: 1.0       # c_s, per step in contact

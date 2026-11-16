@@ -1,4 +1,4 @@
-"""Tests of the physical step of the environment (rows M1-M7, E1-E8; decision log D16, D17).
+"""Tests of the physical step of the environment.
 
 Several tests give the agent the velocity ``v_hat / FACTOR`` with zero input
 and zero disturbance: the free motion multiplies the velocity by
@@ -20,7 +20,7 @@ from hrlmpc.model import PhysicsParams, free_step
 from hrlmpc.physics import INPUT_TOL, StepResult, physics_step
 
 CONFIG_DIR = Path(__file__).resolve().parents[1] / "configs" / "env"
-PARAMS = PhysicsParams(dt=0.1, a_max=2.5, v_max=1.2, gamma=0.5, gamma_w=1.0, d_bar=1.0)  # D9, largest d_bar
+PARAMS = PhysicsParams(dt=0.1, a_max=2.5, v_max=1.2, gamma=0.5, gamma_w=1.0, d_bar=1.0)  # the largest d_bar
 FACTOR = PARAMS.velocity_factor
 SEED = 0
 
@@ -126,7 +126,7 @@ def _random_layout(rng: np.random.Generator) -> Layout:
             goal_x = 5.5
         try:
             return Layout.build(arena, obstacles, goal_x=goal_x)
-        except ValueError:  # an invalid layout, e.g. two obstacles that touch (D16)
+        except ValueError:  # an invalid layout, e.g. two obstacles that touch
             continue
 
 
@@ -152,7 +152,7 @@ def _enters(polygon: ConvexPolygon, p: Array, q: Array, depth: float) -> NDArray
 def _segments_are_free(layout: Layout, p: Array, q: Array) -> NDArray[np.bool_]:
     """Whether every segment ``[p_i, q_i]`` stays in the arena and out of every obstacle, up to ``INPUT_TOL``.
 
-    The obstacles are checked both as given and as extended by D16.
+    The obstacles are checked both as given and as extended.
     """
     ok = layout.arena.contains(p, tol=INPUT_TOL) & layout.arena.contains(q, tol=INPUT_TOL)  # the arena is convex
     for polygon in layout.obstacles + layout.blocked:
@@ -194,7 +194,7 @@ def test_step_returns_batches_and_leaves_its_inputs_untouched() -> None:
     ("p", "v", "u", "d", "message"),
     [
         ([[4.5, -1.0]], [[0.0, 0.0]], [[0.0, 0.0]], [[0.0, 0.0]], "free space"),  # inside O1
-        ([[4.5, -2.0]], [[0.0, 0.0]], [[0.0, 0.0]], [[0.0, 0.0]], "free space"),  # in the gap under O1 (D16)
+        ([[4.5, -2.0]], [[0.0, 0.0]], [[0.0, 0.0]], [[0.0, 0.0]], "free space"),  # in the gap under O1
         ([[1.0, 0.0]], [[1.3, 0.0]], [[0.0, 0.0]], [[0.0, 0.0]], "v_max"),
         ([[1.0, 0.0]], [[0.0, 0.0]], [[0.0, 0.0]], [[1.5, 0.0]], "disturbance"),
         ([[1.0, 0.0], [2.0, 0.0]], [[0.0, 0.0]], [[0.0, 0.0], [0.0, 0.0]], [[0.0, 0.0], [0.0, 0.0]], "shape"),
@@ -208,7 +208,7 @@ def test_invalid_inputs_are_rejected(p: ArrayLike, v: ArrayLike, u: ArrayLike, d
 
 
 def test_step_equals_the_linear_model_when_no_correction_acts() -> None:
-    """M2, M3, E2, E6: away from the walls and below the speed limit the step is x+ = A x + B u + B d."""
+    """Away from the walls and below the speed limit the step is x+ = A x + B u + B d."""
     rng = np.random.default_rng(SEED)
     n = 500
     p = rng.uniform([1.0, -1.0], [9.0, 1.0], size=(n, 2))  # at least 1 m from every wall of the tunnel
@@ -222,7 +222,7 @@ def test_step_equals_the_linear_model_when_no_correction_acts() -> None:
 
 
 def test_disturbance_enters_like_an_acceleration() -> None:
-    """M5: d is added to the saturated input, so it enters through B only, also at the walls."""
+    """d is added to the saturated input, so it enters through B only, also at the walls."""
     layout = _layout("slalom")
     rng = np.random.default_rng(SEED)
     n = 2000
@@ -238,20 +238,20 @@ def test_disturbance_enters_like_an_acceleration() -> None:
 
 
 def test_disturbance_is_not_saturated_with_the_input() -> None:
-    """M5: the commanded action is saturated first, then d is added: u = (2.5, 0), u + d = (1.5, 0)."""
+    """The commanded action is saturated first, then d is added: u = (2.5, 0), u + d = (1.5, 0)."""
     out = _step(_layout("tunnel"), [[2.0, 0.0]], [[0.0, 0.0]], [[5.0, 0.0]], [[-1.0, 0.0]])
     np.testing.assert_allclose(out.v_candidate, [[0.15, 0.0]], atol=1e-15)
 
 
 def test_commanded_action_is_saturated_radially() -> None:
-    """E1."""
+    """Stage 1 of the step: a command outside the input set is projected radially onto it."""
     u_cmd = np.array([[5.0, 0.0], [3.0, 4.0], [1.0, -1.0], [0.0, 0.0]])
     out = _step(_layout("tunnel"), np.tile([[2.0, 0.0]], (4, 1)), np.zeros((4, 2)), u_cmd)
     np.testing.assert_allclose(out.u, [[2.5, 0.0], [1.5, 2.0], [1.0, -1.0], [0.0, 0.0]], atol=1e-15)
 
 
 def test_speed_limiter_is_radial_and_the_speed_limit_always_holds() -> None:
-    """E3 and DL-F4: also with walls, saturated inputs and worst-case disturbances."""
+    """Also with walls, saturated inputs and worst-case disturbances."""
     layout = _layout("slalom")
     rng = np.random.default_rng(SEED)
     n = 3000
@@ -265,7 +265,7 @@ def test_speed_limiter_is_radial_and_the_speed_limit_always_holds() -> None:
 
 
 def test_speed_limiter_acts_before_the_wall_reaction() -> None:
-    """E3, DL-A4: the candidate velocity would reach the floor in one step, the limited one does not."""
+    """The candidate velocity would reach the floor in one step, the limited one does not."""
     diagonal = np.array([[1.0, -1.0]]) / np.sqrt(2.0)
     out = _step(_layout("tunnel"), [[2.0, -1.91]], PARAMS.v_max * diagonal, PARAMS.a_max * diagonal)
     assert np.linalg.norm(out.v_candidate) > PARAMS.v_max and PARAMS.dt * -out.v_candidate[0, 1] > 0.09
@@ -274,7 +274,7 @@ def test_speed_limiter_acts_before_the_wall_reaction() -> None:
 
 
 def test_head_on_impact_stops_at_the_wall() -> None:
-    """E4: the floor lets the agent travel 0.05 m, so v_y >= -0.05 / dt = -0.5."""
+    """The floor lets the agent travel 0.05 m, so v_y >= -0.05 / dt = -0.5."""
     out = _step(_layout("tunnel"), [[2.0, -1.95]], [[0.0, -1.2]])
     np.testing.assert_allclose(out.v_limited, [[0.0, -1.14]], atol=1e-12)
     np.testing.assert_allclose(out.v, [[0.0, -0.5]], atol=1e-12)
@@ -285,7 +285,7 @@ def test_head_on_impact_stops_at_the_wall() -> None:
 
 @pytest.mark.parametrize("gamma_w", [1.0, 0.0])
 def test_sliding_along_a_wall_is_damped_by_wall_friction(gamma_w: float) -> None:
-    """E5: tangential motion on the floor, and motion pushing into it, decay by (1 - gamma dt)(1 - gamma_w dt)."""
+    """Tangential motion on the floor, and motion pushing into it, decay by (1 - gamma dt)(1 - gamma_w dt)."""
     params = PhysicsParams(dt=0.1, a_max=2.5, v_max=1.2, gamma=0.5, gamma_w=gamma_w, d_bar=1.0)
     out = _step(_layout("tunnel"), [[2.0, -2.0], [2.0, -2.0]], [[1.0, 0.0], [1.0, -0.5]], params=params)
     factor = 1.0 - gamma_w * params.dt
@@ -296,7 +296,7 @@ def test_sliding_along_a_wall_is_damped_by_wall_friction(gamma_w: float) -> None
 
 
 def test_no_wall_friction_when_leaving_a_wall_or_off_the_face() -> None:
-    """E5: detaching from the floor; moving along the line of O1's top face, left of the obstacle."""
+    """Detaching from the floor; moving along the line of O1's top face, left of the obstacle."""
     out = _step(_layout("slalom"), [[2.0, -2.0], [3.9, 0.25]], [[1.0, 0.5], [-1.0, 0.0]])
     np.testing.assert_allclose(out.v, [[0.95, 0.475], [-0.95, 0.0]], atol=1e-12)
     assert not (out.friction.any() or out.wall_reaction.any() or out.contact.any())
@@ -304,7 +304,7 @@ def test_no_wall_friction_when_leaving_a_wall_or_off_the_face() -> None:
 
 @pytest.mark.parametrize("angle", [10.0, 30.0, 55.0, 80.0])
 def test_sliding_on_a_slanted_face_goes_on_until_friction_stops_it(angle: float) -> None:
-    """E4, E5: on a face that floating point cannot follow exactly, pushing along it and then coasting.
+    """On a face that floating point cannot follow exactly, pushing along it and then coasting.
 
     The tangential speed obeys s+ = (1 - gamma_w dt) ((1 - gamma dt) s + dt a), with a = 2 m/s^2 for
     eight steps and 0 afterwards; the wall reaction may only collect the face itself.
@@ -327,14 +327,14 @@ def test_sliding_on_a_slanted_face_goes_on_until_friction_stops_it(angle: float)
 
 
 def test_contact_flag() -> None:
-    """D14: contact means a wall reaction, or the new position on a face."""
+    """Contact means a wall reaction, or the new position on a face."""
     out = _step(_layout("tunnel"), [[2.0, -2.0], [2.0, -1.5], [2.0, -1.95]], [[0.0, 0.0], [0.5, 0.0], [0.0, -1.2]])
     assert out.contact.tolist() == [True, False, True]
     assert out.wall_reaction.tolist() == [False, False, True]
 
 
 def test_concave_corners_stop_the_agent() -> None:
-    """E4, D17: the floor is hit first; the corrected motion then hits the second wall."""
+    """The floor is hit first; the corrected motion then hits the second wall."""
     layout = _layout("slalom")
     floor = _face(layout, (-1, -2), (11, -2))
     left_wall = _face(layout, (-1, 2), (-1, -2))
@@ -348,7 +348,7 @@ def test_concave_corners_stop_the_agent() -> None:
 
 
 def test_convex_corner_needs_one_face() -> None:
-    """E4, D17: an obstacle is convex, so one face always suffices and the agent ends on it."""
+    """An obstacle is convex, so one face always suffices and the agent ends on it."""
     layout = _layout("slalom")
     top = _face(layout, (5, 0.25), (4, 0.25))
     left = _face(layout, (4, 0.25), (4, -3))
@@ -363,7 +363,7 @@ def test_convex_corner_needs_one_face() -> None:
 
 
 def test_at_a_vertex_the_face_needing_the_smaller_correction_goes_first() -> None:
-    """D17: from O1's top-left vertex, moving right and slightly down, the agent slides on the top face."""
+    """From O1's top-left vertex, moving right and slightly down, the agent slides on the top face."""
     layout = _layout("slalom")
     top = _face(layout, (5, 0.25), (4, 0.25))
     out = _step(layout, [[4.0, 0.25]], np.array([[0.8, -0.08]]) / FACTOR)
@@ -374,7 +374,7 @@ def test_at_a_vertex_the_face_needing_the_smaller_correction_goes_first() -> Non
 
 
 def test_no_phantom_contacts_near_a_vertex() -> None:
-    """E4: passing above O1's corner, moving next to the extension of a face, ending exactly on the vertex."""
+    """Passing above O1's corner, moving next to the extension of a face, ending exactly on the vertex."""
     v_hat = np.array([[0.8, -0.2], [-0.5, 0.3], [0.8, -0.8]])
     out = _step(_layout("slalom"), [[3.95, 0.30], [3.9, 0.2], [3.92, 0.33]], v_hat / FACTOR)
     assert not out.wall_reaction.any()
@@ -382,7 +382,7 @@ def test_no_phantom_contacts_near_a_vertex() -> None:
 
 
 def test_first_impact_ignores_faces_the_corrected_motion_misses() -> None:
-    """D17: the original segment also enters B, but after sliding on A's top face the agent passes above B."""
+    """The original segment also enters B, but after sliding on A's top face the agent passes above B."""
     arena = _box(-1.0, -1.0, 3.0, 3.0)
     layout = Layout.build(arena, [_box(0.0, 0.0, 1.0, 1.0), _box(1.01, 0.9, 1.2, 0.99)], goal_x=2.5)
     out = _step(layout, [[0.95, 1.02]], np.array([[0.8, -0.48]]) / FACTOR)
@@ -391,7 +391,7 @@ def test_first_impact_ignores_faces_the_corrected_motion_misses() -> None:
 
 
 def test_sliding_along_the_floor_cannot_pass_under_an_obstacle() -> None:
-    """D16: full thrust along the floor ends in the corner between the floor and O1."""
+    """Full thrust along the floor ends in the corner between the floor and O1."""
     layout = _layout("slalom")
     p, v = np.array([[3.0, -2.0]]), np.array([[1.0, 0.0]])
     for _ in range(100):
@@ -402,7 +402,7 @@ def test_sliding_along_the_floor_cannot_pass_under_an_obstacle() -> None:
 
 
 def test_random_layouts_are_never_penetrated() -> None:
-    """M6, E4: one step from random states, then long rollouts; the projection is checked against KKT."""
+    """One step from random states, then long rollouts; the projection is checked against KKT."""
     rng = np.random.default_rng(SEED)
     reactions = 0
     for layout in [_layout("slalom")] + [_random_layout(rng) for _ in range(8)]:
@@ -431,7 +431,7 @@ def test_random_layouts_are_never_penetrated() -> None:
 
 
 def test_entry_face_is_the_last_line_crossed() -> None:
-    """E4: the segment crosses the line of O1's top face left of the obstacle, then enters through its left face."""
+    """The segment crosses the line of O1's top face left of the obstacle, then enters through its left face."""
     layout = _layout("slalom")
     left = _face(layout, (4, 0.25), (4, -3))
     out = _step(layout, [[3.95, 0.2501]], np.array([[1.0, -0.01]]) / FACTOR)
@@ -440,7 +440,7 @@ def test_entry_face_is_the_last_line_crossed() -> None:
 
 
 def test_exact_ties_go_to_the_lowest_face_index() -> None:
-    """D17: a segment exactly through O1's top-left vertex; dyadic numbers make the tie exact."""
+    """a segment exactly through O1's top-left vertex; dyadic numbers make the tie exact."""
     layout = _layout("slalom")
     top, left = _face(layout, (5, 0.25), (4, 0.25)), _face(layout, (4, 0.25), (4, -3))
     assert top < left
@@ -453,7 +453,7 @@ def test_exact_ties_go_to_the_lowest_face_index() -> None:
 def test_a_start_inside_the_tolerance_band_neither_sinks_nor_sticks(
     v_hat: tuple[float, float], expected: tuple[float, float]
 ) -> None:
-    """E4: half a TOL inside O1's top face, sliding along it, then pushing into it."""
+    """Half a TOL inside O1's top face, sliding along it, then pushing into it."""
     layout = _layout("slalom")
     p = np.array([[4.5, 0.25 - 0.5 * TOL]])
     out = _step(layout, p, np.array([v_hat]) / FACTOR)
@@ -465,7 +465,7 @@ def test_a_start_inside_the_tolerance_band_neither_sinks_nor_sticks(
 def test_a_start_just_outside_the_arena_neither_sinks_nor_sticks(
     v_hat: tuple[float, float], expected: tuple[float, float]
 ) -> None:
-    """E4: 1.5 TOL below the floor (an accepted input), sliding along it, then pushing out of the arena."""
+    """1.5 TOL below the floor (an accepted input), sliding along it, then pushing out of the arena."""
     p = np.array([[2.0, -2.0 - 1.5 * TOL]])
     out = _step(_layout("tunnel"), p, np.array([v_hat]) / FACTOR)
     np.testing.assert_allclose(out.v_wall, [expected], atol=1e-12)
@@ -474,7 +474,7 @@ def test_a_start_just_outside_the_arena_neither_sinks_nor_sticks(
 
 
 def test_every_output_is_a_valid_input_even_just_beyond_the_tolerance() -> None:
-    """E4: rounding can end a step a little more than TOL inside O2; the next step accepts it and copes."""
+    """Rounding can end a step a little more than TOL inside O2; the next step accepts it and copes."""
     params = PhysicsParams(dt=0.1, a_max=2.5, v_max=1.2, gamma=0.5, gamma_w=1.0, d_bar=0.0)
     layout = _layout("slalom")
     first = _step(layout, [[4.5, 1.749999998]], [[0.0, 3.1578946773011966e-08]], params=params)
@@ -488,13 +488,13 @@ def test_every_output_is_a_valid_input_even_just_beyond_the_tolerance() -> None:
 
 @pytest.mark.parametrize(("overshoot", "reacts"), [(0.5 * TOL, False), (2.0 * TOL, True)])
 def test_ending_within_tol_beyond_a_wall_is_no_impact(overshoot: float, reacts: bool) -> None:
-    """E4: the tolerance applies to the arena walls too."""
+    """The tolerance applies to the arena walls too."""
     out = _step(_layout("tunnel"), [[2.0, -1.95]], [[0.0, -(0.05 + overshoot) / PARAMS.dt / FACTOR]])
     assert out.wall_reaction.tolist() == [reacts]
 
 
 def test_no_wall_friction_when_leaving_a_face_at_its_vertex() -> None:
-    """E5: from O1's top-left vertex straight up or to the left; from its top-right vertex to the right."""
+    """From O1's top-left vertex straight up or to the left; from its top-right vertex to the right."""
     v_hat = np.array([[0.0, 0.8], [-0.8, 0.0], [0.8, 0.0]])
     out = _step(_layout("slalom"), [[4.0, 0.25], [4.0, 0.25], [5.0, 0.25]], v_hat / FACTOR)
     assert not (out.friction.any() or out.wall_reaction.any())
@@ -502,7 +502,7 @@ def test_no_wall_friction_when_leaving_a_face_at_its_vertex() -> None:
 
 
 def test_huge_commands_are_saturated_without_overflow() -> None:
-    """E1: any finite command, however large, is saturated onto the boundary of U."""
+    """Any finite command, however large, is saturated onto the boundary of U."""
     commands = [[1e155, 0.0], [-1e300, 1e300], [1.7e308, 1.7e308]]  # the last norm overflows
     out = _step(_layout("tunnel"), [[2.0, 0.0]] * 3, np.zeros((3, 2)), commands)
     r = 2.5 / np.sqrt(2.0)
@@ -510,7 +510,7 @@ def test_huge_commands_are_saturated_without_overflow() -> None:
 
 
 def test_batch_equals_single_agents_bit_for_bit() -> None:
-    """E7: the scalar environment is a batch of one; a rollout gives exactly the same states either way."""
+    """The scalar environment is a batch of one; a rollout gives exactly the same states either way."""
     layout = _layout("slalom")
     rng = np.random.default_rng(SEED)
     n, steps = 32, 40

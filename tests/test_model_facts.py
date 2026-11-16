@@ -1,17 +1,15 @@
-"""Numerical checks of the facts M and F1-F6 of the thesis decision log (code rule C6).
+"""Numerical checks of the facts M and F1-F6 on the model, which the thesis proves in Appendix A.
 
-Ported from ``claude/verify_setup.py`` of the thesis project, now run against
-:mod:`hrlmpc.model`. These are numerical checks, not proofs; the proofs belong
-in the thesis. Every random draw comes from a seeded generator, so the tests
+They run against :mod:`hrlmpc.model`. These are numerical checks, not proofs. Every random draw comes from a seeded generator, so the tests
 are deterministic.
 
-    M   compact form x+ = A x + B u + B d of the update equations
-    F1  the disk of radius a_max/gamma is invariant for every u in U (d = 0)
-    F2  V is robustly control invariant iff d_bar <= min(a_max + gamma v_max, v_max/dt)
-    F3  the speed-limiter saturation is absorbed into the disturbance disk
-    F4  speed saturation and wall reaction are mutually compatible
-    F5  the inner regular N-gon of a disk loses a fraction 1 - cos(pi/N) of the radius
-    F6  isotropy: without state constraints, the positions reachable in H steps
+    M compact form x+ = A x + B u + B d of the update equations
+    F1 the disk of radius a_max/gamma is invariant for every u in U (d = 0)
+    F2 V is robustly control invariant iff d_bar <= min(a_max + gamma v_max, v_max/dt)
+    F3 the speed-limiter saturation is absorbed into the disturbance disk
+    F4 speed saturation and wall reaction are mutually compatible
+    F5 the inner regular N-gon of a disk loses a fraction 1 - cos(pi/N) of the radius
+    F6 isotropy: without state constraints, the positions reachable in H steps
         with a disk-shaped U form a disk
 """
 

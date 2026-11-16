@@ -1,19 +1,18 @@
-"""Typed configuration of PPO_MPC and PPO_MPC_reachability, loaded from YAML (code rule C2, decision log D24,
-D27, D28, D34, D37, D38, D45, D46).
+"""Typed configuration of PPO_MPC and PPO_MPC_reachability, loaded from YAML.
 
 ``configs/agent/ppo_mpc.yaml`` (architecture 3) and
 ``configs/agent/ppo_mpc_reachability.yaml`` (architecture 4) hold the hierarchy
-(segment length ``H``, the radius of the targets of D24 and the price of the
-Worker's progress, D66, a diagnostic for this Worker), the rollout, the
+(segment length ``H``, the radius of the targets and the price of the
+Worker's progress, a diagnostic for this Worker), the rollout, the
 Manager's network and PPO update, the MPC Worker's settings, the targets of
 architecture 4 (``reachability``: ``null`` for architecture 3, else the number
-of support directions of D38), the evaluation protocol and the runtime. The
-Manager and the hierarchy are hPPO's; the Worker is the tube MPC of D31-D34
-with the waypoint cost of D37, designed for the disturbance of the
+of support directions), the evaluation protocol and the runtime. The
+Manager and the hierarchy are hPPO's; the Worker is the tube MPC
+with the waypoint cost, designed for the disturbance of the
 environment's configuration. The two architectures differ only in the
 targets. Unknown, missing or repeated keys are errors. The horizon that
 leaves room to stop after a segment depends on the environment's physics:
-``mpc.horizon: null`` lets the Worker's problem take the smallest one (D45),
+``mpc.horizon: null`` lets the Worker's problem take the smallest one,
 and the training checks an explicit one
 (:meth:`hrlmpc.mpc_problem.MPCProblem.check_segments`). This module does not
 import PyTorch or the solvers.
@@ -35,7 +34,7 @@ from hrlmpc.utils.strict_yaml import load_yaml
 
 @dataclass(frozen=True)
 class ReachabilityConfig:
-    """The targets of architecture 4 (D38).
+    """The targets of architecture 4.
 
     Attributes:
         directions: Support directions of the inner approximation of the reachable set, at least 3.
@@ -86,7 +85,7 @@ class PPOMPCConfig:
 
     @property
     def algorithm(self) -> str:
-        """``ppo_mpc_reachability`` with the reachable targets of D38, ``ppo_mpc`` otherwise."""
+        """``ppo_mpc_reachability`` with the reachable targets, ``ppo_mpc`` otherwise."""
         return "ppo_mpc" if self.reachability is None else "ppo_mpc_reachability"
 
     @property

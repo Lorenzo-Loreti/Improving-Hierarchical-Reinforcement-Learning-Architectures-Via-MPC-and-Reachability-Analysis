@@ -1,13 +1,12 @@
-"""Evaluation of a deterministic controller from fixed starts, and a minimum-time bound (decision log D6, D20, F7,
-D43, D50).
+"""Evaluation of a deterministic controller from fixed starts, and a minimum-time bound.
 
-Protocol (D20). A controller is evaluated from the points of a grid on the
+Protocol. A controller is evaluated from the points of a grid on the
 spawn box, at rest, one episode per start, in an environment of its own:
-evaluation steps are not samples (D6) and never influence training. The
+evaluation steps are not samples and never influence training. The
 evaluation environment is seeded by the configuration, the same seed for every
 run, so that every evaluation of every run meets the same disturbances.
 
-Actions (D43, D50). At every evaluation point the training loops evaluate the
+Actions. At every evaluation point the training loops evaluate the
 policy twice, with the mean of each Beta and then with its mode
 (:data:`EVAL_ACTIONS`). The evaluation with the mean keeps the names of steps
 7-10 (``eval/``, ``eval_mpc/``, ...); the one with the mode adds ``_mode``
@@ -15,7 +14,7 @@ policy twice, with the mean of each Beta and then with its mode
 run's ``evaluations.jsonl`` holds one line per evaluation and action
 (:func:`append_details`).
 
-Compute (D50). :func:`evaluate` times every call of the controller, which
+Compute. :func:`evaluate` times every call of the controller, which
 acts for all the agents at once, and divides it by their number: the
 controller's time per agent and step, under ``time/`` with the evaluation's
 duration (:meth:`Evaluation.timing`), apart from the metrics of the outcome,
@@ -25,15 +24,15 @@ whole batch at once, it is less than the latency of a single agent's decision.
 The largest is that of the slowest step, a mean over the agents; the slowest
 single decision of an MPC Worker is its own ``eval_mpc/solve_ms_max``.
 
-Oracle (D44). Where a table of the minimum times of the starts exists
+Oracle. Where a table of the minimum times of the starts exists
 (:mod:`hrlmpc.oracle`), the evaluation also measures each successful episode
 against the oracle's minimum time, as ``oracle_gap_mean`` and
-``oracle_gap_max``; the bound of F7 below stays as ``arrival_gap_*``, for
+``oracle_gap_max``; the bound below stays as ``arrival_gap_*``, for
 continuity with the runs of steps 7-10. Without a table the oracle gaps are NaN.
 
-Minimum-time bound (F7). Let ``A = a_max + d_bar`` and
+Minimum-time bound. Let ``A = a_max + d_bar`` and
 
-    s_0 = ||v_0||,    s_(k+1) = min((1 - gamma T_s) s_k + T_s A, v_max).
+    s_0 = ||v_0||, s_(k+1) = min((1 - gamma T_s) s_k + T_s A, v_max).
 
 Every stage of the environment step after the input keeps the speed below
 this recursion: ``||v~|| <= (1 - gamma T_s) ||v|| + T_s A``, the speed limiter
@@ -137,7 +136,7 @@ def progress_bound(
     speed0: ArrayLike = 0.0,
     accel: float | None = None,
 ) -> FloatArray:
-    """``p_x0`` plus the longest distance coverable in ``k = 0, ..., steps`` steps (F7).
+    """``p_x0`` plus the longest distance coverable in ``k = 0, ..., steps`` steps.
 
     Since ``p_x`` moves at most by the distance covered, this bounds ``p_x``
     after ``k`` steps on every layout.
@@ -188,7 +187,7 @@ def min_steps_lower_bound(
     """Fewest steps after which :func:`progress_bound` reaches ``goal_x``.
 
     Without obstacles this bounds the length of every successful episode from
-    below (F7); with ``d_bar = 0``, from rest and away from the walls, it is
+    below; with ``d_bar = 0``, from rest and away from the walls, it is
     the minimum. :func:`arrival_lower_bound` covers layouts with obstacles.
 
     Args:
@@ -232,7 +231,7 @@ def arrival_lower_bound(
     accel: float | None = None,
     distance: ArrayLike | None = None,
 ) -> IntArray:
-    """Fewest steps in which any episode from each start can reach the goal region (F7).
+    """Fewest steps in which any episode from each start can reach the goal region.
 
     The steps needed to cover ``d_free``, the shortest free path to the goal
     region. Where that path is the straight segment along ``+x`` (always
@@ -266,14 +265,14 @@ class Evaluation:
     Attributes:
         starts: ``(N, 2)`` initial positions, at rest.
         episodes: Statistics of the episode from each start, in the order of ``starts``.
-        lower_bounds: ``(N,)`` bounds of F7 on the length of a successful
+        lower_bounds: ``(N,)`` bounds on the length of a successful
             episode from each start (:func:`arrival_lower_bound`); the
             minimum time in the tunnel without disturbance.
         path_lengths: ``(N,)`` lengths of the shortest free paths to the goal region.
         step_ms: The controller's wall-clock time [ms] at every step, per agent: each call, for all the
-            agents, divided by their number (D50); empty if not measured.
+            agents, divided by their number; empty if not measured.
         duration_s: Wall-clock time [s] of the whole evaluation; NaN if not measured.
-        oracle_steps: ``(N,)`` minimum times of the oracle (D44) from each start, or ``None`` without a table.
+        oracle_steps: ``(N,)`` minimum times of the oracle from each start, or ``None`` without a table.
     """
 
     starts: FloatArray
@@ -290,7 +289,7 @@ class Evaluation:
         The arrival gap of a successful episode is its length relative to the
         bound, minus one; its mean and maximum are over the successful
         episodes only (NaN if there are none). The oracle gap is the same
-        against the oracle's minimum time (D44), NaN without a table.
+        against the oracle's minimum time, NaN without a table.
         ``contact_fraction`` is the fraction of episodes with at least one
         contact step.
         """
@@ -316,7 +315,7 @@ class Evaluation:
         return {prefix + key: value for key, value in result.items()}
 
     def timing(self, name: str) -> dict[str, float]:
-        """The compute of the evaluation ``name`` (e.g. ``"eval_mode"``) under ``time/`` (D50): the controller's
+        """The compute of the evaluation ``name`` (e.g. ``"eval_mode"``) under ``time/``: the controller's
         mean and largest time per agent and step [ms], and the evaluation's duration [s]; NaN where not measured.
         """
         measured = self.step_ms.size > 0
@@ -352,14 +351,14 @@ def evaluate(
     """Run one episode of ``controller`` from each start, at rest.
 
     The episodes run in a fresh :class:`~hrlmpc.env.NavigationEnv` with one
-    agent per start, so they do not count as training samples (D6). The
+    agent per start, so they do not count as training samples. The
     disturbances of an agent depend only on ``seed`` and its start index.
 
     All the agents start together, and agents that have finished keep being
     stepped (in new episodes, ignored) until the last one finishes. A
     controller with memory is reset first, so it sees the episodes it is
-    evaluated on from their first step, in step with each other (D29). Every
-    call of the controller is timed (D50).
+    evaluated on from their first step, in step with each other. Every
+    call of the controller is timed.
 
     Args:
         controller: Deterministic map from observations to commands.
@@ -368,12 +367,12 @@ def evaluate(
         seed: Seed of the evaluation environment.
         inputs: Whether the commands are accelerations, as from an MPC Worker
             (:meth:`~hrlmpc.env.NavigationEnv.step_input`), instead of actions
-            in the square mapped by D15; by default the controller's ``inputs``
+            in the square mapped; by default the controller's ``inputs``
             attribute, if it has one, and ``False`` otherwise.
-        oracle: The oracle table of the layout for these starts (D44), if there is one.
+        oracle: The oracle table of the layout for these starts, if there is one.
 
     Returns:
-        The episodes, the bounds of F7 and the oracle's minimum times for each start, and the compute.
+        The episodes, the bounds and the oracle's minimum times for each start, and the compute.
 
     Raises:
         ValueError: If ``starts`` is not ``(N, 2)`` or a start is not
@@ -390,7 +389,7 @@ def evaluate(
         inputs = bool(declared)
     elif declared is not None and bool(declared) != inputs:
         raise ValueError(f"inputs={inputs} contradicts the controller's inputs={declared}")
-    plain = dataclasses.replace(config, task=dataclasses.replace(config.task, curriculum=None))  # explicit starts (D62)
+    plain = dataclasses.replace(config, task=dataclasses.replace(config.task, curriculum=None))  # explicit starts
     env = NavigationEnv(plain, num_envs=len(points), seed=seed, autoreset=True)
     obs = env.reset(positions=points)
     reset = getattr(controller, "reset", None)
@@ -414,7 +413,7 @@ def evaluate(
 
 
 def evaluation_name(action: str, group: str = "") -> str:
-    """The name under which an evaluation with ``action`` logs the metrics of ``group`` (D50): ``eval`` and
+    """The name under which an evaluation with ``action`` logs the metrics of ``group``: ``eval`` and
     ``eval_<group>`` for the mean, as in steps 7-10; ``eval_mode`` and ``eval_mode_<group>`` for the mode.
 
     Raises:
@@ -428,7 +427,7 @@ def evaluation_name(action: str, group: str = "") -> str:
 
 def append_details(path: str | Path, evaluation: Evaluation, *, env_steps: int, action: str) -> None:
     """Append the per-start results of ``evaluation`` with ``action`` to a run's ``evaluations.jsonl`` as one line,
-    with the sample counter and the action (D50).
+    with the sample counter and the action.
 
     Raises:
         ValueError: If ``action`` is not one of :data:`EVAL_ACTIONS`; nothing is written then.
@@ -444,7 +443,7 @@ def _gap(value: float) -> str:
 
 
 def console_line(metrics: Mapping[str, Any]) -> str:
-    """The outcome of the evaluations of both actions in one line, ``mean/mode`` (D50): success rate, unshaped
+    """The outcome of the evaluations of both actions in one line, ``mean/mode``: success rate, unshaped
     return, mean arrival gap and contact fraction."""
     mean, mode = (f"{evaluation_name(action)}/" for action in EVAL_ACTIONS)
 

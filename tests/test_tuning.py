@@ -1,4 +1,4 @@
-"""Tests of the tuning configurations (decision log D55, D65): eight files per architecture that cover the
+"""Tests of the tuning configurations: eight files per architecture that cover the
 2 x 2 x 2 design, nothing but the three knobs changed; the shipped file of an architecture is its selected
 configuration."""
 
@@ -19,9 +19,8 @@ AGENTS = Path(__file__).resolve().parents[1] / "configs" / "agent"
 LEARNING_RATES = (3.0e-4, 1.0e-3)
 ENTROPIES = (0.01, 0.03)
 SELECTED = {"ppo": 5, "hppo": 3, "ppo_mpc": 7, "ppo_mpc_reachability": 7}
-"""The configuration each shipped file equals: the selections of 2026-10-14 (PPO c5, hPPO c3) and of
-2026-10-16 (both MPC architectures c7: the Manager's learning rate 1e-3 and entropy 0.03, the Worker's effort
-weight 0.1, the same for both by the tie-break of D65 among configurations within the noise)."""
+"""The configuration each shipped file equals: the selections of the tuning (PPO c5, hPPO c3, both MPC architectures c7: the Manager's learning
+rate 1e-3 and entropy 0.03, the Worker's effort weight 0.1)."""
 
 
 def _design(third: tuple[Any, Any]) -> list[tuple[float, float, Any]]:
@@ -67,7 +66,7 @@ def test_the_ppo_tuning_files_cover_the_design() -> None:
         config = load_ppo_config(AGENTS / "tuning" / "ppo" / f"c{index}.yaml")
         assert config == _ppo_variant(base, lr, entropy, num_steps), index
     assert load_ppo_config(AGENTS / "tuning" / "ppo" / f"c{SELECTED['ppo']}.yaml") == base
-    assert base.update.learning_rate == 1.0e-3 and base.rollout.num_steps == 128  # c5 (2026-10-14)
+    assert base.update.learning_rate == 1.0e-3 and base.rollout.num_steps == 128  # c5
 
 
 def test_the_hppo_tuning_files_cover_the_design() -> None:

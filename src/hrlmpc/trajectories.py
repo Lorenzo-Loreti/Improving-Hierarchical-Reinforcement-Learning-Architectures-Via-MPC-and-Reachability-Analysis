@@ -1,13 +1,13 @@
-"""Replays of trained policies (decision log D74): the evaluation episodes of a run recorded step by step, for the
+"""Replays of trained policies: the evaluation episodes of a run recorded step by step, for the
 figures of the learned behaviour.
 
 The final policies of a run (its ``final.pt``) are evaluated once more
-exactly as the training loop evaluates them — the mode of the Beta (D57),
+exactly as the training loop evaluates them — the mode of the Beta,
 the grid of starts on the spawn box, the run's evaluation seed, so that the
 episodes are those of the last evaluation point of the run — and every
 episode is recorded: the positions and velocities at every step, whether the
 step made contact and, for the hierarchies, the target in force. A box and a
-grid of starts can be given instead, as for the escape evaluation of D70.
+grid of starts can be given instead, as for the escape evaluation.
 Nothing is trained and nothing is scored here: the outcomes (success, length,
 contact) are those of :func:`hrlmpc.evaluation.evaluate`, which
 :func:`record_episodes` mirrors step by step. The replay goes to
@@ -60,7 +60,7 @@ class Recording:
         starts: ``(N, 2)`` initial positions, at rest.
         positions: ``(N, L + 1, 2)`` positions before every step and after the last, ``L`` the longest episode.
         velocities: ``(N, L + 1, 2)`` velocities, likewise.
-        contact: ``(N, L)`` whether each step made contact (D14); ``False`` beyond the episode.
+        contact: ``(N, L)`` whether each step made contact; ``False`` beyond the episode.
         length: ``(N,)`` lengths of the episodes.
         success: ``(N,)`` whether each episode reached the goal region.
         targets: ``(N, L, 2)`` targets in force at every step for a hierarchy, ``None`` for a flat policy.
@@ -83,12 +83,12 @@ class Replay(Recording):
         run: The name of the run directory.
         algorithm: The run's algorithm (``ppo``, ``hppo``, ``ppo_mpc``, ``ppo_mpc_reachability``).
         name: The replay's name: :data:`DEFAULT_NAME` from the evaluation grid, the given one from a box.
-        action: ``"mean"`` or ``"mode"`` (D43).
+        action: ``"mean"`` or ``"mode"``.
         seed: The seed of the evaluation environment.
         checkpoint: The checkpoint file replayed.
         env: The run's environment configuration, as in its ``config.yaml`` (the layout for the figures).
         segment_steps: ``H`` of the hierarchy, 0 for a flat policy.
-        target_radius: The length scale of the targets [m] (D24), NaN for a flat policy.
+        target_radius: The length scale of the targets [m], NaN for a flat policy.
     """
 
     run: str
@@ -211,7 +211,7 @@ def replay_run(
         box: The box of the starts; by default the run's spawn box.
         grid: The grid's shape over the box; by default the run's evaluation grid.
         name: The replay's name; :data:`DEFAULT_NAME` by default, which a box must not use.
-        action: ``"mean"`` or ``"mode"`` (D43).
+        action: ``"mean"`` or ``"mode"``.
         seed: The evaluation's seed; by default the run's evaluation seed.
         checkpoint: The checkpoint file.
         worker_factory: As in :func:`hrlmpc.reevaluate.load_controller`.
@@ -315,7 +315,7 @@ def load_replay(path: str | Path) -> Replay:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Command line: replay the final policies of every run below the given paths and write the files."""
-    parser = argparse.ArgumentParser(description="Record the evaluation episodes of trained policies (D74).")
+    parser = argparse.ArgumentParser(description="Record the evaluation episodes of trained policies.")
     parser.add_argument("paths", nargs="+", help="run directories or directories containing runs")
     parser.add_argument("--name", default=None, help=f"name of the replay ({DEFAULT_NAME!r} from the evaluation grid)")
     parser.add_argument(
@@ -324,7 +324,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--grid", type=int, nargs=2, default=None, metavar=("NX", "NY"),
                         help="grid over the box; by default the run's evaluation grid")
-    parser.add_argument("--action", choices=EVAL_ACTIONS, default="mode", help="the deterministic action (D43)")
+    parser.add_argument("--action", choices=EVAL_ACTIONS, default="mode", help="the deterministic action")
     parser.add_argument("--seed", type=int, default=None, help="evaluation seed; by default the run's")
     parser.add_argument("--checkpoint", default="final.pt", help="checkpoint file in the run directory")
     args = parser.parse_args(argv)

@@ -1,4 +1,4 @@
-"""Tests of the action map of decision log D15 (row AM1) and of the Beta's mode of D43."""
+"""Tests of the action map and of the Beta's mode."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def test_the_map_is_a_bijection_with_the_given_inverse() -> None:
 
 
 def test_the_area_distortion_lies_between_one_half_and_one_times_a_max_squared() -> None:
-    """D15/AM1: the Jacobian determinant is a_max^2 cos^2(theta) with |theta| <= 45 degrees off the nearest axis."""
+    """The Jacobian determinant is a_max^2 cos^2(theta) with |theta| <= 45 degrees off the nearest axis."""
     rng = np.random.default_rng(SEED)
     x = rng.uniform(-0.99, 0.99, (2000, 2))
     x = x[np.abs(np.abs(x[:, 0]) - np.abs(x[:, 1])) > 1e-3]  # away from the diagonals, where the map has a kink
@@ -58,7 +58,7 @@ def test_the_map_is_continuous_at_zero() -> None:
 
 
 def test_the_mode_of_a_beta_is_its_densest_point() -> None:
-    """D43: ``(alpha - 1) / (alpha + beta - 2)`` for concentrations of at least 1, the point of largest density."""
+    """``(alpha - 1) / (alpha + beta - 2)`` for concentrations of at least 1, the point of largest density."""
     stats = pytest.importorskip("scipy.stats")
     rng = np.random.default_rng(SEED)
     alpha, beta = 1.5 + rng.exponential(3.0, 20), 1.5 + rng.exponential(3.0, 20)
@@ -69,7 +69,7 @@ def test_the_mode_of_a_beta_is_its_densest_point() -> None:
 
 
 def test_the_mode_reaches_the_edge_where_the_mean_cannot() -> None:
-    """D43: a concentration of 1 puts the mode on the edge; both 1, the uniform density, give the mean, 1/2; and
+    """a concentration of 1 puts the mode on the edge; both 1, the uniform density, give the mean, 1/2; and
     the mode always lies beyond the mean, on its side of 1/2."""
     np.testing.assert_array_equal(beta_mode([1.0, 3.0, 1.0], [2.0, 1.0, 1.0]), [0.0, 1.0, 0.5])
     rng = np.random.default_rng(SEED)

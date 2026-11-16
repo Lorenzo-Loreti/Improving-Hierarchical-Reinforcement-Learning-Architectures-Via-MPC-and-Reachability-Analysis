@@ -1,9 +1,5 @@
-# Slalom with the sparse reward of D51 and WITHOUT the spawn curriculum of D62: the exploration setting of
-# D63, in which the training starts are uniform on the spawn box from the first episode. Identical to
-# configs/env/slalom_sparse.yaml apart from task.curriculum (a test). The runs of 2026-10-13 under
-# runs/slalom_sparse_nocur/ were made with this configuration.
-# Values from the thesis decision log: D9 (physics), D11 (geometry), D13 (task and reward),
-# D14 (contact penalty), D51 (sparse reward) and D63 (exploration setting).
+# Slalom with the sparse reward and WITHOUT the spawn curriculum: the exploration setting, in which the training starts are uniform on the spawn box from the first episode. Identical to
+# configs/env/slalom_sparse.yaml apart from task.curriculum (a test).
 
 
 physics:
@@ -26,13 +22,13 @@ geometry:
 task:
   spawn: {x: [0.0, 2.0], y: [-1.0, 1.0]}  # initial position uniform on this box, at rest (the evaluation's starts)
   horizon: 200     # truncation after this many steps
-  curriculum: null # no curriculum (D63): the exploration setting, starts uniform on the spawn box from the first episode
+  curriculum: null # no curriculum: the exploration setting, starts uniform on the spawn box from the first episode
 
 reward:            # all coefficients non-negative; signs in hrlmpc.config.RewardConfig
   time_penalty: 1.0
   success_bonus: 1000.0
-  progress_coef: 0.0           # sparse reward (D51): no progress term; 10.0 in the shaped files
-  shaping_discount: 1.0        # no effect with progress_coef 0; kept as in the shaped files (D22)
+  progress_coef: 0.0           # sparse reward: no progress term; 10.0 in the shaped files
+  shaping_discount: 1.0        # no effect with progress_coef 0; kept as in the shaped files
   effort_coef: 0.01            # times ||u||^2 / a_max^2
   contact_impulse_coef: 50.0   # c_n [s/m], times the wall's velocity correction
   contact_step_coef: 1.0       # c_s, per step in contact

@@ -1,4 +1,4 @@
-"""Training of hPPO on the navigation environment (architecture 2; decision log D6, D20, D24-D29, D43, D50).
+"""Training of hPPO on the navigation environment (architecture 2).
 
 Usage, from the repository root::
 
@@ -7,27 +7,27 @@ Usage, from the repository root::
 
 A PPO Manager sets a target every ``H`` steps on the common loop of
 :mod:`hrlmpc.hierarchy`; a PPO Worker, conditioned on the target (and, in
-the ablation of D75, on local map features), acts at every step. Both levels
-are the in-house PPO of D19. After each rollout the
+the ablation, on local map features), acts at every step. Both levels
+are the in-house PPO. After each rollout the
 Worker is updated on its own transitions (GAE at its discount, bootstrapping at
-every end of an episode, D25), then the Manager on the segments that ended
-(GAE at ``gamma^tau``, D27).
+every end of an episode), then the Manager on the segments that ended
+(GAE at ``gamma^tau``).
 
 Each seed writes the run directory ``<runs-dir>/<layout>/hppo/seed<seed>-<UTC time>`` with:
 
-    config.yaml        resolved configuration: environment, agent, budget, seed
-    meta.json          provenance and machine (hrlmpc.utils.runlog)
-    metrics.jsonl      one record per update and per evaluation point, keyed by the sample counters
-    evaluations.jsonl  per-start results of every evaluation, one line per action
-    final.pt           both levels' weights, optimizer states and target statistics
+    config.yaml resolved configuration: environment, agent, budget, seed
+    meta.json provenance and machine (hrlmpc.utils.runlog)
+    metrics.jsonl one record per update and per evaluation point, keyed by the sample counters
+    evaluations.jsonl per-start results of every evaluation, one line per action
+    final.pt both levels' weights, optimizer states and target statistics
 
 The budget counts samples, physical steps during training summed over the
-agents (D6); the Manager's decisions are counted alongside. It must be a whole
+agents; the Manager's decisions are counted alongside. It must be a whole
 number of updates and of evaluation intervals. Evaluations run the
 deterministic hierarchy in an environment of their own, draw no random number
-of the training and are not samples (D20, D29). Every evaluation point runs it
-with the means of both policies and then with their modes (D43), logged under
-``eval/`` and ``eval_mode/`` (D50). The compute is logged under ``time/``: per
+of the training and are not samples. Every evaluation point runs it
+with the means of both policies and then with their modes, logged under
+``eval/`` and ``eval_mode/``. The compute is logged under ``time/``: per
 update the time of the rollout and that of both levels' updates, per evaluation
 its duration and the hierarchy's time per agent and step.
 """
@@ -76,8 +76,8 @@ from hrlmpc.utils.seeding import seed_everything
 
 
 def hierarchy_of(env_config: EnvConfig, hppo_config: HPPOConfig) -> Hierarchy:
-    """Targets and segments of hPPO (D24, D27), with the Manager's discount, the Worker's price (D25, D66) and, if
-    configured, the Worker's local map features of the layout (D75). The Worker's input width is
+    """Targets and segments of hPPO, with the Manager's discount, the Worker's price and, if
+    configured, the Worker's local map features of the layout. The Worker's input width is
     :attr:`~hrlmpc.hierarchy.Hierarchy.worker_input_size`."""
     features = hppo_config.hierarchy.worker_map_features
     return disk_hierarchy(
@@ -95,7 +95,7 @@ def hierarchy_of(env_config: EnvConfig, hppo_config: HPPOConfig) -> Hierarchy:
 def deterministic_controller(
     manager: PPOAgent, worker: PPOAgent, hierarchy: Hierarchy, action: str = "mean"
 ) -> HierarchicalController:
-    """The deterministic hierarchy of an evaluation (D29, D43): both policies with the same statistic, their means
+    """The deterministic hierarchy of an evaluation: both policies with the same statistic, their means
     or their modes; fresh for each evaluation.
 
     Raises:
@@ -158,7 +158,7 @@ def train(
     Args:
         env_config: Layout, physics, task and reward.
         hppo_config: Hierarchy, both levels, rollout, evaluation and runtime.
-        budget: Samples (D6); a positive multiple of the samples per update
+        budget: Samples; a positive multiple of the samples per update
             and of the evaluation interval.
         seed: Seed of PyTorch, NumPy and the training environment.
         run_dir: Directory of the run; it must not exist.
@@ -166,7 +166,7 @@ def train(
         repo_dir: Directory inside the git checkout, for ``meta.json``; by
             default the package's own directory.
         echo: Receives one line per evaluation; ``None`` keeps quiet.
-        oracle_dir: Where to look for the oracle table of the layout (D44); by default the repository's
+        oracle_dir: Where to look for the oracle table of the layout; by default the repository's
             ``configs/oracle/``. Without a table the oracle gaps are NaN.
 
     Returns:
@@ -241,7 +241,7 @@ def _train(
 
         def evaluate_now() -> None:
             metrics: dict[str, float] = {}
-            for action in EVAL_ACTIONS:  # the means, then the modes (D43)
+            for action in EVAL_ACTIONS:  # the means, then the modes
                 name = evaluation_name(action)
                 controller = deterministic_controller(manager, worker, hierarchy, action)
                 result = evaluate(controller, env_config, starts, seed=hppo_config.evaluation.seed, oracle=oracle)
@@ -288,7 +288,7 @@ def _train(
             update_s = time.perf_counter() - tick
             training_time += rollout_s + update_s
             metrics.update(episode_metrics(rollout.episodes))
-            metrics.update(env.curriculum_metrics())  # the stage of the spawn curriculum, if any (D62)
+            metrics.update(env.curriculum_metrics())  # the stage of the spawn curriculum, if any
             metrics.update(_hierarchy_metrics(rollout))
             for level, (actor_rate, critic_rate) in rates.items():
                 metrics[f"{level}/learning_rate"] = actor_rate
@@ -311,8 +311,7 @@ def _train(
 
 
 def load_hierarchy(run_dir: str | Path, checkpoint: str = "final.pt") -> tuple[PPOAgent, PPOAgent, Hierarchy]:
-    """The Manager, the Worker and the hierarchy of a run, rebuilt from its ``config.yaml`` and a checkpoint. A
-    run from before D66 has no ``hierarchy.worker_progress_coef``: it is reloaded at the shaped price
+    """The Manager, the Worker and the hierarchy of a run, rebuilt from its ``config.yaml`` and a checkpoint. An older run has no ``hierarchy.worker_progress_coef``: it is reloaded at the shaped price
     (:func:`~hrlmpc.hppo_config.with_worker_price`), immaterial to the evaluation; not for continuing the
     training of a sparse run from before, whose Worker was paid no progress."""
     path = Path(run_dir)
@@ -338,7 +337,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--agent", type=Path, required=True, help="hPPO configuration, e.g. configs/agent/hppo.yaml")
     parser.add_argument(
-        "--budget", type=int, required=True, help="samples per run: physical steps summed over the agents (D6)"
+        "--budget", type=int, required=True, help="samples per run: physical steps summed over the agents"
     )
     parser.add_argument("--seeds", type=int, nargs="+", required=True, help="training seeds, one run each")
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="root of the run directories")

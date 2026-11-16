@@ -1,4 +1,4 @@
-"""Tests of the shortest free paths to the goal region (decision log D16, F7)."""
+"""Tests of the shortest free paths to the goal region."""
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ def test_the_slalom_paths_wind_through_both_gates() -> None:
 
 
 def test_paths_never_pass_between_an_obstacle_and_the_wall_it_touches() -> None:
-    """D16: O_1 touches the floor, so the floor is no gap under it."""
+    """O_1 touches the floor, so the floor is no gap under it."""
     layout = _layout("slalom")
     assert not segment_is_free(layout, [3.0, -2.0], [6.0, -2.0])
     over = math.hypot(1.0, 2.25) + 1.0 + math.hypot(2.0, 0.5) + 1.0 + 2.0

@@ -1,11 +1,10 @@
-"""Re-evaluation of trained policies from explicit starts (decision log D70): the escape from the trap.
+"""Re-evaluation of trained policies from explicit starts: the escape from the trap.
 
 The final policies of a run (its ``final.pt``) are evaluated once more, with
-the mode of the Beta (D57) by default, from the grid of starts over a box
-given on the command line instead of the spawn box: for the trap layout of
-D69, a grid inside the cavity of the U — starts the exploration setting never
+the mode of the Beta by default, from the grid of starts over a box
+given on the command line instead of the spawn box: for the trap layout, a grid inside the cavity of the U — starts the exploration setting never
 drew (the agents met the cavity on their own, if at all) and the main setting
-drew in its middle stages (D69 as amended on 2026-10-16): the exit from the
+drew in its middle stages: the exit from the
 dead end, learned or not. The same tool serves diagnoses from any box (the
 mouth of the U, a corridor). Nothing is trained; the results go to one line
 of ``reevaluations.jsonl`` in the run directory, with a name, and the summary
@@ -63,7 +62,7 @@ def load_controller(
 
     Args:
         run_dir: The run directory (``config.yaml`` and the checkpoint).
-        action: ``"mean"`` or ``"mode"`` (D43).
+        action: ``"mean"`` or ``"mode"``.
         num_agents: How many starts the controller will be evaluated from (the slots of an MPC Worker).
         checkpoint: The checkpoint file in the run directory.
         worker_factory: For the MPC architectures, builds the Worker from the problem and the number of slots;
@@ -194,7 +193,7 @@ def summarize_reevaluations(run_dirs: Sequence[str | Path], name: str) -> str:
     """The re-evaluation ``name`` of the runs, grouped as in :mod:`hrlmpc.analysis`: per run and as means over the
     group; a run without it is listed as missing."""
     runs = [load_run(p) for p in run_dirs]
-    lines: list[str] = [f"re-evaluation {name!r} (D70): the final policies from the given starts"]
+    lines: list[str] = [f"re-evaluation {name!r}: the final policies from the given starts"]
     header = (
         f"{'run':<28} {'success':>8} {'length':>8} {'contact':>8} {'gap':>8} {'return':>9}"
     )
@@ -225,7 +224,7 @@ def summarize_reevaluations(run_dirs: Sequence[str | Path], name: str) -> str:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Command line: re-evaluate every run below the given directories from a grid of starts and print the summary."""
-    parser = argparse.ArgumentParser(description="Re-evaluate trained policies from a grid of starts (D70).")
+    parser = argparse.ArgumentParser(description="Re-evaluate trained policies from a grid of starts.")
     parser.add_argument("paths", nargs="+", help="run directories or directories containing runs")
     parser.add_argument("--name", required=True, help="name of the re-evaluation, e.g. escape")
     parser.add_argument(
@@ -233,7 +232,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="box of the starts [m]",
     )
     parser.add_argument("--grid", type=int, nargs=2, default=(3, 3), metavar=("NX", "NY"), help="grid over the box")
-    parser.add_argument("--action", choices=EVAL_ACTIONS, default="mode", help="the deterministic action (D43)")
+    parser.add_argument("--action", choices=EVAL_ACTIONS, default="mode", help="the deterministic action")
     parser.add_argument("--seed", type=int, default=None, help="evaluation seed; by default the run's")
     parser.add_argument("--checkpoint", default="final.pt", help="checkpoint file in the run directory")
     args = parser.parse_args(argv)

@@ -1,4 +1,4 @@
-"""Seeding of every random number generator used by an experiment (code rule C3)."""
+"""Seeding of every random number generator used by an experiment."""
 
 from __future__ import annotations
 

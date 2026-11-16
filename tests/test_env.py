@@ -1,4 +1,4 @@
-"""Tests of the navigation MDP (rows M1, M5, E7, R1-R5, AM1, X5; decision log D6, D10, D13-D15, D18)."""
+"""Tests of the navigation MDP."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def _config(name: str = "slalom", **sections: dict[str, Any]) -> EnvConfig:
 
 
 def _phi(x: np.ndarray, config: EnvConfig) -> np.ndarray:
-    """Shaping potential of D13."""
+    """Shaping potential."""
     return -config.reward.progress_coef * np.maximum(config.geometry.goal_x - x, 0.0)
 
 
@@ -46,14 +46,14 @@ def test_reset_starts_every_agent_at_rest_in_the_spawn_box() -> None:
 
 
 def test_observations_are_normalized_with_fixed_bounds() -> None:
-    """D13: (p, v) mapped to [-1, 1] with the arena's bounding box and v_max."""
+    """(p, v) mapped to [-1, 1] with the arena's bounding box and v_max."""
     env = NavigationEnv(_config(), num_envs=1, seed=SEED)
     p = np.array([[-1.0, -2.0], [11.0, 2.0], [5.0, 0.0]])
     v = np.array([[1.2, 0.0], [0.0, -1.2], [0.6, 0.6]])
     np.testing.assert_allclose(env.observe(p, v), [[-1, -1, 1, 0], [1, 1, 0, -1], [0, 0, 0.5, 0.5]], atol=1e-15)
 
 
-def test_actions_are_mapped_onto_u_by_the_bijection_of_d15() -> None:
+def test_actions_are_mapped_onto_u_by_the_bijection() -> None:
     env = NavigationEnv(_config(physics={"d_bar": 0.0}), num_envs=3, seed=SEED)
     env.reset()
     x = np.array([[1.0, 1.0], [-0.5, 0.25], [0.0, 0.0]])
@@ -80,7 +80,7 @@ def test_invalid_actions_are_rejected(action: Any, message: str) -> None:
 
 
 def test_commanded_accelerations_are_saturated_and_the_correction_recorded() -> None:
-    """The MPC Worker's path: any finite command, saturated onto U by the physics (R4)."""
+    """The MPC Worker's path: any finite command, saturated onto U by the physics."""
     env = NavigationEnv(_config(physics={"d_bar": 0.0}), num_envs=2, seed=SEED)
     env.reset()
     out = env.step_input([[5.0, 0.0], [1.0, 1.0]])
@@ -89,7 +89,7 @@ def test_commanded_accelerations_are_saturated_and_the_correction_recorded() -> 
 
 
 def test_the_environment_steps_through_physics_step() -> None:
-    """E7, M5: the transition is the one of the single physics module, with the sampled disturbance."""
+    """The transition is the one of the single physics module, with the sampled disturbance."""
     config = _config()
     env = NavigationEnv(config, num_envs=16, seed=SEED)
     env.reset()
@@ -106,7 +106,7 @@ def test_the_environment_steps_through_physics_step() -> None:
 
 
 def test_disturbances_are_iid_uniform_on_the_disk() -> None:
-    """D10: uniform in area on D, independent of the state and of the actions."""
+    """Uniform in area on D, independent of the state and of the actions."""
     config = _config(physics={"d_bar": 1.0})
     a, b = NavigationEnv(config, num_envs=8, seed=SEED), NavigationEnv(config, num_envs=8, seed=SEED)
     a.reset()
@@ -153,7 +153,7 @@ def test_seeding_is_reproducible_and_independent_of_the_batch() -> None:
 
 @pytest.mark.parametrize("s", [1.0, 0.99])
 def test_reward_of_a_head_on_impact(s: float) -> None:
-    """D13, D14, D22: r = -1 - c_n ||dv_wall|| - c_s + (s Phi(p+) - Phi(p)) - effort, with p_x unchanged."""
+    """r = -1 - c_n ||dv_wall|| - c_s + (s Phi(p+) - Phi(p)) - effort, with p_x unchanged."""
     config = _config(physics={"d_bar": 0.0}, reward={"shaping_discount": s})
     env = NavigationEnv(config, num_envs=1, seed=SEED)
     env.reset(positions=[[2.0, -1.95]], velocities=[[0.0, -1.2]])
@@ -167,7 +167,7 @@ def test_reward_of_a_head_on_impact(s: float) -> None:
 
 @pytest.mark.parametrize("s", [1.0, 0.99])
 def test_reward_of_free_motion_with_full_thrust(s: float) -> None:
-    """D13, D22: effort -0.01 ||u||^2 / a_max^2 on the saturated input, progress shaping on p_x."""
+    """Effort -0.01 ||u||^2 / a_max^2 on the saturated input, progress shaping on p_x."""
     config = _config(physics={"d_bar": 0.0}, reward={"shaping_discount": s})
     env = NavigationEnv(config, num_envs=1, seed=SEED)
     env.reset(positions=[[2.0, 0.0]], velocities=[[0.0, 0.0]])
@@ -180,7 +180,7 @@ def test_reward_of_free_motion_with_full_thrust(s: float) -> None:
 
 
 def test_sparse_reward_has_no_progress_term() -> None:
-    """D51: with the sparse reward (progress_coef 0) every reward equals the unshaped reward of D13."""
+    """With the sparse reward (progress_coef 0) every reward equals the unshaped reward."""
     config = _config("slalom_sparse", physics={"d_bar": 0.0})
     assert config.reward.progress_coef == 0.0
     env = NavigationEnv(config, num_envs=2, seed=SEED)
@@ -191,7 +191,7 @@ def test_sparse_reward_has_no_progress_term() -> None:
 
 
 def test_effort_is_charged_on_the_saturated_input() -> None:
-    """D13: a command of 5 m/s^2 is saturated to a_max, so the effort term is 0.01, not 0.04."""
+    """a command of 5 m/s^2 is saturated to a_max, so the effort term is 0.01, not 0.04."""
     config = _config(physics={"d_bar": 0.0})
     env = NavigationEnv(config, num_envs=1, seed=SEED)
     env.reset(positions=[[2.0, 0.0]], velocities=[[0.0, 0.0]])
@@ -200,7 +200,7 @@ def test_effort_is_charged_on_the_saturated_input() -> None:
 
 
 def test_success_terminates_and_adds_the_bonus_to_the_other_terms() -> None:
-    """D13 correction 1: the bonus adds to the step's other terms; Phi vanishes on the goal region."""
+    """The bonus adds to the step's other terms; Phi vanishes on the goal region."""
     config = _config(physics={"d_bar": 0.0})
     env = NavigationEnv(config, num_envs=1, seed=SEED)
     env.reset(positions=[[9.95, 0.0]], velocities=[[1.0, 0.0]])
@@ -228,7 +228,7 @@ def test_truncation_after_the_horizon() -> None:
 
 
 def test_shaping_telescopes_without_discount() -> None:
-    """D22: with shaping discount 1 the progress terms of an episode sum to Phi(p_T) - Phi(p_0)."""
+    """With shaping discount 1 the progress terms of an episode sum to Phi(p_T) - Phi(p_0)."""
     config = _config(reward={"shaping_discount": 1.0}, task={"horizon": 60})
     env = NavigationEnv(config, num_envs=4, seed=SEED)
     env.reset()
@@ -243,7 +243,7 @@ def test_shaping_telescopes_without_discount() -> None:
 
 
 def test_contact_metrics_count_events_duration_and_impulse() -> None:
-    """R3: a head-on impact, then two steps at rest on the floor, a lift-off and a free step.
+    """a head-on impact, then two steps at rest on the floor, a lift-off and a free step.
 
     The impact takes two steps: the first reaction lets the agent reach the floor with 0.5 m/s,
     the second cancels that speed (0.475 m/s after the ambient friction).
@@ -261,7 +261,7 @@ def test_contact_metrics_count_events_duration_and_impulse() -> None:
 
 
 def test_correction_metrics_of_the_speed_limiter() -> None:
-    """R4: full thrust at top speed; the limiter removes 0.19 m/s, i.e. 1.9 m/s^2 of the commanded action."""
+    """Full thrust at top speed; the limiter removes 0.19 m/s, i.e. 1.9 m/s^2 of the commanded action."""
     env = NavigationEnv(_config(physics={"d_bar": 0.0}, task={"horizon": 1}), num_envs=1, seed=SEED)
     env.reset(positions=[[2.0, 0.0]], velocities=[[1.2, 0.0]])
     out = env.step([[1.0, 0.0]])
@@ -272,7 +272,7 @@ def test_correction_metrics_of_the_speed_limiter() -> None:
 
 
 def test_samples_are_physical_steps_summed_over_the_batch() -> None:
-    """D6: resets are not samples."""
+    """Resets are not samples."""
     env = NavigationEnv(_config(task={"horizon": 3}), num_envs=3, seed=SEED)
     env.reset()
     for _ in range(10):
@@ -320,13 +320,13 @@ def test_reset_with_given_states_is_validated() -> None:
      ("slalom_sparse_nocur_d05", 44.04)],
 )
 def test_shipped_configs_meet_the_criterion_of_the_contact_penalty(name: str, expected_threshold: float) -> None:
-    """D18, D22, D51: braking against a wall does not pay off.
+    """Braking against a wall does not pay off.
 
     One saved step is worth at most c_t + (1 - gamma_RL) B + c_e, plus, when
     the shaping discount s exceeds gamma_RL, the step's share (s - gamma_RL)
     c_p d of the progress reward, with d at most the arena's length to the
     goal line; c_n must exceed that worth divided by a_max dt. Without the
-    progress term (the sparse reward of D51) the bound is that of D18.
+    progress term (the sparse reward) the bound is that.
     """
     config = _config(name)
     r, p = config.reward, config.physics
@@ -336,7 +336,7 @@ def test_shipped_configs_meet_the_criterion_of_the_contact_penalty(name: str, ex
     step = r.time_penalty + (1.0 - gamma) * r.success_bonus + r.effort_coef
     step += max(r.shaping_discount - gamma, 0.0) * r.progress_coef * d_max
     threshold = step / (p.a_max * p.dt)
-    assert threshold == pytest.approx(expected_threshold)  # 44.04 with exact shaping too (D18)
+    assert threshold == pytest.approx(expected_threshold)  # 44.04 with exact shaping too
     assert r.contact_impulse_coef >= threshold
     assert r.contact_step_coef > 0.0
 
@@ -373,7 +373,7 @@ def test_final_observations_differ_from_the_next_ones_only_for_finished_episodes
 
 
 def test_episode_statistics_are_the_sums_of_the_step_quantities() -> None:
-    """R3, R4: over many episodes with resets, walls and disturbances, every statistic adds up the steps."""
+    """Over many episodes with resets, walls and disturbances, every statistic adds up the steps."""
     env = NavigationEnv(_config(physics={"d_bar": 1.0}, task={"horizon": 40}), num_envs=8, seed=SEED)
     env.reset()
     rng = np.random.default_rng(SEED)
@@ -407,7 +407,7 @@ def test_episode_statistics_are_the_sums_of_the_step_quantities() -> None:
 
 
 def test_discounted_shaping_telescopes() -> None:
-    """D13: with a shaping discount gamma the discounted terms of an episode sum to gamma^T Phi(p_T) - Phi(p_0)."""
+    """With a shaping discount gamma the discounted terms of an episode sum to gamma^T Phi(p_T) - Phi(p_0)."""
     config = _config(physics={"d_bar": 1.0}, task={"horizon": 30}, reward={"shaping_discount": 0.99})
     gamma = config.reward.shaping_discount
     env = NavigationEnv(config, num_envs=4, seed=SEED)

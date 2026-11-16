@@ -1,10 +1,8 @@
-"""Frozen copy of the pre-alignment flat PPO, the reference of the bit-identity test of D19 (tests/test_ppo.py).
+"""Frozen copy of an earlier stand-alone implementation of flat PPO, the reference of the bit-identity test
+(tests/test_ppo.py).
 
-The pre-alignment flat PPO was removed from the package in step 8 (decision log
-D21, D29). This file keeps, unchanged, ``algorithms/ppo/ppo.py`` and the four
-definitions it imported from ``algorithms/common.py`` (``layer_init``,
-``normalize_obs``, ``ScaledBeta``, ``RunningMeanStd``), both as at tag
-``pre-alignment`` (commit ff50d7c). Only this docstring, the import lines and
+The file keeps that implementation unchanged, with the four definitions it needs (``layer_init``,
+``normalize_obs``, ``ScaledBeta``, ``RunningMeanStd``). Only this docstring, the import lines and
 the order of the definitions are new. Do not edit the code below: it is the
 reference, not part of the package.
 """
@@ -22,7 +20,7 @@ import numpy as np
 from torch.distributions import Beta
 
 
-# ---- from algorithms/common.py at tag pre-alignment ----
+# ---- helper definitions of the earlier implementation ----
 
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
@@ -150,7 +148,7 @@ class RunningMeanStd:
         self.count = state["count"]
 
 
-# ---- algorithms/ppo/ppo.py at tag pre-alignment, without its import of common ----
+# ---- the earlier implementation of flat PPO ----
 
 class ActorNetwork(nn.Module):
     def __init__(self, obs_dim, act_dim):

@@ -1,4 +1,4 @@
-"""Tests of the flat PPO training loop and its command line (decision log D6, D13, D19, D20, D43, D50); they need
+"""Tests of the flat PPO training loop and its command line; they need
 PyTorch."""
 
 from __future__ import annotations
@@ -61,12 +61,12 @@ def test_a_short_run_writes_its_directory(tmp_path: Path) -> None:
     assert all(r["manager_decisions"] == 0 for r in records)
     assert updates[0]["train/updates"] == 1 and updates[1]["train/updates"] == 2
     assert updates[-1]["rollout/episodes"] >= 1  # the horizon of 10 ends episodes inside the rollouts
-    for record in evaluations:  # D43, D50: both actions in one record, each with the controller's time per step
+    for record in evaluations:  # Both actions in one record, each with the controller's time per step
         assert {"eval_mode/success_rate", "eval_mode/arrival_gap_max", "eval_mode/contact_fraction"} <= set(record)
         for name in ("eval", "eval_mode"):
             assert record[f"time/{name}_s"] > 0.0
             assert record[f"time/{name}_step_ms_max"] >= record[f"time/{name}_step_ms_mean"] > 0.0
-    for record in updates:  # D50: the compute of each update, apart
+    for record in updates:  # The compute of each update, apart
         assert record["time/rollout_s"] > 0.0 and record["time/update_s"] > 0.0
     np.testing.assert_allclose(
         [r["time/train_s"] for r in updates], np.cumsum([r["time/rollout_s"] + r["time/update_s"] for r in updates]),
@@ -74,19 +74,19 @@ def test_a_short_run_writes_its_directory(tmp_path: Path) -> None:
     )
     config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
     assert (config["algorithm"], config["budget"], config["seed"], config["discount"]) == ("ppo", 32, 1, 0.99)
-    assert config["env"]["reward"]["shaping_discount"] == 1.0  # D22
+    assert config["env"]["reward"]["shaping_discount"] == 1.0
     assert env_config_from_dict(config["env"]) == _env()
     assert ppo_config_from_dict(config["agent"]) == _ppo()
     details = [json.loads(line) for line in (run_dir / "evaluations.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [(d["env_steps"], d["action"]) for d in details] == [(n, a) for n in (0, 16, 32) for a in EVAL_ACTIONS]
     assert details[0]["starts"] == details[1]["starts"] == spawn_grid(_env().task.spawn, (2, 2)).tolist()
-    assert config["oracle_file"] is None and details[0]["oracle_steps"] is None  # no table in oracle_dir (D44)
+    assert config["oracle_file"] is None and details[0]["oracle_steps"] is None  # no table in oracle_dir
     assert all(r["eval/oracle_gap_mean"] is None for r in evaluations)  # NaN is logged as null
 
 
 def test_the_spawn_curriculum_is_used_and_logged(tmp_path: Path) -> None:
-    """D62: with a curriculum in the task, its stage is logged with the rollout metrics and the run's
-    configuration records it; the evaluation keeps the grid of D20. (The starts from the band are the
+    """With a curriculum in the task, its stage is logged with the rollout metrics and the run's
+    configuration records it; the evaluation keeps the grid. (The starts from the band are the
     environment's business: ``tests/test_curriculum.py``.)"""
     env = _env(task={"curriculum": {"x_start": 8.0, "step": 1.0, "window": 2, "threshold": 0.5}})
     assert env.task.curriculum is not None
@@ -99,13 +99,13 @@ def test_the_spawn_curriculum_is_used_and_logged(tmp_path: Path) -> None:
     assert config["env"]["task"]["curriculum"] == {"x_start": 8.0, "step": 1.0, "window": 2, "threshold": 0.5,
                                                    "exclude": [], "y": None}  # no exclusion, the spawn's height
     details = [json.loads(line) for line in (run_dir / "evaluations.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert details[0]["starts"] == spawn_grid(env.task.spawn, (2, 2)).tolist()  # the evaluation's starts: D20
+    assert details[0]["starts"] == spawn_grid(env.task.spawn, (2, 2)).tolist()  # the evaluation's starts
     plain = _records(train(_env(), _ppo(), budget=16, seed=1, run_dir=tmp_path / "plain", echo=None))
     assert not any("curriculum/stage" in r for r in plain)
 
 
 def test_the_oracle_table_of_the_layout_is_used_when_there_is_one(tmp_path: Path) -> None:
-    """D44: a table of the layout and starts in ``oracle_dir`` gives the oracle gaps and is recorded in the run."""
+    """a table of the layout and starts in ``oracle_dir`` gives the oracle gaps and is recorded in the run."""
     from hrlmpc.oracle import OracleEntry, OracleSettings, OracleTable, layout_signature
 
     env, ppo = _env(), _ppo()
@@ -155,7 +155,7 @@ def test_the_budget_must_end_on_an_update_and_an_evaluation(tmp_path: Path, budg
 
 
 def test_the_discount_is_the_agents_own(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """D22: GAE uses the agent configuration's discount, whatever the environment's shaping discount."""
+    """GAE uses the agent configuration's discount, whatever the environment's shaping discount."""
     import hrlmpc.train_ppo as module
 
     seen: list[Any] = []
@@ -174,7 +174,7 @@ def test_the_discount_is_the_agents_own(tmp_path: Path, monkeypatch: pytest.Monk
 
 
 def test_the_final_checkpoint_reproduces_the_last_evaluation(tmp_path: Path) -> None:
-    """With either action (D43)."""
+    """With either action."""
     env, ppo = _env(physics={"d_bar": 0.5}), _ppo()
     run_dir = train(env, ppo, budget=32, seed=2, run_dir=tmp_path / "run")
     agent = load_agent(run_dir)
@@ -188,7 +188,7 @@ def test_the_final_checkpoint_reproduces_the_last_evaluation(tmp_path: Path) -> 
 
 
 def test_every_evaluation_runs_the_mean_and_then_the_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """D43: at every evaluation point, the policy's mean and then its mode, from the same starts and seed."""
+    """At every evaluation point, the policy's mean and then its mode, from the same starts and seed."""
     import hrlmpc.train_ppo as module
 
     seen: list[Any] = []
@@ -215,11 +215,11 @@ def test_the_command_line_trains_every_seed(tmp_path: Path, capsys: pytest.Captu
     config = yaml.safe_load((runs[0] / "config.yaml").read_text(encoding="utf-8"))
     assert config["env_file"] == str(env_file) and config["agent_file"] == str(agent_file)
     out = capsys.readouterr().out
-    assert str(runs[1]) in out and "mean/mode: success" in out  # D50: both evaluations on the console
+    assert str(runs[1]) in out and "mean/mode: success" in out  # Both evaluations on the console
 
 
 def test_evaluations_do_not_change_the_training(tmp_path: Path) -> None:
-    """D6, D20: with evaluations every 16 or every 32 samples, training follows the same trajectory."""
+    """With evaluations every 16 or every 32 samples, training follows the same trajectory."""
     env = _env(physics={"d_bar": 0.5})
     often = train(env, _ppo(), budget=64, seed=5, run_dir=tmp_path / "often")
     rarely = train(env, _ppo(evaluation={"every": 32}), budget=64, seed=5, run_dir=tmp_path / "rarely")
@@ -241,7 +241,7 @@ def test_inconsistent_settings_are_refused_before_anything_is_written(tmp_path: 
         train(_env(), _ppo(), budget=32, seed=99, run_dir=tmp_path / "run")  # _ppo() evaluates with seed 99
     with pytest.raises(ValueError, match="overwrite"):
         train(_env(), _ppo(), budget=32, seed=1, run_dir=tmp_path / "run", provenance={"seed": 5})
-    with pytest.raises(ValueError, match="overwrite"):  # D44: the table is found by content, not declared
+    with pytest.raises(ValueError, match="overwrite"):  # The table is found by content, not declared
         train(_env(), _ppo(), budget=32, seed=1, run_dir=tmp_path / "run", provenance={"oracle_file": "x"})
     assert not (tmp_path / "run").exists()
     with pytest.raises(SystemExit):

@@ -1,4 +1,4 @@
-"""Tests of the targets of PPO_MPC_reachability without solvers (decision log D38-D40, D47, D49)."""
+"""Tests of the targets of PPO_MPC_reachability without solvers."""
 
 from __future__ import annotations
 
@@ -131,7 +131,7 @@ def _targets(support: Any = None, project: Any = None) -> ReachableTargets:
 
 
 def test_the_targets_map_the_square_onto_the_hull_about_its_centroid() -> None:
-    """D38: x -> m(x) of D15 -> the radial map onto the hull of the support points; the identity as projection."""
+    """x -> m(x) -> the radial map onto the hull of the support points; the identity as projection."""
     targets = _targets()
     p = np.array([[1.0, 0.5], [3.0, -1.0], [0.0, 0.0]])
     v = np.array([[0.4, 0.0], [0.0, -0.6], [0.0, 0.0]])
@@ -141,13 +141,13 @@ def test_the_targets_map_the_square_onto_the_hull_about_its_centroid() -> None:
     g = targets(actions, p, v)
     np.testing.assert_allclose(g[0], centre[0], atol=1e-12)
     np.testing.assert_allclose(g[1], centre[1] + np.array([-1.0, 1.0]) / np.sqrt(2.0), atol=1e-12)  # on the circle
-    assert np.linalg.norm(g[2] - centre[2]) == pytest.approx(math.cos(math.pi / 16), rel=1e-9)  # F5: the inner loss
+    assert np.linalg.norm(g[2] - centre[2]) == pytest.approx(math.cos(math.pi / 16), rel=1e-9)  # The inner loss
     # every target lies in the hull, and the map is one-to-one on a grid of actions
     grid = np.stack(np.meshgrid(np.linspace(-1, 1, 21), np.linspace(-1, 1, 21)), axis=-1).reshape(-1, 2)
     many = targets(grid, np.zeros_like(grid), np.zeros_like(grid))
     assert np.all(np.linalg.norm(many, axis=1) <= 1.0 + 1e-12)
     assert len(np.unique(np.round(many, 9), axis=0)) == len(grid)
-    # the action of a target is recovered through the inverse of D15
+    # the action of a target is recovered through the inverse
     m = many / np.array([radial_extent(convex_hull(support_directions(16)), [0.0, 0.0], t / max(np.linalg.norm(t),
                                                                                              1e-300))
                          if np.linalg.norm(t) > 0 else 1.0 for t in many])[:, None]
@@ -157,7 +157,7 @@ def test_the_targets_map_the_square_onto_the_hull_about_its_centroid() -> None:
 def test_the_projection_gives_the_target_and_its_distance_is_recorded() -> None:
     def project(x: np.ndarray, q: np.ndarray) -> tuple[np.ndarray, SearchReport]:
         # a wall at x = 0.5, a solver failure survived, an inaccurate exact solve, an uncertified exact plan and an
-        # inaccurate plan accepted on the way (D47, D49)
+        # inaccurate plan accepted on the way
         report = SearchReport(errors=1, exit=CONVERGED, exact_inaccurate=1, exact_uncertified=1, exact_accepted=1,
                               plan_accepted=1)
         return np.array([min(q[0], 0.5), q[1]]), report
@@ -270,7 +270,7 @@ def test_the_metrics_of_the_decisions() -> None:
 
 
 def test_the_reached_metrics_of_the_segments() -> None:
-    """D40: reached within r_p + 0.1 m at the end of a full segment."""
+    """Reached within r_p + 0.1 m at the end of a full segment."""
     assert REACHED_MARGIN == 0.1
     metrics = reached_metrics([0.0, 0.1, 0.16, 0.5], 0.15, "hierarchy")
     assert metrics == pytest.approx({"hierarchy/reached_rate": 0.5, "hierarchy/end_distance_mean": 0.19,

@@ -1,11 +1,9 @@
-"""The results of the experiment matrix for the thesis: cells, statistics, tables and figures (decision log D64,
-D67, D68, D71–D75).
+"""The results of the experiment matrix for the thesis: cells, statistics, tables and figures.
 
 Every number and every figure of the results chapter comes from the run
-directories through this module, never from values typed by hand: the author
-regenerates them with::
+directories through this module, never from values typed by hand. They are regenerated with::
 
-    python -m hrlmpc.results runs/final runs/final_h6 runs/final_h4 runs/final_map --out ../6_THESIS/figures/results
+    python -m hrlmpc.results runs/final runs/final_h6 runs/final_h4 runs/final_map --out results
 
 which writes ``summary.json`` (every number), ``report.md`` (the numbers,
 readable), ``tables/*.tex`` (``tabular`` bodies to ``\\input``) and
@@ -14,14 +12,14 @@ readable), ``tables/*.tex`` (``tabular`` bodies to ``\\input``) and
 Cells. A run belongs to the cell (layout, setting, disturbance level, variant,
 architecture) read from its configuration (:func:`classify`): the layout
 from the name of its environment file, the setting from the reward and the
-curriculum of its environment section (the dense reward of D71; the
-reverse spawn curriculum of D62 marks the main setting; neither marks the
-exploration setting of D63), the disturbance level from the physics, the
-variant from the name of its agent file (the agility sweep of D60,
-``_h6``/``_h4``; the map-aware hPPO Worker of D75, ``_map``).
+curriculum of its environment section (the dense reward; the
+reverse spawn curriculum marks the main setting; neither marks the
+exploration setting), the disturbance level from the physics, the
+variant from the name of its agent file (the agility sweep,
+``_h6``/``_h4``; the map-aware hPPO Worker, ``_map``).
 
-Times. The time to a level of "solved" (D67) is the sample counter at the
-first evaluation at which the mode of the policy met it (D57), censored at
+Times. The time to a level of "solved" is the sample counter at the
+first evaluation at which the mode of the policy met it, censored at
 the budget when the run never did. Groups of such times are summarised by
 the Kaplan–Meier estimate of the fraction solved and its median, compared by
 the two-sided log-rank test and, for the counts of solving seeds, by Fisher's
@@ -93,7 +91,7 @@ LAYOUTS: tuple[str, ...] = ("slalom", "trap", "tunnel")
 LEVELS: tuple[str, ...] = ("success", "gap_10", "strict", "contact_free")
 
 BUDGET = 204_800
-"""The budget of the final matrix (D64), in samples; the censoring time of the times to solve."""
+"""The budget of the final matrix, in samples; the censoring time of the times to solve."""
 
 TEXT_WIDTH_IN = 10.55 / 2.54
 """The width of the text block of the thesis (A5), in inches."""
@@ -170,7 +168,7 @@ def classify(run: Run) -> Cell:
     stem = PureWindowsPath(str(agent_file)).stem if agent_file else algorithm
     variant = stem[len(algorithm) + 1 :] if stem.startswith(algorithm + "_") else ""
     budget = run.budget
-    if budget is not None and budget != BUDGET:  # a budget other than the matrix's is a variant of its own (D79)
+    if budget is not None and budget != BUDGET:  # a budget other than the matrix's is a variant of its own
         variant = (variant + "_" if variant else "") + f"b{budget / BUDGET:g}"
     return Cell(layout, setting, d_bar, variant, algorithm)
 
@@ -222,7 +220,7 @@ def _weighted(records: Sequence[Mapping[str, Any]], key: str, weight: str) -> fl
 
 
 def run_metrics(run: Run) -> dict[str, Any]:
-    """The numbers of one run: the times to each level of D67 (mode, oracle gap), the area under the success
+    """The numbers of one run: the times to each level (mode, oracle gap), the area under the success
     curve, the final policy's success, gaps, contact and return, the training contact, the curriculum, the
     hierarchy's targets, the MPC Worker's and the reachable targets' counters, the compute.
 
@@ -484,7 +482,7 @@ def _budget(metrics: Sequence[Mapping[str, Any]]) -> int:
 
 def ablation_tests(metrics: Mapping[Cell, Sequence[Mapping[str, Any]]]) -> dict[str, dict[str, Any]]:
     """The tests between a variant of an architecture and its base in the same layout, setting and level
-    (the map-aware hPPO Worker of D75 against hPPO; the sweep's H against H = 10)."""
+    (the map-aware hPPO Worker against hPPO; the sweep's H against H = 10)."""
     tests: dict[str, dict[str, Any]] = {}
     for cell, ms in metrics.items():
         if not cell.variant:
@@ -503,7 +501,7 @@ def ablation_tests(metrics: Mapping[Cell, Sequence[Mapping[str, Any]]]) -> dict[
 
 def variant_tests(metrics: Mapping[Cell, Sequence[Mapping[str, Any]]]) -> dict[str, dict[str, dict[str, Any]]]:
     """The tests between a variant of an architecture and the other architectures of its layout, setting and
-    level without a variant (the map-aware hPPO Worker of D75 against PPO and the MPC hierarchies, say): per
+    level without a variant (the map-aware hPPO Worker against PPO and the MPC hierarchies, say): per
     variant cell, by the architecture compared with, Fisher on the counts of seeds at full success and the
     log-rank test on the times, the variant first."""
     tests: dict[str, dict[str, dict[str, Any]]] = {}
@@ -679,7 +677,7 @@ def logrank_table(summary: Summary) -> str:
 
 
 ESCAPE_NAMES = {"escape": "cavity", "mouth": "mouth"}
-"""The re-evaluations of D70 by name: inside the cavity of the trap and in front of its mouth."""
+"""The re-evaluations by name: inside the cavity of the trap and in front of its mouth."""
 
 
 def escape_rates(summary: Summary, layout: str = "trap") -> dict[str, dict[str, Any]]:
@@ -711,7 +709,7 @@ def escape_rates(summary: Summary, layout: str = "trap") -> dict[str, dict[str, 
 
 
 def escape_table(summary: Summary, layout: str = "trap") -> str:
-    """The escape evaluation of D70 on the trap: per architecture and setting, the success rate (per cent, mean
+    """The escape evaluation on the trap: per architecture and setting, the success rate (per cent, mean
     over the seeds) from the starts inside the cavity and from those in front of the mouth."""
     rates = escape_rates(summary, layout)
     lines = [
@@ -851,7 +849,7 @@ def disturbance_table(summary: Summary, layouts: Sequence[str] = LAYOUTS, nomina
 
 
 def sweep_table(summary: Summary, layout: str = "slalom", setting: str = "main") -> str:
-    """The agility sweep of D60: the hierarchies at ``H = 10`` (the shipped files) and at the sweep's segment
+    """The agility sweep: the hierarchies at ``H = 10`` (the shipped files) and at the sweep's segment
     lengths, the rows of :func:`results_table`."""
     lines = [_tabular("lcccccc"), "\\toprule", _RESULTS_HEADER]
     for variant, label in (("", "$H = 10$"), ("h6", "$H = 6$"), ("h4", "$H = 4$")):
@@ -1548,7 +1546,7 @@ def write_report(summary: Summary, path: Path) -> None:
             )
     escape = escape_rates(summary)
     if escape:
-        lines += ["", "## Escape evaluation (D70)", ""]
+        lines += ["", "## Escape evaluation", ""]
         for key, v in escape.items():
             per_seed = [round(x, 2) for x in v["success_per_seed"]]
             lines.append(

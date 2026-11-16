@@ -1,5 +1,4 @@
-"""Tests of the PPO_MPC training loop and its command line (decision log D6, D24-D35, D37-D40, D43, D45, D47,
-D49, D50); they need PyTorch.
+"""Tests of the PPO_MPC training loop and its command line; they need PyTorch.
 
 The Worker is a NumPy stand-in with the interface of :class:`hrlmpc.mpc_worker.MPCWorker`
 (a PD law toward the target), so the loop is tested without the solvers;
@@ -39,7 +38,7 @@ class PDWorker:
     ratio is NaN on slot 0 and ``slot (t + 1) / 100`` on the others, ``t`` the
     slot's steps since its last reset. ``steps`` records ``(slot, outcome, ratio)``
     of every call, so that tests can recompute the statistics, and ``left`` the
-    steps left in the segment that each call was given (D37).
+    steps left in the segment that each call was given.
     """
 
     instances: list[PDWorker] = []
@@ -181,7 +180,7 @@ def _recomputed(steps: list[tuple[int, int, float]], agents: int, prefix: str, l
 
 @pytest.mark.parametrize(("d_bar", "expected"), [(0.0, 15), (0.5, 16), (1.0, 17)])
 def test_the_horizon_follows_the_disturbance(d_bar: float, expected: int) -> None:
-    """D45: the shipped configuration leaves the horizon to the problem, H + the steps to stop; an explicit one
+    """The shipped configuration leaves the horizon to the problem, H + the steps to stop; an explicit one
     stays."""
     env = _env(physics={"d_bar": d_bar})
     assert train_ppo_mpc.problem_of(env, _config()).N == expected
@@ -208,19 +207,19 @@ def test_a_short_run_writes_its_directory(tmp_path: Path) -> None:
         expected = _recomputed(rollout_worker.steps[40 * k : 40 * (k + 1)], 2, "mpc")
         assert {key: record[key] for key in expected} == pytest.approx(expected)
         assert record["mpc/steps"] == 40.0  # every sample of the rollout, one Worker step each
-        # D47: how each search ended, here always the default of the stand-in
+        # How each search ended, here always the default of the stand-in
         assert record["mpc/exit_converged_count"] == 40.0
         assert all(record[f"mpc/exit_{name}_count"] == 0.0 for name in EXITS[1:])
         assert record["mpc/exact_inaccurate_count"] == record["mpc/exact_infeasible_count"] == 0.0
-        assert record["mpc/exact_uncertified_count"] == record["mpc/exact_accepted_count"] == 0.0  # D49
+        assert record["mpc/exact_uncertified_count"] == record["mpc/exact_accepted_count"] == 0.0
         assert record["mpc/best_applied_count"] == record["mpc/accepted_applied_count"] == 0.0
         assert not any(k.startswith("worker/") and not k.startswith("worker/reward") for k in record)  # no learning
-        assert record["time/rollout_s"] > 0.0 and record["time/update_s"] > 0.0  # D50
+        assert record["time/rollout_s"] > 0.0 and record["time/update_s"] > 0.0
     np.testing.assert_allclose(
         [r["time/train_s"] for r in updates], np.cumsum([r["time/rollout_s"] + r["time/update_s"] for r in updates]),
         rtol=1e-12,
     )
-    for record in evaluations:  # D43, D50: the evaluation with the mode under its own names, and the compute
+    for record in evaluations:  # The evaluation with the mode under its own names, and the compute
         assert {"eval_mode/success_rate", "eval_mode_mpc/steps", "eval_mode_mpc/solve_ms_mean",
                 "eval_mode_mpc/exit_best_count", "eval_mode_hierarchy/reached_rate"} <= set(record)
         assert record["eval_mpc/steps"] == record["eval_mode_mpc/steps"] == 60.0  # 4 agents, episodes of 15 steps
@@ -231,7 +230,7 @@ def test_a_short_run_writes_its_directory(tmp_path: Path) -> None:
         (n, a) for n in (0, 40, 80) for a in EVAL_ACTIONS
     ]
     config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
-    assert rollout_worker.problem.N == 15 == eval_worker.problem.N  # the automatic horizon at d_bar = 0 (D45)
+    assert rollout_worker.problem.N == 15 == eval_worker.problem.N  # the automatic horizon at d_bar = 0
     assert config["algorithm"] == "ppo_mpc" and config["agent"]["mpc"]["horizon"] == 15  # stated in the run
     assert rollout_worker.num_slots == 2 and eval_worker.num_slots == 4
     assert rollout_worker.closed and eval_worker.closed
@@ -240,7 +239,7 @@ def test_a_short_run_writes_its_directory(tmp_path: Path) -> None:
 
 
 def test_the_evaluation_counts_only_the_steps_of_the_evaluated_episodes(tmp_path: Path) -> None:
-    """D29: agents that finished keep being stepped; their steps are no evaluation statistics."""
+    """Agents that finished keep being stepped; their steps are no evaluation statistics."""
     PDWorker.instances.clear()
     env = _env(geometry={"goal_x": 3.0})  # the starts at x = 2 arrive, those at x = 0 do not
     run_dir = train(env, _config(), budget=40, seed=2, run_dir=tmp_path / "run", worker_factory=PushWorker, echo=None)
@@ -249,7 +248,7 @@ def test_the_evaluation_counts_only_the_steps_of_the_evaluated_episodes(tmp_path
     assert [d["action"] for d in details] == list(EVAL_ACTIONS) * len(evaluations)
     eval_worker = PDWorker.instances[1]
     calls = 0
-    for k, record in enumerate(evaluations):  # the mean's steps, then the mode's (D43)
+    for k, record in enumerate(evaluations):  # the mean's steps, then the mode's
         for prefix, detail in (("eval_mpc", details[2 * k]), ("eval_mode_mpc", details[2 * k + 1])):
             lengths = detail["length"]
             assert lengths == [15, 15, 11, 11]
@@ -263,7 +262,7 @@ def test_the_evaluation_counts_only_the_steps_of_the_evaluated_episodes(tmp_path
 
 
 def test_every_evaluation_runs_the_mean_and_then_the_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """D43: the Manager's mean and then its mode, with the same Worker, every slot of which is reset before each."""
+    """The Manager's mean and then its mode, with the same Worker, every slot of which is reset before each."""
     seen: list[str] = []
     original = train_ppo_mpc.evaluate
 
@@ -303,8 +302,8 @@ def test_the_budget_must_end_on_an_update_and_an_evaluation(tmp_path: Path, budg
 
 
 def test_a_horizon_without_room_to_stop_after_a_segment_is_refused(tmp_path: Path) -> None:
-    """D37: an explicit horizon must satisfy N >= H + the steps to stop from the planned speed, 15 at d_bar = 0
-    and 16 at 0.5 (the automatic one of D45 always does); checked before any Worker is built or anything is
+    """An explicit horizon must satisfy N >= H + the steps to stop from the planned speed, 15 at d_bar = 0
+    and 16 at 0.5 (the automatic one always does); checked before any Worker is built or anything is
     written."""
     PDWorker.instances.clear()
     with pytest.raises(ValueError, match="N >= 15"):
@@ -317,7 +316,7 @@ def test_a_horizon_without_room_to_stop_after_a_segment_is_refused(tmp_path: Pat
 
 
 def test_the_worker_gets_the_steps_left_in_each_segment(tmp_path: Path) -> None:
-    """D37: in training and in the evaluations, H - j at step j of a segment; the evaluated agents start together."""
+    """In training and in the evaluations, H - j at step j of a segment; the evaluated agents start together."""
     PDWorker.instances.clear()
     train(_env(), _config(), budget=40, seed=1, run_dir=tmp_path / "run", worker_factory=PDWorker, echo=None)
     rollout_worker, eval_worker = PDWorker.instances
@@ -393,7 +392,7 @@ def test_the_saved_manager_reproduces_the_last_evaluation(tmp_path: Path) -> Non
 
     command = MPCCommand(PDWorker(problem, 4), ObservationMap.from_config(env))
     details = _details(run_dir)
-    for action in EVAL_ACTIONS:  # D43
+    for action in EVAL_ACTIONS:
         controller = HierarchicalController(hierarchy, manager.deterministic_policy(action), command.as_worker())
         result = evaluate(controller, env, spawn_grid(env.task.spawn, (2, 2)), seed=99)
         last = [d for d in details if d["action"] == action][-1]
@@ -402,7 +401,7 @@ def test_the_saved_manager_reproduces_the_last_evaluation(tmp_path: Path) -> Non
 
 
 def test_a_run_from_before_the_regularizer_is_loaded_without_it(tmp_path: Path) -> None:
-    """D46: the ``config.yaml`` of a run of steps 9 and 10 has no ``mpc.start_weight``; its Worker had no
+    """The ``config.yaml`` of a run of steps 9 and 10 has no ``mpc.start_weight``; its Worker had no
     regularizer, so :func:`load_manager` rebuilds it with ``start_weight = 0``, at any disturbance."""
     run_dir = train(_env(physics={"d_bar": 0.5}), _config(), budget=40, seed=2, run_dir=tmp_path / "run",
                     worker_factory=PDWorker, echo=None)
@@ -416,7 +415,7 @@ def test_a_run_from_before_the_regularizer_is_loaded_without_it(tmp_path: Path) 
 
 
 def test_a_run_from_before_the_workers_price_is_loaded_at_the_shaped_price(tmp_path: Path) -> None:
-    """D66: the ``config.yaml`` of a run from before has no ``hierarchy.worker_progress_coef``; its reload, which
+    """The ``config.yaml`` of a run from before has no ``hierarchy.worker_progress_coef``; its reload, which
     only evaluates the deterministic policy, takes the shaped reward's 10 (the price is immaterial there)."""
     run_dir = train(_env(), _config(), budget=40, seed=2, run_dir=tmp_path / "run", worker_factory=PDWorker,
                     echo=None)
@@ -430,7 +429,7 @@ def test_a_run_from_before_the_workers_price_is_loaded_at_the_shaped_price(tmp_p
 
 
 def test_the_learning_rates_are_constant_unless_annealed(tmp_path: Path) -> None:
-    """Pinned to a learning rate of 3e-4 (the shipped file carries the selection of D65, 1e-3)."""
+    """Pinned to a learning rate of 3e-4 (the shipped file carries the selection, 1e-3)."""
     constant = _config(manager__update__learning_rate=3e-4)
     run_dir = train(_env(), constant, budget=160, seed=1, run_dir=tmp_path / "constant", worker_factory=PDWorker,
                     echo=None)
@@ -447,7 +446,7 @@ def test_the_learning_rates_are_constant_unless_annealed(tmp_path: Path) -> None
 
 def test_the_manager_is_updated_on_its_segments_at_its_own_discount(tmp_path: Path,
                                                                      monkeypatch: pytest.MonkeyPatch) -> None:
-    """D27: the Manager's batch is the rollout's segments with the GAE at gamma^tau and the configured lambda."""
+    """The Manager's batch is the rollout's segments with the GAE at gamma^tau and the configured lambda."""
     import hrlmpc.ppo as ppo_module
     import hrlmpc.train_hppo as train_hppo
     from hrlmpc.hierarchy import segment_gae
@@ -494,7 +493,7 @@ def test_the_manager_is_updated_on_its_segments_at_its_own_discount(tmp_path: Pa
 
 
 def test_evaluations_do_not_change_the_training(tmp_path: Path) -> None:
-    """D6, D20: with evaluations every 40 or every 80 samples, training follows the same trajectory."""
+    """With evaluations every 40 or every 80 samples, training follows the same trajectory."""
     env = _env(physics={"d_bar": 0.5})
     often = train(env, _config(mpc__horizon=16), budget=160, seed=5, run_dir=tmp_path / "often",
                   worker_factory=PDWorker, echo=None)
@@ -553,7 +552,7 @@ def test_the_command_line_trains_every_seed(tmp_path: Path, capsys: pytest.Captu
     config = yaml.safe_load((runs[0] / "config.yaml").read_text(encoding="utf-8"))
     assert config["env_file"] == str(env) and config["agent_file"] == str(agent)
     out = capsys.readouterr().out
-    assert "run written to" in out and "mean/mode: success" in out and "| solve" in out  # D50
+    assert "run written to" in out and "mean/mode: success" in out and "| solve" in out
     with pytest.raises(SystemExit):
         main(["--env", str(env), "--agent", str(agent), "--budget", "40", "--seeds", "1", "1"])
     with pytest.raises(SystemExit):
@@ -561,7 +560,7 @@ def test_the_command_line_trains_every_seed(tmp_path: Path, capsys: pytest.Captu
 
 
 # --------------------------------------------------------------------------
-# Architecture 4: the reachable targets (D38-D40)
+# Architecture 4: the reachable targets
 # --------------------------------------------------------------------------
 
 
@@ -570,7 +569,7 @@ def _reach_config(**changes: Any) -> PPOMPCConfig:
 
 
 def test_architecture_4_trains_on_its_projected_targets(tmp_path: Path) -> None:
-    """D38, D39: the Worker gets the projected targets, and the decisions are logged under reach/ and eval_reach/."""
+    """The Worker gets the projected targets, and the decisions are logged under reach/ and eval_reach/."""
     PDWorker.instances.clear()
     DiskTargetsStandIn.instances.clear()
     DiskTargetsStandIn.projected.clear()
@@ -587,12 +586,12 @@ def test_architecture_4_trains_on_its_projected_targets(tmp_path: Path) -> None:
                 "reach/projection_failure_count", "hierarchy/reached_rate"} <= set(r) for r in updates)
     assert all({"eval_reach/decisions", "eval_hierarchy/reached_rate", "eval_mode_reach/decisions",
                 "eval_mode_hierarchy/reached_rate", "eval_mode_reach/projection_exit_best_count"} <= set(r)
-               for r in evaluations)  # D43, D50
+               for r in evaluations)
     for record in updates:
         assert record["reach/projection_mean"] == pytest.approx(0.01)  # the stand-in's shift
         assert record["reach/projection_failure_count"] == 0.0
-        assert record["reach/projection_exit_converged_count"] == record["reach/decisions"]  # D47
-        assert record["reach/projection_exact_accepted_count"] == 0.0  # D49
+        assert record["reach/projection_exit_converged_count"] == record["reach/decisions"]
+        assert record["reach/projection_exact_accepted_count"] == 0.0
     # the decisions of training: one per segment, those of the first update included
     assert sum(r["reach/decisions"] for r in updates) == sum(r["hierarchy/segments"] for r in updates) + 2
     # every target the Worker steered to was a projected one, held for its whole segment
@@ -606,7 +605,7 @@ def test_architecture_4_trains_on_its_projected_targets(tmp_path: Path) -> None:
 @pytest.mark.parametrize("d_bar", [0.0, 0.5])
 def test_the_reached_rate_counts_the_full_segments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
                                                    d_bar: float) -> None:
-    """D40: within r_p + 0.1 m of the target at the end of a segment of H steps; r_p = 0.065 m at d_bar = 0.5."""
+    """Within r_p + 0.1 m of the target at the end of a segment of H steps; r_p = 0.065 m at d_bar = 0.5."""
     rollouts: list[Any] = []
     collect = train_ppo_mpc.collect_hierarchical_rollout
 
@@ -631,7 +630,7 @@ def test_the_reached_rate_counts_the_full_segments(tmp_path: Path, monkeypatch: 
 
 
 def test_the_evaluation_counts_the_segments_and_decisions_of_the_evaluated_episodes(tmp_path: Path) -> None:
-    """D29, D40: the agents from x = 2 reach the goal at x = 2.9 in exactly 10 steps, so their episodes end with
+    """The agents from x = 2 reach the goal at x = 2.9 in exactly 10 steps, so their episodes end with
     their first segment: their second decision and their first segment's end, both at step 10, do not count."""
     PDWorker.instances.clear()
     DiskTargetsStandIn.by_side = True  # agents at y = 1 are shifted 2 cm, those at y = -1 not at all
@@ -644,7 +643,7 @@ def test_the_evaluation_counts_the_segments_and_decisions_of_the_evaluated_episo
     evaluations = [r for r in _records(run_dir) if "eval/success_rate" in r]
     details = _details(run_dir)
     assert len(details) == 2 * len(evaluations)
-    for k, record in enumerate(evaluations):  # both actions (D43)
+    for k, record in enumerate(evaluations):  # both actions
         for prefix, detail in (("eval", details[2 * k]), ("eval_mode", details[2 * k + 1])):
             assert detail["length"] == [15, 15, 10, 10]  # starts (0, -1), (0, 1), (2, -1), (2, 1)
             assert record[f"{prefix}_reach/decisions"] == 4 + 2  # all four at step 0, the two from x = 0 at step 10

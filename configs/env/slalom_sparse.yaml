@@ -1,8 +1,6 @@
-# Slalom with the sparse reward of decision log D51, the main reward of the comparison:
+# Slalom with the sparse reward, the main reward of the comparison:
 # configs/env/slalom.yaml with only the progress term removed (progress_coef 0), so
 # the reward is the time penalty, the success bonus, the contact penalty and the effort.
-# Values from the thesis decision log: D9 (physics), D11 (geometry), D13 (task and
-# reward), D14 (contact penalty) and D51 (sparse reward).
 
 physics:
   dt: 0.1          # sampling time T_s [s]
@@ -24,7 +22,7 @@ geometry:
 task:
   spawn: {x: [0.0, 2.0], y: [-1.0, 1.0]}  # initial position uniform on this box, at rest (the evaluation's starts)
   horizon: 200     # truncation after this many steps
-  curriculum:      # reverse spawn curriculum of the training starts (D62); absent in the shaped files
+  curriculum:      # reverse spawn curriculum of the training starts; absent in the shaped files
     x_start: 8.0   # the first band is [8, 10] x [-1, 1], the shape of the spawn box; the last band is the spawn box
     step: 1.0      # the band slides back by 1 m per stage: nine stages
     window: 50     # episodes started in the stage over which the success rate is measured
@@ -33,8 +31,8 @@ task:
 reward:            # all coefficients non-negative; signs in hrlmpc.config.RewardConfig
   time_penalty: 1.0
   success_bonus: 1000.0
-  progress_coef: 0.0           # sparse reward (D51): no progress term; 10.0 in the shaped files
-  shaping_discount: 1.0        # no effect with progress_coef 0; kept as in the shaped files (D22)
+  progress_coef: 0.0           # sparse reward: no progress term; 10.0 in the shaped files
+  shaping_discount: 1.0        # no effect with progress_coef 0; kept as in the shaped files
   effort_coef: 0.01            # times ||u||^2 / a_max^2
   contact_impulse_coef: 50.0   # c_n [s/m], times the wall's velocity correction
   contact_step_coef: 1.0       # c_s, per step in contact

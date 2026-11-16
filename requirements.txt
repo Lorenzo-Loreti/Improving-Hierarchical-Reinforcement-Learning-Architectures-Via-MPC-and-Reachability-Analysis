@@ -1,6 +1,4 @@
-# Locked reference environment (decision log D5): every third-party package
-# has the version it had in the pre-alignment environment
-# (requirements-pre-alignment.txt). Install into a Python 3.12 virtual
+#  Locked reference environment: the versions of every third-party package. Install into a Python 3.12 virtual
 # environment with
 #     python -m pip install -r requirements.txt
 # The lock was taken on Windows (CPython 3.12, win_amd64). On other platforms

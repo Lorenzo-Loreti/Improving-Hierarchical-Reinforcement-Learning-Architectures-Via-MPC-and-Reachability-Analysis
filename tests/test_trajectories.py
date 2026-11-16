@@ -1,4 +1,4 @@
-"""Tests of the replays of trained policies (decision log D74): the evaluation episodes of a run recorded step by
+"""Tests of the replays of trained policies: the evaluation episodes of a run recorded step by
 step, for the figures of the learned behaviour. The recording loop is tested with hand-made controllers; the
 run-level functions need PyTorch and, for the MPC architecture, use a stand-in Worker as ``tests/test_reevaluate.py``
 does."""
@@ -102,7 +102,7 @@ def _check_geometry(recording: Recording, env: EnvConfig) -> None:
 
 
 def test_the_recording_holds_the_episodes_of_the_evaluation_step_by_step() -> None:
-    """D74: one episode per start, at rest, the same as :func:`hrlmpc.evaluation.evaluate` runs them; the positions
+    """One episode per start, at rest, the same as :func:`hrlmpc.evaluation.evaluate` runs them; the positions
     before every step and after the last, the velocities, the contact flags; NaN beyond each episode."""
     env = _env(d_bar=1.0)
     starts = spawn_grid(env.task.spawn, (3, 2))
@@ -265,7 +265,7 @@ def _runs(tmp_path: Path) -> dict[str, Path]:
 
 
 def test_the_replay_of_a_run_is_its_evaluation_recorded(tmp_path: Path) -> None:
-    """D74: the final policy of a run, with the mode (D57), from the run's evaluation grid and with its evaluation
+    """The final policy of a run, with the mode, from the run's evaluation grid and with its evaluation
     seed; the outcomes are those of the evaluation of the loaded controller."""
     from hrlmpc.reevaluate import load_controller
 

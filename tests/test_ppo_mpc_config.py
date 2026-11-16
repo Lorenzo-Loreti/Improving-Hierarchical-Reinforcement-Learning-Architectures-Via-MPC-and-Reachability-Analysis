@@ -1,5 +1,4 @@
-"""Tests of the PPO_MPC and PPO_MPC_reachability configurations (code rule C2, decision log D24, D27, D28, D34,
-D37, D38, D45, D46)."""
+"""Tests of the PPO_MPC and PPO_MPC_reachability configurations."""
 
 from __future__ import annotations
 
@@ -33,9 +32,9 @@ def _data() -> dict[str, Any]:
 def test_the_shipped_configuration_is_the_decided_one() -> None:
     config = load_ppo_mpc_config(SHIPPED)
     hppo = load_hppo_config(REPO / "configs" / "agent" / "hppo.yaml")
-    # the Manager, the hierarchy, the rollout and the evaluation are hPPO's (D34); since the tuning of D65 each
+    # the Manager, the hierarchy, the rollout and the evaluation are hPPO's; since the tuning each
     # architecture carries its own selection: the Manager is hPPO's pre-tuning one (c1) with the two knobs of
-    # the MPC architectures' selection c7 (2026-10-16), the learning rate 1e-3 and the entropy coefficient 0.03
+    # the MPC architectures' selection c7, the learning rate 1e-3 and the entropy coefficient 0.03
     pre_tuning = load_hppo_config(REPO / "configs" / "agent" / "tuning" / "hppo" / "c1.yaml")
     assert config.manager == dataclasses.replace(
         pre_tuning.manager,
@@ -45,8 +44,8 @@ def test_the_shipped_configuration_is_the_decided_one() -> None:
     assert config.rollout == hppo.rollout
     assert config.evaluation == hppo.evaluation
     assert config.runtime == hppo.runtime
-    # the Worker's settings of D34, with the waypoint cost of D37, the automatic horizon of D45 and the
-    # regularizer of D46
+    # the Worker's settings, with the waypoint cost, the automatic horizon and the
+    # regularizer
     assert config.mpc == MPCSettings(
         horizon=None, q_pos=10.0, q_vel=1.0, r=0.1, target_weight=1e4, effort_weight=0.1, start_weight=0.1,
         rho=1e-3, mip_gap=1e-4, work_limit=None,
@@ -57,7 +56,7 @@ def test_the_shipped_configuration_is_the_decided_one() -> None:
 
 
 def test_architecture_4_differs_only_in_its_targets() -> None:
-    """D38: the shipped configuration of PPO_MPC_reachability is PPO_MPC's with the reachable targets."""
+    """The shipped configuration of PPO_MPC_reachability is PPO_MPC's with the reachable targets."""
     three, four = load_ppo_mpc_config(SHIPPED), load_ppo_mpc_config(REACHABILITY)
     assert four.reachability == ReachabilityConfig(directions=16) and four.algorithm == "ppo_mpc_reachability"
     assert four == dataclasses.replace(three, reachability=four.reachability)
@@ -70,7 +69,7 @@ def test_the_configuration_round_trips() -> None:
     data = _data()
     data["mpc"]["work_limit"] = 50.0
     assert ppo_mpc_config_from_dict(ppo_mpc_config_to_dict(ppo_mpc_config_from_dict(data))).mpc.work_limit == 50.0
-    data["mpc"]["horizon"] = 16  # an explicit horizon is kept (D45: null sets it automatically)
+    data["mpc"]["horizon"] = 16  # an explicit horizon is kept (null sets it automatically)
     assert ppo_mpc_config_from_dict(ppo_mpc_config_to_dict(ppo_mpc_config_from_dict(data))).mpc.horizon == 16
 
 
@@ -149,7 +148,7 @@ def test_a_repeated_key_is_refused(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("segment_steps", [6, 4])
 def test_the_sweep_files_differ_in_the_segment_length_only(segment_steps: int) -> None:
-    """D60: the agility sweep changes H alone, for both MPC architectures; the Worker's horizon follows (D45)."""
+    """The agility sweep changes H alone, for both MPC architectures; the Worker's horizon follows."""
     for path in (SHIPPED, REACHABILITY):
         base = load_ppo_mpc_config(path)
         sweep = load_ppo_mpc_config(path.with_name(f"{path.stem}_h{segment_steps}.yaml"))

@@ -1,4 +1,4 @@
-"""Tests of the evaluation protocol and of the minimum-time bound (decision log D6, D20, F7, D43, D50)."""
+"""Tests of the evaluation protocol and of the minimum-time bound."""
 
 from __future__ import annotations
 
@@ -68,12 +68,12 @@ def test_the_grid_needs_at_least_one_point_per_axis(shape: tuple[int, int]) -> N
 
 
 # --------------------------------------------------------------------------
-# Minimum-time bound (F7)
+# Minimum-time bound
 # --------------------------------------------------------------------------
 
 
 def test_full_thrust_in_the_tunnel_attains_the_bound_exactly() -> None:
-    """F7: without obstacles or disturbance, full thrust along +x is time-optimal and follows the bound bit for bit."""
+    """Without obstacles or disturbance, full thrust along +x is time-optimal and follows the bound bit for bit."""
     config = _config()
     starts = spawn_grid(config.task.spawn, (5, 5))
     bound = progress_bound(starts[:, 0], 120, config.physics)
@@ -97,7 +97,7 @@ def test_full_thrust_in_the_tunnel_attains_the_bound_exactly() -> None:
 @pytest.mark.parametrize("layout", ["tunnel", "slalom"])
 @pytest.mark.parametrize("d_bar", [0.0, 1.0])
 def test_no_policy_progresses_faster_than_the_bound(layout: str, d_bar: float) -> None:
-    """F7 holds on every layout, with disturbances, initial speeds and wall contacts."""
+    """The lower bound on the arrival time holds on every layout, with disturbances, initial speeds and wall contacts."""
     config = _config(layout, physics={"d_bar": d_bar}, task={"horizon": 400})
     rng = np.random.default_rng(5)
     candidates = rng.uniform([-1.0, -2.0], [10.0, 2.0], (4000, 2))
@@ -189,7 +189,7 @@ def test_the_evaluation_rejects_bad_starts() -> None:
 
 
 def test_commanded_accelerations_can_be_evaluated() -> None:
-    """With ``inputs=True`` the commands are accelerations, the MPC Worker's interface (D29, step 9)."""
+    """With ``inputs=True`` the commands are accelerations, the MPC Worker's interface."""
     config = _config("slalom", physics={"d_bar": 0.5})
     starts = spawn_grid(config.task.spawn, (2, 3))
     u = square_to_disk(np.array([[1.0, 0.25]]), config.physics.a_max)
@@ -197,7 +197,7 @@ def test_commanded_accelerations_can_be_evaluated() -> None:
     by_inputs = evaluate(lambda obs: np.tile(u[0], (len(obs), 1)), config, starts, seed=4, inputs=True)
     assert by_actions.details() == by_inputs.details()
     too_strong = evaluate(lambda obs: np.tile([5.0, 0.0], (len(obs), 1)), config, starts, seed=4, inputs=True)
-    assert all(ep.saturation_steps > 0 for ep in too_strong.episodes)  # the commands were not mapped by D15
+    assert all(ep.saturation_steps > 0 for ep in too_strong.episodes)  # the commands were not mapped
 
 
 def test_the_evaluation_stops_at_the_horizon() -> None:
@@ -235,7 +235,7 @@ def test_the_metrics_summarise_the_episodes() -> None:
 
 
 def test_the_oracle_gap_is_measured_against_the_oracle_steps() -> None:
-    """D44: with the oracle's minimum times, the gap of a successful episode is its length over them, minus one."""
+    """With the oracle's minimum times, the gap of a successful episode is its length over them, minus one."""
     episodes = (_stats(0, 105, True), _stats(1, 110, True), _stats(2, 200, False), _stats(3, 100, True))
     bounds = np.array([100, 100, 100, 100])
     without = Evaluation(np.zeros((4, 2)), episodes, bounds, np.full(4, 11.0))
@@ -248,7 +248,7 @@ def test_the_oracle_gap_is_measured_against_the_oracle_steps() -> None:
     m = with_oracle.metrics()
     assert m["eval/oracle_gap_mean"] == pytest.approx((0.0 + 0.10 + 0.0) / 3)
     assert m["eval/oracle_gap_max"] == pytest.approx(0.10)
-    assert m["eval/arrival_gap_mean"] == pytest.approx((0.05 + 0.10 + 0.0) / 3)  # the bound of F7 stays
+    assert m["eval/arrival_gap_mean"] == pytest.approx((0.05 + 0.10 + 0.0) / 3)  # the bound stays
     assert with_oracle.details()["oracle_steps"] == [105, 100, 150, 100]
     none_succeed = Evaluation(np.zeros((1, 2)), (_stats(0, 200, False),), np.array([100]), np.full(1, 11.0),
                               oracle_steps=np.array([100]))
@@ -256,7 +256,7 @@ def test_the_oracle_gap_is_measured_against_the_oracle_steps() -> None:
 
 
 def test_the_evaluation_takes_the_oracle_table_of_its_starts() -> None:
-    """D44: ``evaluate`` reads the minimum times from a table of the same starts, and refuses another's."""
+    """``evaluate`` reads the minimum times from a table of the same starts, and refuses another's."""
     from hrlmpc.oracle import OracleEntry, OracleSettings, OracleTable, layout_signature
 
     config = _config()
@@ -305,7 +305,7 @@ def test_reaching_the_goal_line_exactly_counts() -> None:
 
 
 def test_obstacles_lengthen_the_bound_only_where_they_block_the_straight_run() -> None:
-    """F7 with the shortest free path: equal to the straight bound in the tunnel, larger behind the slalom's gates."""
+    """The lower bound with the shortest free path: equal to the straight bound in the tunnel, larger behind the slalom's gates."""
     for layout_name in ("tunnel", "slalom"):
         config = _config(layout_name)
         env = NavigationEnv(config, num_envs=1, seed=0)
@@ -330,7 +330,7 @@ def test_the_evaluation_keeps_the_first_episode_of_each_start() -> None:
 
 
 def test_the_contact_fraction_counts_contact_steps() -> None:
-    """Lying on a face without a wall reaction is contact too (D14)."""
+    """Lying on a face without a wall reaction is contact too."""
     episodes = (_stats(0, 10, True, contact_steps=2), _stats(1, 10, True))
     episodes = (EpisodeStats(**{**episodes[0].__dict__, "wall_steps": 0}), episodes[1])
     result = Evaluation(np.zeros((2, 2)), episodes, np.array([10, 10]), np.full(2, 1.0))
@@ -338,7 +338,7 @@ def test_the_contact_fraction_counts_contact_steps() -> None:
 
 
 def test_an_evaluation_touches_neither_the_training_environment_nor_global_randomness() -> None:
-    """D6: training goes on exactly as without the evaluations in between."""
+    """Training goes on exactly as without the evaluations in between."""
     config = _config("slalom", physics={"d_bar": 1.0})
     plain, interleaved = NavigationEnv(config, num_envs=4, seed=7), NavigationEnv(config, num_envs=4, seed=7)
     plain.reset()
@@ -364,12 +364,12 @@ def test_the_evaluation_measures_against_the_free_path_bound() -> None:
 
 
 # --------------------------------------------------------------------------
-# Both actions and the compute (D43, D50)
+# Both actions and the compute
 # --------------------------------------------------------------------------
 
 
 def test_the_evaluation_times_the_controller_per_step_and_agent() -> None:
-    """D50: the controller's wall-clock time per call, divided by the agents it steers, at every step; its mean and
+    """The controller's wall-clock time per call, divided by the agents it steers, at every step; its mean and
     largest under ``time/``, with the evaluation's duration, apart from the metrics of the outcome."""
 
     def slow(obs: np.ndarray) -> np.ndarray:
@@ -396,7 +396,7 @@ def test_an_evaluation_built_without_its_times_has_none() -> None:
 
 
 def test_the_evaluations_are_named_by_their_action() -> None:
-    """D50: the evaluation with the mean keeps the names of steps 7-10; the one with the mode adds ``_mode``."""
+    """The evaluation with the mean keeps the names of steps 7-10; the one with the mode adds ``_mode``."""
     assert EVAL_ACTIONS == ("mean", "mode")
     assert [evaluation_name(action) for action in EVAL_ACTIONS] == ["eval", "eval_mode"]
     assert [evaluation_name(action, "mpc") for action in EVAL_ACTIONS] == ["eval_mpc", "eval_mode_mpc"]
@@ -407,7 +407,7 @@ def test_the_evaluations_are_named_by_their_action() -> None:
 
 
 def test_the_details_of_each_action_are_appended_as_one_line(tmp_path: Path) -> None:
-    """D50: ``evaluations.jsonl`` holds one line per evaluation and action, marked with its action."""
+    """``evaluations.jsonl`` holds one line per evaluation and action, marked with its action."""
     result = evaluate(_full_thrust, _config(), [[0.0, 0.0], [2.0, 1.0]], seed=0)
     path = tmp_path / "evaluations.jsonl"
     append_details(path, result, env_steps=0, action="mean")

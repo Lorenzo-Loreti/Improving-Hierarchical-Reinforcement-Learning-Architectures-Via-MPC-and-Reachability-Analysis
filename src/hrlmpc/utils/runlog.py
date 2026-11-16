@@ -1,13 +1,13 @@
-"""Run directories and learning-curve logging (code rules C3 and C4, decision log D6, D50).
+"""Run directories and learning-curve logging.
 
 Every training run writes one directory:
 
-    config.yaml      the resolved configuration of the run
-    meta.json        provenance: seed, time, Python and package versions, git commit, and the machine
-                     (processor, cores, host, load at the start, threads' variables, Slurm job; D50)
-    metrics.jsonl    one JSON object per call of :meth:`RunLogger.log`
+    config.yaml the resolved configuration of the run
+    meta.json provenance: seed, time, Python and package versions, git commit, and the machine
+                     (processor, cores, host, load at the start, threads' variables, Slurm job)
+    metrics.jsonl one JSON object per call of :meth:`RunLogger.log`
 
-Each metrics record carries the two interaction counters of decision D6.
+Each metrics record carries the two interaction counters.
 ``env_steps`` counts the calls of the environment's physical step during
 training, summed over the parallel environments: it is the sample unit and
 the x-axis of every learning curve. ``manager_decisions`` is a secondary
@@ -58,15 +58,15 @@ SLURM_VARIABLES: dict[str, str] = {
     "node": "SLURMD_NODENAME",
     "cpus_per_task": "SLURM_CPUS_PER_TASK",
 }
-"""The Slurm job of a run on a cluster (D48, D50): the entries of ``meta.json`` and the variables they come from."""
+"""The Slurm job of a run on a cluster: the entries of ``meta.json`` and the variables they come from."""
 
 THREAD_VARIABLES: tuple[str, ...] = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
-"""Variables that set the threads of the numerical libraries, recorded with the machine (D50)."""
+"""Variables that set the threads of the numerical libraries, recorded with the machine."""
 
 
 @dataclass
 class SampleCounter:
-    """Interaction counters of one training run (decision log D6).
+    """Interaction counters of one training run.
 
     Attributes:
         env_steps: Calls of the environment's physical step during training,
@@ -165,7 +165,7 @@ def _processor() -> str | None:
 
 
 def machine_info() -> dict[str, Any]:
-    """The machine a run starts on (D50), for the compute times.
+    """The machine a run starts on, for the compute times.
 
     Returns:
         ``host``; ``processor``, its model name or ``None``; ``cores``, the

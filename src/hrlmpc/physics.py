@@ -1,4 +1,4 @@
-"""The physical step of the navigation environment (project instructions, "Setup"; rows E1-E7).
+"""The physical step of the navigation environment (Section 3.2 of the thesis).
 
 One pure function, :func:`physics_step`, advances a batch of agents by one
 sampling period. Every architecture reaches the plant through it, and nothing
@@ -9,24 +9,24 @@ one, with bit-for-bit the same result. For each agent with state
 1. saturation onto ``U``: ``u = Proj_U(u_cmd)`` (radial);
 2. candidate velocity: ``v~ = (1 - gamma dt) v + dt (u + d)``;
 3. speed limiter: ``v^ = Proj_V(v~)`` (radial);
-4. wall reaction (decision log D17): starting from ``v = v^``, find the
+4. wall reaction: starting from ``v = v^``, find the
    first face that the segment ``[p, p + dt v]`` crosses into a blocked
    region (the interior of an obstacle, or the outside of the arena); add it
    to the collected faces ``S``; set ``v`` to the Euclidean projection of
    ``v^`` onto the intersection of the half-planes
-   ``{v : n_j . v >= -delta_j / dt}``, ``j in S``; repeat until the segment
+   ``{v: n_j. v >= -delta_j / dt}``, ``j in S``; repeat until the segment
    crosses no face. Here ``n_j`` is the unit normal of face ``j`` pointing
    into the free space and ``delta_j >= 0`` the distance of ``p`` from its
    line. Faces hit at the same instant are taken in order of the correction
    they need, smallest first, then by index;
 5. wall friction: if the agent lies on a face, moves along it
-   (``n_j . v = 0``) and is still on it at the end of the step,
+   (``n_j. v = 0``) and is still on it at the end of the step,
    ``v <- (1 - gamma_w dt) v``;
 6. position: ``p+ = p + dt v``.
 
-By decision log F4 the wall reaction keeps ``||v||_2 <= v_max``.
+By the wall reaction keeps ``||v||_2 <= v_max``.
 
-Tolerances. The free space is the one of :mod:`hrlmpc.geometry` (D16). A
+Tolerances. The free space is the one of :mod:`hrlmpc.geometry`. A
 segment crosses into a blocked region only if it reaches more than
 ``geometry.TOL`` into it; a start that rounding has left slightly deeper is
 treated as lying at that depth, so the agent can neither sink further nor be
@@ -71,7 +71,7 @@ class StepResult:
             before the wall friction.
         wall_faces: ``(B, F)`` faces collected by the wall reaction.
         friction: ``(B,)`` whether the wall friction acted (stage 5).
-        contact: ``(B,)`` contact in the sense of D14: a wall reaction, or the
+        contact: ``(B,)`` contact in the sense: a wall reaction, or the
             new position on a face.
     """
 
@@ -87,7 +87,7 @@ class StepResult:
 
     @property
     def dv_wall(self) -> FloatArray:
-        """``(B, 2)`` velocity change of the wall reaction: the impulse per unit mass of D14."""
+        """``(B, 2)`` velocity change of the wall reaction: the impulse per unit mass."""
         result: FloatArray = self.v_wall - self.v_limited
         return result
 
@@ -186,7 +186,7 @@ def _project_disk(x: FloatArray, radius: float) -> FloatArray:
 def _wall_reaction(
     v_hat: FloatArray, distances: FloatArray, dt: float, faces: Faces
 ) -> tuple[FloatArray, BoolArray]:
-    """Stage 4: the wall velocity and the collected faces (D17)."""
+    """Stage 4: the wall velocity and the collected faces."""
     bound = -np.maximum(distances, 0.0) / dt  # half-plane of face j: n_j . v >= bound_j
     v = v_hat.copy()
     collected = np.zeros(distances.shape, dtype=bool)

@@ -1,8 +1,8 @@
-"""Shortest paths in the free space, for the minimum-time bound F7 (decision log D16, D20).
+"""Shortest paths in the free space, for the lower bound on the arrival time.
 
 The length of the shortest path in ``P_free`` from a point to the goal region
 bounds from below the distance that any trajectory from that point must cover
-(F7, :mod:`hrlmpc.evaluation`). Among polygonal obstacles a shortest path is a
+(:mod:`hrlmpc.evaluation`). Among polygonal obstacles a shortest path is a
 taut string: it bends only at obstacle vertices, and its last segment meets
 the goal line ``p_x = goal_x`` at a right angle. It is found by Dijkstra's
 algorithm on the visibility graph of the start and of the vertices of the

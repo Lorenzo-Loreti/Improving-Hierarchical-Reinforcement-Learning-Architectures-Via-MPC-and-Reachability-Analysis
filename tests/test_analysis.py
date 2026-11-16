@@ -1,5 +1,4 @@
-"""Tests of the run analysis: learning curves over seeds with confidence intervals (code rule C4, decision log D20,
-D43, D50)."""
+"""Tests of the run analysis: learning curves over seeds with confidence intervals."""
 
 from __future__ import annotations
 
@@ -45,7 +44,7 @@ SLALOM: dict[str, Any] = {"geometry": {"obstacles": [{"x": [4.0, 5.0], "y": [-2.
 
 def _eval(success: float, gap: float, contact: float, ret: float, mode: tuple[float, ...] | None = None
           ) -> dict[str, Any]:
-    """An evaluation record; with ``mode``, also that of the mode (D43): its success, gap, contact and return."""
+    """An evaluation record; with ``mode``, also that of the mode: its success, gap, contact and return."""
     record = {
         "eval/success_rate": success,
         "eval/arrival_gap_max": gap,
@@ -157,7 +156,7 @@ def test_runs_are_grouped_by_their_configuration(tmp_path: Path) -> None:
 
 
 def test_a_run_written_before_an_optional_key_existed_shares_the_group(tmp_path: Path) -> None:
-    """A recorded configuration that lacks an optional key of today's schema (the bands' height of D69, say)
+    """A recorded configuration that lacks an optional key of today's schema (the bands' height, say)
     fingerprints as one that records its default: the groups follow the configuration, not the schema's age."""
     env = env_config_to_dict(load_env_config(CONFIG_DIR / "slalom_sparse.yaml"))
     record = [_eval(1.0, 0.01, 0.0, 900.0)]
@@ -225,7 +224,7 @@ def test_curves_need_the_same_evaluation_points(tmp_path: Path) -> None:
 
 
 def test_the_acceptance_criterion_of_step_7() -> None:
-    """D20: success from every start, arrival within 5% of the bound, no contact."""
+    """Success from every start, arrival within 5% of the bound, no contact."""
     assert accepted(_eval(1.0, 0.05, 0.0, 0.0), max_gap=0.05)
     assert not accepted(_eval(1.0, 0.051, 0.0, 0.0), max_gap=0.05)
     assert not accepted(_eval(0.96, 0.01, 0.0, 0.0), max_gap=0.05)
@@ -248,7 +247,7 @@ def _rows(text: str, action: str = "mean") -> dict[str, list[str]]:
 
 
 def _solve_rows(text: str) -> dict[str, list[str]]:
-    """The rows of the runs in the time-to-solve block (D67)."""
+    """The rows of the runs in the time-to-solve block."""
     block = text.partition("time to solve")[2].partition("solved:")[0]
     return {line.split()[0]: line.split() for line in block.splitlines() if line.startswith("seed")}
 
@@ -258,21 +257,21 @@ def test_the_summary_reports_every_run(three_runs: list[Path]) -> None:
     rows = _rows(text)
     assert [rows[f"seed{s}"][7] for s in (1, 2, 3)] == ["yes", "yes", "no"]
     assert [rows[f"seed{s}"][8] for s in (1, 2, 3)] == ["20480", "10240", "-"]
-    assert "== ppo tunnel (3 runs)" in text and "accepted at the end: 2/3 (max gap 0.05, on the gap of F7)" in text
+    assert "== ppo tunnel (3 runs)" in text and "accepted at the end: 2/3 (max gap 0.05, on the gap to the lower bound)" in text
     strict = summarize([load_run(p) for p in three_runs], max_gap=0.025)
     assert [_rows(strict)[f"seed{s}"][7] for s in (1, 2, 3)] == ["no", "yes", "no"]
     assert "accepted at the end: 1/3" in strict
 
 
 def test_acceptance_does_not_apply_with_obstacles_and_no_oracle(tmp_path: Path) -> None:
-    """With obstacles F7 is only a lower bound, so without an oracle table the gap criterion is not applied."""
+    """With obstacles the bound on the arrival time is only a lower bound, so without an oracle table the gap criterion is not applied."""
     run = load_run(_make_run(tmp_path, 1, [_eval(1.0, 0.01, 0.0, 900.0)], env=SLALOM))
     text = summarize([run])
     assert _rows(text)["seed1"][7] == "n/a" and "acceptance not applicable" in text
 
 
 def test_the_acceptance_uses_the_oracle_gap_where_it_is_logged(tmp_path: Path) -> None:
-    """D59: with an oracle table the criterion of D20 applies to the slalom too, on the oracle gap; the gap of F7
+    """With an oracle table the criterion applies to the slalom too, on the oracle gap; the gap
     stays reported."""
     first = _eval(1.0, 0.20, 0.0, 850.0)
     first.update({"eval/oracle_gap_max": 0.08, "eval/oracle_gap_mean": 0.04})
@@ -281,10 +280,10 @@ def test_the_acceptance_uses_the_oracle_gap_where_it_is_logged(tmp_path: Path) -
     run = load_run(_make_run(tmp_path, 1, [first, last], env=SLALOM))
     text = summarize([run], max_gap=0.05)
     assert _rows(text)["seed1"][7] == "yes" and _rows(text)["seed1"][8] == "10240"
-    assert "accepted at the end: 1/1 (max gap 0.05, on the oracle gap, D59)" in text
+    assert "accepted at the end: 1/1 (max gap 0.05, on the oracle gap)" in text
     assert "eval/oracle_gap_max        mean 0.030" in text
     assert accepted(last, max_gap=0.05) and not accepted(first, max_gap=0.05)
-    assert accepted(last, max_gap=0.05, oracle=False) is False  # on the gap of F7 alone, 0.12 fails
+    assert accepted(last, max_gap=0.05, oracle=False) is False  # on the gap alone, 0.12 fails
     assert first_accepted(run, max_gap=0.05) == 10240
 
 
@@ -303,26 +302,26 @@ def test_a_run_without_arrivals_at_the_end_is_rejected_not_exempted(tmp_path: Pa
     config["oracle_file"] = "configs/oracle/slalom.json"
     (named / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
     text = summarize([load_run(named)], max_gap=0.05)
-    assert _rows(text)["seed2"][7] == "no" and "on the oracle gap, D59" in text
+    assert _rows(text)["seed2"][7] == "no" and "on the oracle gap" in text
     assert "acceptance not applicable" in summarize([load_run(_make_run(tmp_path / "bare", 3, [failed], env=SLALOM))])
 
 
 def test_the_acceptance_is_decided_on_the_mode_where_it_is_logged(tmp_path: Path) -> None:
-    """D57: from the final runs on, the mode is the primary action: the acceptance is decided on its evaluation when
+    """From the final runs on, the mode is the primary action: the acceptance is decided on its evaluation when
     it is logged, and on the mean's otherwise (the runs of steps 7-10)."""
     run = load_run(_make_run(tmp_path, 1, [_eval(1.0, 0.04, 0.0, 905.0, mode=(1.0, 0.10, 0.0, 880.0))]))
     text = summarize([run], max_gap=0.05)
-    assert "acceptance on the mode (D57)" in text and "accepted at the end: 0/1" in text
+    assert "acceptance on the mode" in text and "accepted at the end: 0/1" in text
     assert _rows(text, "mode")["seed1"][7] == "no"
     lenient = summarize([run], max_gap=0.10)
     assert "accepted at the end: 1/1" in lenient
     old = load_run(_make_run(tmp_path / "old", 1, [_eval(1.0, 0.04, 0.0, 905.0)]))
     text = summarize([old], max_gap=0.05)
-    assert "acceptance on the mean (D20)" in text and "accepted at the end: 1/1" in text
+    assert "acceptance on the mean" in text and "accepted at the end: 1/1" in text
 
 
 def test_the_curriculum_is_summarized(tmp_path: Path) -> None:
-    """D62: runs with a curriculum report the stage at the end and the samples at which the last stage was
+    """Runs with a curriculum report the stage at the end and the samples at which the last stage was
     reached; runs without one say nothing about it."""
     env = {"geometry": {"obstacles": []}, "task": {"curriculum": {"x_start": 8.0, "step": 1.0, "window": 50,
                                                                    "threshold": 0.8}}}
@@ -340,7 +339,7 @@ def test_the_curriculum_is_summarized(tmp_path: Path) -> None:
             if steps == 8192:
                 logger.log(_eval(1.0, 0.02, 0.0, 900.0), counter)
     text = summarize([load_run(run_dir)])
-    assert "curriculum (D62): stage at the end and samples to the last stage" in text
+    assert "curriculum: stage at the end and samples to the last stage" in text
     assert "seed1" in text and " 8/8 " in text and " 6144" in text
     plain = summarize([load_run(_make_run(tmp_path, 2, [_eval(1.0, 0.02, 0.0, 900.0)]))])
     assert "curriculum" not in plain
@@ -357,19 +356,19 @@ def test_the_command_line_prints_and_plots(
 
 
 def test_the_summary_reports_the_mode_beside_the_mean(tmp_path: Path) -> None:
-    """D43, D50, D57: a table for each action; where the mode is logged the criterion of D20 is decided on it."""
+    """a table for each action; where the mode is logged the criterion is decided on it."""
     run = load_run(_make_run(tmp_path, 1, [_eval(1.0, 0.04, 0.0, 905.0, mode=(0.75, 0.01, 0.25, 640.0))]))
     text = summarize([run], max_gap=0.05)
     assert _rows(text)["seed1"][2:7] == ["1.00", "905.0", "0.020", "0.040", "0.00"]
     assert _rows(text, "mode")["seed1"][2:8] == ["0.75", "640.0", "0.005", "0.010", "0.25", "no"]
-    assert "accepted at the end: 0/1 (max gap 0.05, on the gap of F7)" in text  # on the mode, whatever the mean did
+    assert "accepted at the end: 0/1 (max gap 0.05, on the gap to the lower bound)" in text  # on the mode, whatever the mean did
     assert "eval_mode/success_rate     mean 0.750" in text
 
 
 def test_runs_without_the_mode_say_so(three_runs: list[Path]) -> None:
     """The runs of steps 7-10 were evaluated with the mean only."""
     text = summarize([load_run(p) for p in three_runs])
-    assert "action: mode (D43): not evaluated in these runs" in text and not _rows(text, "mode")
+    assert "action: mode: not evaluated in these runs" in text and not _rows(text, "mode")
 
 
 def test_the_curves_of_either_action(three_runs: list[Path], tmp_path: Path) -> None:
@@ -379,14 +378,14 @@ def test_the_curves_of_either_action(three_runs: list[Path], tmp_path: Path) -> 
         curve_keys("median")
     pytest.importorskip("matplotlib")
     _make_run(tmp_path / "mixed", 4, [_eval(0.5, 0.1, 0.0, 400.0, mode=(0.5, 0.2, 0.0, 380.0))] * 2)
-    _make_run(tmp_path / "mixed", 5, [_eval(0.5, 0.1, 0.0, 400.0)] * 2)  # before D43: the mean only
+    _make_run(tmp_path / "mixed", 5, [_eval(0.5, 0.1, 0.0, 400.0)] * 2)  # an older run: the mean only
     figure = tmp_path / "mode.png"
     assert main([str(tmp_path / "mixed"), "--plot", str(figure), "--action", "mode"]) == 0
     assert figure.stat().st_size > 0
 
 
 
-# ------------------------------------------------------------------- tuning (D55, D65)
+# ------------------------------------------------------------------- tuning
 
 
 def test_the_success_auc_is_the_normalized_area_under_the_curve(tmp_path: Path) -> None:
@@ -411,7 +410,7 @@ def test_group_labels_name_the_agent_file_when_it_is_not_the_algorithms(tmp_path
 
 
 def test_the_summary_ranks_the_groups_by_the_auc(tmp_path: Path) -> None:
-    """D65: with several groups the summary ends with the ranking by the mean AUC of the success curve of the
+    """With several groups the summary ends with the ranking by the mean AUC of the success curve of the
     primary action (the mode where logged), the selection rule of the tuning protocol."""
     low = [_eval(0.0, math.nan, 0.0, -200.0), _eval(0.0, math.nan, 0.0, -200.0), _eval(1.0, 0.05, 0.0, 900.0)]
     high = [_eval(0.0, math.nan, 0.0, -200.0), _eval(1.0, 0.05, 0.0, 850.0), _eval(1.0, 0.05, 0.0, 890.0)]
@@ -431,9 +430,9 @@ def test_the_summary_ranks_the_groups_by_the_auc(tmp_path: Path) -> None:
 
 
 def test_the_time_to_solve_at_the_three_thresholds(tmp_path: Path) -> None:
-    """D67: the first evaluation with full success from the grid (primary), with full success and the gap at most
-    10 %, and meeting the strict criterion of D20 (gap at most 5 %, no contact); the contact-free full success is
-    reported beside them. On the primary action, the gap of the oracle where logged, else of F7."""
+    """The first evaluation with full success from the grid (primary), with full success and the gap at most
+    10 %, and meeting the strict criterion (gap at most 5 %, no contact); the contact-free full success is
+    reported beside them. On the primary action, the gap of the oracle where logged, else."""
     assert SOLVED_LEVELS == ("success", "gap_10", "strict", "contact_free") and GAP_LENIENT == 0.10
     evaluations = [
         _eval(0.0, math.nan, 0.0, -200.0, mode=(0.0, math.nan, 0.0, -200.0)),
@@ -454,7 +453,7 @@ def test_the_time_to_solve_at_the_three_thresholds(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="level"):
         solved(record, "gap_20", "mode")
     text = summarize([run], max_gap=0.05)
-    assert "time to solve (D67)" in text
+    assert "time to solve" in text
     assert _solve_rows(text)["seed1"][1:] == ["20480", "30720", "51200", "40960"]
     assert "solved: full success 1/1 (20480), gap <= 10% 1/1 (30720), strict 1/1 (51200), contact-free 1/1 (40960)" \
         in text

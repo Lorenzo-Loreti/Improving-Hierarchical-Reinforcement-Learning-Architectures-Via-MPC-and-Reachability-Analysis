@@ -1,6 +1,6 @@
-# Tunnel at the disturbance level d_bar = 1.0 (decision log D45): configs/env/tunnel.yaml
+# Tunnel at the disturbance level d_bar = 1.0: configs/env/tunnel.yaml
 # with only the radius of the disturbance set changed. For quick checks and debugging
-# only; not part of the main comparison (decision log D12).
+# only; not part of the main comparison.
 
 physics:
   dt: 0.1

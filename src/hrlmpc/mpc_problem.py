@@ -1,20 +1,20 @@
-"""Data of the MPC Worker's problem, without the solvers (decision log D31-D34, D37, D45, D46, D49).
+"""Data of the MPC Worker's problem, without the solvers.
 
 The Worker of PPO_MPC and PPO_MPC_reachability (architectures 3 and 4) solves
-at every step the robust tube-MPC problem of the tube-MPC note, specialised to
-this plant and its polygonal map, with the cost of the waypoint Worker (D37)
-and, with a tube, the regularizer of D46:
+at every step the robust tube-MPC problem of Chapter 4 of the thesis, specialised to
+this plant and its polygonal map, with the cost of the waypoint Worker
+and, with a tube, the regularizer:
 
-    min  q_g ||z_{k*,p} - g||^2 + r_e sum_{k<k*} ||v_k||^2 + eps ||x - z_0||^2,   k* the steps left in the segment
-    s.t. z_{k+1} = A z_k + B v_k,                       k = 0, ..., N-1
-         x - z_0 in Z                                   (the tube, D31)
-         ||z_{k,v}|| <= v_bar,                           k = 1, ..., N-1   (D33)
-         z_{N,v} = 0                                    (terminal set: at rest)
-         ||v_k|| <= u_bar,                               k = 0, ..., N-1
-         m_i' z_{k,p} <= b_i - r_p - rho,                every face i of the arena
+    min q_g ||z_{k*,p} - g||^2 + r_e sum_{k<k*} ||v_k||^2 + eps ||x - z_0||^2, k* the steps left in the segment
+    s.t. z_{k+1} = A z_k + B v_k, k = 0, ..., N-1
+         x - z_0 in Z (the tube)
+         ||z_{k,v}|| <= v_bar, k = 1, ..., N-1
+         z_{N,v} = 0 (terminal set: at rest)
+         ||v_k|| <= u_bar, k = 0, ..., N-1
+         m_i' z_{k,p} <= b_i - r_p - rho, every face i of the arena
          n_j' z_{k,p} >= c_j + r_p + rho - M_j (1 - delta_{k,j}),
          n_j' z_{k+1,p} >= c_j + r_p + rho - M_j (1 - delta_{k,j}),
-         sum_j delta_{k,j} >= 1,                         every obstacle, k = 0, ..., N-1   (D32)
+         sum_j delta_{k,j} >= 1, every obstacle, k = 0, ..., N-1
 
 with ``x`` the measured state, ``g`` the target, the position at which the agent
 should be when the segment ends, ``k* = H - j`` at step ``j`` of a segment of
@@ -23,19 +23,19 @@ up to the trade-off with the effort; an unreachable one leaves the plan at the
 reachable point nearest to it. After stage ``k*`` the plan only has to come to
 rest by stage ``N``, so ``N >= H + n_b`` lets it pass the target at full speed
 (:meth:`MPCProblem.check_segments`); without a horizon in the settings, ``N``
-is that smallest one, ``H + n_b`` (D45). ``A``, ``B`` are the matrices of
+is that smallest one, ``H + n_b``. ``A``, ``B`` are the matrices of
 :mod:`hrlmpc.model`; ``K`` the LQR gain of ``Q = diag(q_pos, q_pos, q_vel, q_vel)``,
-``R = r I`` (D31); ``r_p`` the position radius of ``Z`` and ``rho`` a margin. The tightenings:
+``R = r I``; ``r_p`` the position radius of ``Z`` and ``rho`` a margin. The tightenings:
 
 - ``v_bar = v_max - h_{A_K Z}(e_v)``: at the real state the input is nominally
-  coherent, ``||(A x + B u)_v|| <= v_max``, so by F3 an action of the speed
-  limiter is a disturbance ``d'`` in ``D`` and the error stays in ``Z`` (D33).
+  coherent, ``||(A x + B u)_v|| <= v_max``, so an action of the speed
+  limiter is a disturbance ``d'`` in ``D`` and the error stays in ``Z``.
 - ``u_bar = a_max - h_Z(K' e_u)``: ``||u|| <= a_max``, so the input saturation
   of the environment never acts.
 - Positions by ``r_p + rho``: the real positions keep ``rho`` from every wall,
   less what the solvers' tolerances leave; ``rho`` must exceed the most a
   mixed-integer plan may violate a face by (:attr:`MPCProblem.face_slack`).
-- One binary per obstacle face and *segment* ``[z_k, z_{k+1}]`` (D32): both
+- One binary per obstacle face and *segment* ``[z_k, z_{k+1}]``: both
   ends lie beyond the same face of the enlarged obstacle, hence the whole
   nominal segment; the real segment ``[x_k, x_{k+1}]`` differs from it by
   convex combinations of errors in ``Z``, so it stays ``rho`` beyond the face of
@@ -44,14 +44,14 @@ is that smallest one, ``H + n_b`` (D45). ``A``, ``B`` are the matrices of
 With a tube the nominal start ``z_0`` is free in ``x (+) (-Z)``, and the
 first two terms see it only through the waypoint's position, so without the
 third neither ``z_0`` nor the applied input need be unique. The third term
-(D46) makes the cost strictly convex in ``z_0`` and in the inputs before the
+ makes the cost strictly convex in ``z_0`` and in the inputs before the
 waypoint, hence the optimal applied input unique for the binaries the search
 settles on (faces may still tie). Without a tube ``z_0 = x``: the term is left
-out and the problem is that of D37 (:attr:`MPCProblem.regularized`).
+out and the problem is that (:attr:`MPCProblem.regularized`).
 
 Every rest state is an equilibrium, so the shifted plan (drop the first step,
 hold the last state at rest) is feasible at the next step whenever the
-disturbance was in ``D``: theorem 4.1 of the note, under this terminal set.
+disturbance was in ``D``: Proposition A.7 of the thesis, under this terminal set.
 Within a segment ``k*`` drops by one per step, so the shifted plan meets the
 target at the same instant and costs its predecessor's cost minus the effort
 ``r_e ||v_0||^2`` of its first nominal input, plus the change of the third
@@ -65,7 +65,7 @@ This module holds what does not need a solver: the matrices, the tube, the
 tightened sets, the obstacles and their big-M constants, the binaries that the
 reachable positions fix in advance, the shifted candidate, the cost and a
 checker of plans (:meth:`MPCProblem.violations`, and :meth:`MPCProblem.plan_within`
-with the tolerances of D49). :mod:`hrlmpc.mpc_worker` solves the problem.
+with the tolerances). :mod:`hrlmpc.mpc_worker` solves the problem.
 """
 
 from __future__ import annotations
@@ -97,23 +97,23 @@ FEAS_TOL = 1e-6
 
 @dataclass(frozen=True)
 class MPCSettings:
-    """Settings of the MPC Worker (D34, D37, D45, D46; provisional until Q13).
+    """Settings of the MPC Worker.
 
     Attributes:
         horizon: ``N``, the prediction horizon, fixed and receding; at least the
             segment's length plus the steps to stop (:meth:`MPCProblem.check_segments`).
-            ``None`` sets it to that smallest horizon, which depends on the disturbance (D45).
-        q_pos: Weight of each position error in the LQR of the ancillary gain ``K`` (D31).
+            ``None`` sets it to that smallest horizon, which depends on the disturbance.
+        q_pos: Weight of each position error in the LQR of the ancillary gain ``K``.
         q_vel: Weight of each velocity in that LQR.
         r: Weight of each input in that LQR. ``K`` sets the tube, hence the
             tightened sets and the steps to stop, so the plan's effort has its own weight.
-        target_weight: ``q_g``, weight of the squared distance from the target at the waypoint (D37).
-        effort_weight: ``r_e``, weight of each nominal input until the waypoint (D37).
+        target_weight: ``q_g``, weight of the squared distance from the target at the waypoint.
+        effort_weight: ``r_e``, weight of each nominal input until the waypoint.
         start_weight: ``eps``, weight of ``||x - z_0||^2``, the distance of the plan's nominal start from the
-            measured state, with a tube only (D46); 0 leaves the term out.
+            measured state, with a tube only; 0 leaves the term out.
         rho: Safety margin [m] on the walls and the obstacles; it must exceed what
             a mixed-integer plan may violate a face by (checked by :class:`MPCProblem`).
-        tail_tolerance: Bound on the tail of ``Z`` along the axes (D31) [m, m/s].
+        tail_tolerance: Bound on the tail of ``Z`` along the axes [m, m/s].
         mip_gap: Relative MIP gap of the mixed-integer solves, below 1.
         work_limit: Gurobi's deterministic work limit per solve, or ``None``.
 
@@ -161,12 +161,12 @@ class Obstacle:
     """One obstacle of the problem, in the position plane, with its live faces only.
 
     A face is live when some position of the tightened arena lies beyond it;
-    the others, e.g. the faces that D16 pushed beyond a wall, can never
+    the others, e.g. the faces that the extension of an obstacle pushed beyond a wall, can never
     separate a plan from the obstacle and get no binary.
 
     Attributes:
         normals: ``(m, 2)`` outward unit normals ``n_j`` of the live faces.
-        offsets: ``(m,)`` offsets ``c_j``; the obstacle lies in ``{p : n_j' p <= c_j}``.
+        offsets: ``(m,)`` offsets ``c_j``; the obstacle lies in ``{p: n_j' p <= c_j}``.
         bounds: ``(m,)`` the right-hand sides ``c_j + r_p + rho`` of the face constraints.
         big_m: ``(m,)`` constants ``M_j`` that deactivate a face anywhere in the arena.
     """
@@ -203,10 +203,10 @@ def tightened_arena(layout: Layout, margin: float) -> ConvexPolygon:
 
 
 def layout_obstacles(layout: Layout, margin: float, tight: ConvexPolygon | None = None) -> list[Obstacle]:
-    """The obstacles of a plan on ``layout`` whose positions keep ``margin`` from every face (D32): the blocked
-    polygons of D16 with their live faces, the right-hand sides ``c_j + margin`` and the big-M constants.
+    """The obstacles of a plan on ``layout`` whose positions keep ``margin`` from every face: the blocked
+    polygons with their live faces, the right-hand sides ``c_j + margin`` and the big-M constants.
 
-    Shared by the Worker's problem and the oracle (D44).
+    Shared by the Worker's problem and the oracle.
 
     Args:
         layout: The map.
@@ -239,14 +239,14 @@ def face_slack(obstacles: list[Obstacle]) -> float:
 
 
 class MPCProblem:
-    """The offline data of the Worker's problem for one layout, plant and setting (D31-D34).
+    """The offline data of the Worker's problem for one layout, plant and setting.
 
     Args:
         params: Physical parameters; ``d_bar`` is the disturbance the tube is designed for.
-        layout: The map; the obstacles are its blocked polygons (D16).
+        layout: The map; the obstacles are its blocked polygons.
         settings: Horizon, weights, margin and tolerances.
         segment_steps: ``H``, the steps of a segment; required when the settings
-            leave the horizon to the problem, which is then ``H + n_b`` (D45).
+            leave the horizon to the problem, which is then ``H + n_b``.
             An explicit horizon is kept as it is; :meth:`check_segments` checks it.
 
     Raises:
@@ -271,12 +271,12 @@ class MPCProblem:
         ):
             raise ValueError(f"segment_steps must be a positive integer, got {segment_steps!r}")
         if self.settings.horizon is None and segment_steps is None:
-            raise ValueError("an automatic horizon (horizon None, D45) needs the length of the segments, segment_steps")
+            raise ValueError("an automatic horizon (horizon None) needs the length of the segments, segment_steps")
         self.dt = params.dt
         self.A, self.B = system_matrices(params.dt, params.gamma)
         weights = self.settings.weights
         self.Q, self.R = weights.Q, weights.R
-        self.K, _ = lqr(self.A, self.B, self.Q, self.R)  # the ancillary gain (D31); the LQR's cost is not used (D37)
+        self.K, _ = lqr(self.A, self.B, self.Q, self.R)  # the ancillary gain; the LQR's cost is not used
         self.tube: Tube = design_tube(self.A, self.B, self.K, params.d_bar, tolerance=self.settings.tail_tolerance)
         self._check_rotation_symmetry()
 
@@ -290,9 +290,9 @@ class MPCProblem:
             self.N: int = self.settings.horizon
         else:
             assert segment_steps is not None  # checked above
-            self.N = segment_steps + self.stopping_steps()  # the smallest horizon of check_segments (D45)
+            self.N = segment_steps + self.stopping_steps()  # the smallest horizon of check_segments
         self.regularized = (not self.tube.is_zero) and self.settings.start_weight > 0.0
-        """Whether the cost has the term ``eps ||x - z_0||^2`` of D46: with a tube and ``eps > 0``."""
+        """Whether the cost has the term ``eps ||x - z_0||^2``: with a tube and ``eps > 0``."""
         self.margin = self.tube.position_radius + self.settings.rho
 
         arena = layout.arena
@@ -338,7 +338,7 @@ class MPCProblem:
     def cost(
         self, z: ArrayLike, v: ArrayLike, target: ArrayLike, steps_left: int, x: ArrayLike | None = None
     ) -> float:
-        """The cost of D37 and D46 of a plan ``(z, v)``, shapes ``(N+1, 4)`` and ``(N, 2)``, at the state ``x``.
+        """The cost of a plan ``(z, v)``, shapes ``(N+1, 4)`` and ``(N, 2)``, at the state ``x``.
 
         ``q_g ||z_{k*,p} - g||^2 + r_e sum_{k<k*} ||v_k||^2``, with ``k* = steps_left``,
         plus ``eps ||x - z_0||^2`` when :attr:`regularized`; ``x`` is ignored otherwise.
@@ -354,7 +354,7 @@ class MPCProblem:
         value = self.settings.target_weight * error @ error + self.settings.effort_weight * np.sum(effort**2)
         if self.regularized:
             if x is None:
-                raise ValueError("the regularized cost (D46) needs the measured state x")
+                raise ValueError("the regularized cost needs the measured state x")
             start = np.asarray(x, dtype=np.float64).reshape(4) - z_arr[0]
             value += self.settings.start_weight * start @ start
         return float(value)
@@ -401,7 +401,7 @@ class MPCProblem:
         stage ``k + 1``, which contains the box of stage ``k``, lies beyond it.
         Its binary is then fixed to 1 and the obstacle's other faces on that
         segment to 0: inactive constraints, not wrong ones, so no feasible plan
-        is lost (remark 3.12 of the note).
+        is lost.
         """
         lo, hi = self.reach_boxes(x)
         centre, half = 0.5 * (lo + hi)[1:], 0.5 * (hi - lo)[1:]  # the boxes of stages 1..N, one per segment
@@ -508,7 +508,7 @@ class MPCProblem:
 
     def plan_within(self, x: ArrayLike, z: ArrayLike, v: ArrayLike, tol: float = FEAS_TOL) -> bool:
         """Whether a plan meets every constraint but the tube's within the tolerances accepted for the relaxation's
-        own plan (R2 of D49; module docstring of :mod:`hrlmpc.mpc_worker`).
+        own plan (R2; module docstring of :mod:`hrlmpc.mpc_worker`).
 
         The dynamics, the initial state (without a tube), the terminal rest and
         the arena to ``tol``, Gurobi's feasibility tolerance; the speed and
@@ -544,12 +544,12 @@ class MPCProblem:
             f"tube MPC: d_bar {t.d_bar}, s = {t.num_terms} terms, tail {t.tail_radius:.1e}; "
             f"Z radii: position {t.position_radius:.4f} m, speed {t.speed_radius:.4f} m/s, "
             f"input {t.input_radius:.4f} m/s^2\n"
-            f"  planned speed <= {self.v_bar:.3f} m/s (D33), planned thrust <= {self.u_bar:.3f} m/s^2, "
+            f"  planned speed <= {self.v_bar:.3f} m/s, planned thrust <= {self.u_bar:.3f} m/s^2, "
             f"position margin {self.margin:.4f} m; K = {np.round(self.K[0, [0, 2]], 3)} per axis\n"
             f"  {len(self.obstacles)} obstacles, {free} binaries before fixing; horizon N = {self.N}"
-            f"{' (automatic, D45)' if s.horizon is None else ''}, stopping time {self.stopping_steps()} steps; "
-            f"waypoint cost (D37): q_g = {s.target_weight:g}, r_e = {s.effort_weight:g}"
-            f"{f', eps = {s.start_weight:g} (D46)' if self.regularized else ''}"
+            f"{' (automatic)' if s.horizon is None else ''}, stopping time {self.stopping_steps()} steps; "
+            f"waypoint cost: q_g = {s.target_weight:g}, r_e = {s.effort_weight:g}"
+            f"{f', eps = {s.start_weight:g}' if self.regularized else ''}"
         )
 
     def stopping_steps(self) -> int:
@@ -562,7 +562,7 @@ class MPCProblem:
         return steps
 
     def check_segments(self, segment_steps: int) -> None:
-        """Refuse a horizon too short for the waypoints of segments of ``H = segment_steps`` steps (D37).
+        """Refuse a horizon too short for the waypoints of segments of ``H = segment_steps`` steps.
 
         At a decision the waypoint lies at stage ``H``; a plan that passes it at
         the planned speed ``v_bar`` still needs :meth:`stopping_steps` steps to
@@ -575,7 +575,7 @@ class MPCProblem:
         if self.N < needed:
             raise ValueError(
                 f"the horizon N = {self.N} leaves no room to stop after a segment of {segment_steps} steps: "
-                f"a plan needs {self.stopping_steps()} steps to stop from {self.v_bar:.3f} m/s, so N >= {needed} (D37)"
+                f"a plan needs {self.stopping_steps()} steps to stop from {self.v_bar:.3f} m/s, so N >= {needed}"
             )
 
 

@@ -1,4 +1,4 @@
-"""Tests of the YAML environment configuration (code rule C2; decision log D9, D11-D14, D45, D51)."""
+"""Tests of the YAML environment configuration."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ def test_slalom_config_matches_the_decision_log() -> None:
         r.effort_coef,
         r.contact_impulse_coef,
         r.contact_step_coef,
-    ) == (1.0, 1000.0, 10.0, 1.0, 0.01, 50.0, 1.0)  # shaping discount 1: D22
+    ) == (1.0, 1000.0, 10.0, 1.0, 0.01, 50.0, 1.0)  # shaping discount 1
 
 
 def test_tunnel_config_is_the_slalom_without_obstacles() -> None:
@@ -61,7 +61,7 @@ def test_tunnel_config_is_the_slalom_without_obstacles() -> None:
                                    ("tunnel", "d10", 1.0)]
 )
 def test_each_disturbance_level_has_its_own_files(layout: str, level: str, d_bar: float) -> None:
-    """D45: the file of a level is its layout's, with only the radius of the disturbance set changed."""
+    """The file of a level is its layout's, with only the radius of the disturbance set changed."""
     base = load_env_config(CONFIG_DIR / f"{layout}.yaml")
     cfg = load_env_config(CONFIG_DIR / f"{layout}_{level}.yaml")
     assert base.physics.d_bar == 0.0
@@ -73,8 +73,8 @@ def test_each_disturbance_level_has_its_own_files(layout: str, level: str, d_bar
     [("slalom", ""), ("slalom", "_d05"), ("slalom", "_d10"), ("tunnel", ""), ("tunnel", "_d05"), ("tunnel", "_d10")],
 )
 def test_sparse_reward_files_drop_the_progress_term_and_add_the_curriculum(layout: str, level: str) -> None:
-    """D51, D62: the sparse file of a layout and level is its shaped file with the progress coefficient set to 0
-    and the reverse spawn curriculum of D62; nothing else differs."""
+    """The sparse file of a layout and level is its shaped file with the progress coefficient set to 0
+    and the reverse spawn curriculum; nothing else differs."""
     shaped = load_env_config(CONFIG_DIR / f"{layout}{level}.yaml")
     sparse = load_env_config(CONFIG_DIR / f"{layout}_sparse{level}.yaml")
     assert shaped.reward.progress_coef == 10.0 and shaped.task.curriculum is None
@@ -87,7 +87,7 @@ def test_sparse_reward_files_drop_the_progress_term_and_add_the_curriculum(layou
     assert sparse == expected
 
 
-# ------------------------------------------------------------ the spawn curriculum (D62)
+# ------------------------------------------------------------ the spawn curriculum
 
 
 def test_the_curriculum_is_optional_and_round_trips() -> None:
@@ -98,7 +98,7 @@ def test_the_curriculum_is_optional_and_round_trips() -> None:
     data["task"]["curriculum"] = {"x_start": 8.0, "step": 1.0, "window": 50, "threshold": 0.8}
     cfg = env_config_from_dict(data)
     assert cfg.task.curriculum == CurriculumConfig(8.0, 1.0, 50, 0.8)
-    assert cfg.task.curriculum.exclude == ()  # no excluded region unless listed (D69)
+    assert cfg.task.curriculum.exclude == ()  # no excluded region unless listed
     plain = env_config_to_dict(cfg)
     assert plain["task"]["curriculum"] == {"x_start": 8.0, "step": 1.0, "window": 50, "threshold": 0.8,
                                            "exclude": [], "y": None}
@@ -107,7 +107,7 @@ def test_the_curriculum_is_optional_and_round_trips() -> None:
 
 
 def test_the_curriculum_may_exclude_regions_from_the_training_starts() -> None:
-    """D69: `exclude` lists boxes (dead ends) from which no training start is drawn; they round-trip, may not
+    """`exclude` lists boxes (dead ends) from which no training start is drawn; they round-trip, may not
     overlap the spawn box (the last band and the evaluation's starts) and must be well-formed."""
     data = _slalom_dict()
     data["task"]["curriculum"] = {"x_start": 8.0, "step": 1.0, "window": 50, "threshold": 0.8,
@@ -134,7 +134,7 @@ def test_the_curriculum_may_exclude_regions_from_the_training_starts() -> None:
 
 
 def test_the_curriculum_may_set_the_bands_height() -> None:
-    """D69: `y` gives the bands' y-range (the spawn box's by default); it must lie inside the arena and contain
+    """`y` gives the bands' y-range (the spawn box's by default); it must lie inside the arena and contain
     the spawn box's y-range, so that the last band, the spawn box, is no surprise."""
     data = _slalom_dict()
     data["task"]["curriculum"] = {"x_start": 8.0, "step": 1.0, "window": 50, "threshold": 0.8, "y": [-2.0, 2.0]}
@@ -294,7 +294,7 @@ def test_a_repeated_key_is_rejected(tmp_path: Path) -> None:
 
 
 
-# ------------------------------------------------------------- the trap layout (D69)
+# ------------------------------------------------------------- the trap layout
 
 
 TRAP_OBSTACLES = (
@@ -308,7 +308,7 @@ TRAP_CAVITY = Box(x=(3.75, 5.25), y=(-0.8, 0.8))
 
 
 def test_the_trap_layout_is_the_sparse_slalom_with_its_obstacles_and_bands_of_the_arenas_height() -> None:
-    """D69 (amended twice): the U-trap opening towards the spawn box on the straight route, the corridors of
+    """The U-trap opening towards the spawn box on the straight route, the corridors of
     0.8 m around it, the gate of 0.75 m after it; the sparse reward and the curriculum of the slalom, with bands
     of the arena's height and no excluded region: the cavity of the U carries training starts like any other
     free region, so that every stage extends the one before (the starts in front of the mouth lead into it)."""
@@ -323,10 +323,10 @@ def test_the_trap_layout_is_the_sparse_slalom_with_its_obstacles_and_bands_of_th
         ),
     )
     assert trap == expected  # the bands span the arena's height: the corridors carry starts
-    assert trap.task.curriculum.exclude == ()  # the cavity is not excluded (the second amendment of D69)
+    assert trap.task.curriculum.exclude == ()  # the cavity is not excluded
     back, upper, lower, gate_lower, gate_upper = TRAP_OBSTACLES
     assert upper.y[0] - lower.y[1] == pytest.approx(1.6) and back.x[0] - upper.x[0] == pytest.approx(1.5)  # cavity
-    assert back.x[1] - upper.x[0] == pytest.approx(2.0)  # the U's footprint: 2 m, so that no band of D62 is covered
+    assert back.x[1] - upper.x[0] == pytest.approx(2.0)  # the U's footprint: 2 m, so that no band is covered
     assert 2.0 - upper.y[1] == pytest.approx(0.8) and lower.y[0] + 2.0 == pytest.approx(0.8)  # the corridors
     assert gate_upper.y[0] - gate_lower.y[1] == pytest.approx(0.75)  # the gate, centred on y = 0
     assert TRAP_CAVITY == Box(x=(upper.x[0], back.x[0]), y=(lower.y[1], upper.y[0]))
@@ -346,11 +346,11 @@ def test_the_exploration_setting_of_the_trap_is_the_trap_without_the_curriculum(
      ("trap_sparse_nocur", "trap_sparse_nocur_d10"), ("trap", "trap_d10"),
      ("tunnel_sparse_nocur", "tunnel_sparse_nocur_d10"), ("slalom", "slalom_d10"), ("tunnel", "tunnel_d10")],
 )
-def test_the_disturbed_files_of_d72_and_d73_change_the_radius_of_the_disturbance_set_only(
+def test_the_disturbed_files_change_the_radius_of_the_disturbance_set_only(
     base: str, disturbed: str
 ) -> None:
-    """D72, D73: each setting of the matrix at d_bar = 1.0 is its file at d_bar = 0 with the radius of the
-    disturbance set changed and nothing else (the dense files of the slalom and the tunnel predate D73)."""
+    """Each setting of the matrix at d_bar = 1.0 is its file at d_bar = 0 with the radius of the
+    disturbance set changed and nothing else."""
     plain = load_env_config(CONFIG_DIR / f"{base}.yaml")
     cfg = load_env_config(CONFIG_DIR / f"{disturbed}.yaml")
     assert plain.physics.d_bar == 0.0
@@ -361,15 +361,15 @@ def test_the_disturbed_files_of_d72_and_d73_change_the_radius_of_the_disturbance
 def test_the_disturbed_exploration_files_of_the_slalom_are_the_disturbed_main_files_without_the_curriculum(
     level: str,
 ) -> None:
-    """D72, D78: `slalom_sparse_nocur_<level>.yaml` equals `slalom_sparse_<level>.yaml` without the curriculum."""
+    """`slalom_sparse_nocur_<level>.yaml` equals `slalom_sparse_<level>.yaml` without the curriculum."""
     disturbed = load_env_config(CONFIG_DIR / f"slalom_sparse_nocur_{level}.yaml")
     main = load_env_config(CONFIG_DIR / f"slalom_sparse_{level}.yaml")
     assert disturbed == dataclasses.replace(main, task=dataclasses.replace(main.task, curriculum=None))
 
 
 def test_the_dense_setting_of_the_trap_is_the_trap_exploration_file_with_the_progress_term() -> None:
-    """D71: `trap.yaml`, the dense (shaped) setting of the trap restored on 2026-10-20, is `trap_sparse_nocur.yaml`
-    with the progress term of D22 added back (coefficient 10, undiscounted); nothing else differs, as for the
+    """`trap.yaml`, the dense (shaped) setting of the trap, is `trap_sparse_nocur.yaml`
+    with the progress term added back (coefficient 10, undiscounted); nothing else differs, as for the
     shaped files of the other layouts."""
     plain = load_env_config(CONFIG_DIR / "trap_sparse_nocur.yaml")
     dense = load_env_config(CONFIG_DIR / "trap.yaml")
@@ -378,14 +378,14 @@ def test_the_dense_setting_of_the_trap_is_the_trap_exploration_file_with_the_pro
 
 
 def test_the_narrow_gate_files_are_gone() -> None:
-    """D61 is withdrawn: the trap layout contains the narrow gate."""
+    """The trap layout contains the narrow gate."""
     assert not list(CONFIG_DIR.glob("slalom_narrow*"))
 
 
 @pytest.mark.parametrize("layout", ["slalom", "tunnel"])
 def test_the_exploration_setting_is_the_sparse_layout_without_the_curriculum(layout: str) -> None:
-    """D63, D68: `<layout>_sparse_nocur.yaml` differs from `<layout>_sparse.yaml` in the curriculum only (none);
-    the tunnel's exploration file is the control of D68."""
+    """`<layout>_sparse_nocur.yaml` differs from `<layout>_sparse.yaml` in the curriculum only (none);
+    the tunnel's exploration file is the control."""
     main = load_env_config(CONFIG_DIR / f"{layout}_sparse.yaml")
     plain = load_env_config(CONFIG_DIR / f"{layout}_sparse_nocur.yaml")
     assert main.task.curriculum is not None and plain.task.curriculum is None

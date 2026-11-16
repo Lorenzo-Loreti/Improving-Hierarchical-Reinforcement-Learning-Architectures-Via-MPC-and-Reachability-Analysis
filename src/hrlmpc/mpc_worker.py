@@ -1,11 +1,9 @@
-"""The MPC Worker of PPO_MPC: the tube MPC of D31-D34 with the waypoint cost of D37, solved by Gurobi and Clarabel
-(decision log D31-D35, D37-D39, D45-D47, D49).
+"""The MPC Worker of PPO_MPC: the tube MPC with the waypoint cost, solved by Gurobi and Clarabel.
+
 
 :mod:`hrlmpc.mpc_problem` defines the problem; this module solves it, at every
-step and for every agent, with the scheme of the pre-alignment Worker
-(``algorithms/tube_mpc.py``, D34). The cost depends on the steps left in the
-segment (D37) and, with a tube, on the measured state (the regularizer of
-D46), so it is set at every step; both solvers minimise the same cost:
+step and for every agent, with two solvers. The cost depends on the steps left in the
+segment and, with a tube, on the measured state (the regularizer), so it is set at every step; both solvers minimise the same cost:
 
 - Gurobi solves a relaxation, a mixed-integer QP: the speed and thrust disks
   replaced by the regular polygon of :data:`BASE_SIDES` sides circumscribed
@@ -23,14 +21,13 @@ tightened where it was loose (tangents of the disks at the plans' points on or
 past their edges, and the supporting half-space of ``Z`` that the separation
 oracle :class:`_GaugeOracle` returns), and both are solved again, at most
 :data:`MAX_CUT_ROUNDS` times. A round that adds no cut returns the
-relaxation's own plan, as the legacy Worker did: it meets the disks and ``Z``
+relaxation's own plan: it meets the disks and ``Z``
 to :data:`CUT_TOL` and the faces to :attr:`~hrlmpc.mpc_problem.MPCProblem.face_slack`,
-which ``rho`` covers, so the speed limiter may act about 1e-6 m/s beyond what
-F3 covers. When the reachable positions fix every binary
+which ``rho`` covers, so the speed limiter may act about 1e-6 m/s beyond what the tightening covers. When the reachable positions fix every binary
 (:meth:`~hrlmpc.mpc_problem.MPCProblem.fixed_binaries`), as on the tunnel, the
 problem is convex and Clarabel solves it alone.
 
-Two remedies keep the plans the search finds (D49):
+Two remedies keep the plans the search finds:
 
 - R1: a search whose rounds run out after it found exact plans, none within
   the gap, returns the cheapest of them (:data:`~hrlmpc.mpc_command.BEST`),
@@ -46,8 +43,8 @@ Two remedies keep the plans the search finds (D49):
 Both keep the guarantees of the relaxation's own plan; exceptions and
 infeasible verdicts still give no plan.
 
-The shifted previous plan (algorithm 3 of the tube-MPC note) is the benchmark
-of the solvers' plan and the fallback. Theorem 4.1 keeps it feasible after
+The shifted previous plan is the benchmark
+of the solvers' plan and the fallback. Proposition A.7 of the thesis keeps it feasible after
 every disturbance in ``D``; of its constraints, only the tube constraint
 depends on the last step's disturbance, and it is checked (to
 :data:`CANDIDATE_TOL`) whenever the shifted plan would be applied:
@@ -67,7 +64,7 @@ counted in ``solver_errors``; Gurobi's licence errors propagate, since every
 step would repeat them. A failure of Clarabel on the exact problem within the
 rounds of cuts is survived: the round goes on with the relaxation's plan.
 
-Each search reports how it ended (D47, the exits of
+Each search reports how it ended (the exits of
 :data:`~hrlmpc.mpc_command.EXITS`): with every binary fixed, a plan
 (``FIXED``) or none (``UNSOLVED``); otherwise the exact plan within the gap
 (``CONVERGED``), the relaxation's own plan (``RELAXATION``), the cheapest
@@ -90,14 +87,14 @@ slot solves as a fresh Worker would. The conic problems are compiled when the
 Worker is built, so that cvxpy's compilation does not count in the first
 step's solve time.
 
-The targets of architecture 4 (D38, D39) use the same problem:
+The targets of architecture 4 use the same problem:
 :class:`ReachSupport` solves it without obstacles for the support points of the
 reachable set, and :meth:`MPCWorker.project` solves it, as a fresh Worker, for
 the reachable point nearest to a target; :func:`reachable_targets` puts them
 together for :mod:`hrlmpc.reachability`.
 
 Gurobi (academic licence: the pip licence is size-limited) and cvxpy with
-Clarabel are the extra ``mpc`` (D5); importing this module without them fails.
+Clarabel are the extra ``mpc``; importing this module without them fails.
 """
 
 from __future__ import annotations
@@ -143,7 +140,7 @@ CUT_TOL = 1e-6
 """How far past the edge of a disk, or outside ``Z``, a plan's point must lie to get a cut."""
 
 MAX_CUT_ROUNDS = 25
-"""Largest number of mixed-integer solves per search; then the cheapest exact plan found takes over (R1 of D49),
+"""Largest number of mixed-integer solves per search; then the cheapest exact plan found takes over (R1),
 or, without one, the shifted plan."""
 
 Z_SEED_KEEP = 32
@@ -166,7 +163,7 @@ LICENCE_ERRORS = (GRB.ERROR_NO_LICENSE, GRB.ERROR_SIZE_LIMIT_EXCEEDED)
 
 PLAN_STATUSES = ("optimal", "optimal_inaccurate", "user_limit")
 """cvxpy's statuses of an exact solve that come with a plan: Clarabel's optimum; an inaccurate optimum or its
-iteration limit, whose plan counts only if the checker accepts it (R2 of D49)."""
+iteration limit, whose plan counts only if the checker accepts it (R2)."""
 
 _POLYGON = np.array([[np.cos(t), np.sin(t)] for t in 2.0 * np.pi * np.arange(BASE_SIDES) / BASE_SIDES])
 
@@ -230,7 +227,7 @@ class _ExactProblem:
     binaries as parameters, so that one compiled problem serves every step: the
     stage enters as a one-hot selector of the plan's positions, the effort as a
     0/1 mask of the inputs before it. With a tube and ``eps > 0`` the cost has
-    the regularizer ``eps ||z_0 - x||^2`` of D46.
+    the regularizer ``eps ||z_0 - x||^2``.
     """
 
     def __init__(self, problem: MPCProblem) -> None:
@@ -247,12 +244,12 @@ class _ExactProblem:
             delta = cp.Parameter((N, obstacle.num_faces))
             big_m = np.tile(obstacle.big_m, (N, 1))
             rhs = np.tile(obstacle.bounds - obstacle.big_m, (N, 1)) + cp.multiply(delta, big_m)
-            cons += [z[:N, :2] @ obstacle.normals.T >= rhs, z[1:, :2] @ obstacle.normals.T >= rhs]  # both ends (D32)
+            cons += [z[:N, :2] @ obstacle.normals.T >= rhs, z[1:, :2] @ obstacle.normals.T >= rhs]  # both ends
             self.deltas.append(delta)
         settings = problem.settings
         objective = settings.target_weight * cp.sum_squares(self.select @ z[:, :2] - self.target)
         objective = objective + settings.effort_weight * cp.sum_squares(cp.multiply(self.mask, v))
-        if problem.regularized:  # D46
+        if problem.regularized:
             objective = objective + settings.start_weight * cp.sum_squares(z[0] - self.x)
         self.prob = cp.Problem(cp.Minimize(objective), cons)
         self.last_status: str | None = None
@@ -283,7 +280,7 @@ class _ExactProblem:
 
         A plan comes with every status of :data:`PLAN_STATUSES`: the optimum,
         or an inaccurate optimum or the iteration limit, whose plan the caller
-        must check before it uses it (R2 of D49), since a plan whose
+        must check before it uses it (R2), since a plan whose
         constraints are not met to the solver's tolerance has no place in a
         robust plan unless they are met to the tolerances of the relaxation's
         own plan. ``None`` when the binaries leave the exact problem
@@ -311,7 +308,7 @@ class _ExactProblem:
 
 
 class ReachSupport:
-    """The support points of the reachable set without obstacles (D38): for each fixed direction ``a``, the
+    """The support points of the reachable set without obstacles: for each fixed direction ``a``, the
     position at stage ``stage`` of the plan that goes farthest along ``a``, over the Worker's problem without its
     obstacles (the tube, the tightened sets, the arena, the terminal rest).
 
@@ -431,10 +428,10 @@ class _Slot:
 
 
 class MPCWorker:
-    """The tube MPC of D31-D34, one Gurobi model per agent (slot).
+    """The tube MPC, one Gurobi model per agent (slot).
 
     ``act(x, target, steps_left, slot)`` returns the input that steers the agent
-    through the target when the segment ends, ``steps_left`` steps ahead (D37).
+    through the target when the segment ends, ``steps_left`` steps ahead.
     Slots are independent agents, each with its own model and last plan;
     :meth:`reset` forgets a slot's plan and must be called when its episode
     ends, so the next step does not start from another episode's plan.
@@ -548,7 +545,7 @@ class MPCWorker:
 
     # ---------------------------------------------------------------- helpers
     def _begin_search(self) -> None:
-        """Clear the report and the best exact plan of the search that starts (D47, D49)."""
+        """Clear the report and the best exact plan of the search that starts."""
         self._errors = 0
         self._exit = CONVERGED
         self._inaccurate = 0
@@ -561,7 +558,7 @@ class MPCWorker:
         self._plan_accepted = False
 
     def _report(self) -> SearchReport:
-        """The report of the last search (D47)."""
+        """The report of the last search."""
         return SearchReport(
             errors=self._errors,
             exit=self._exit,
@@ -573,9 +570,9 @@ class MPCWorker:
         )
 
     def _set_objective(self, slot: _Slot, target: FloatArray, steps_left: int, x: FloatArray) -> None:
-        """The cost of D37 for the target and the waypoint's stage ``k* = steps_left``, expanded:
+        """The cost for the target and the waypoint's stage ``k* = steps_left``, expanded:
         ``q_g (z' z - 2 g' z + g' g) + r_e sum_{k<k*} v_k' v_k`` with ``z`` the waypoint's position, plus, when
-        the problem is regularized (D46), ``eps (z_0' z_0 - 2 x' z_0 + x' x)``: the cost of the exact problem."""
+        the problem is regularized, ``eps (z_0' z_0 - 2 x' z_0 + x' x)``: the cost of the exact problem."""
         settings = self.problem.settings
         waypoint = slot.z[steps_left, :2]
         distance = waypoint @ waypoint - 2.0 * (target @ waypoint) + float(target @ target)
@@ -612,7 +609,7 @@ class MPCWorker:
         slot.m.optimize()
 
     def _within(self, x: FloatArray, z: FloatArray, v: FloatArray) -> bool:
-        """R2 of D49: whether an inaccurate exact plan meets the constraints within the tolerances of the
+        """R2: whether an inaccurate exact plan meets the constraints within the tolerances of the
         relaxation's own plan: :meth:`~hrlmpc.mpc_problem.MPCProblem.plan_within` to :data:`CUT_TOL` and, with a
         tube, the gauge of ``x - z_0`` at most ``1 + CUT_TOL``. A failure of the gauge rejects the plan and counts
         as an error; an inaccurate gauge, infinite, rejects it too."""
@@ -631,8 +628,7 @@ class MPCWorker:
         self, x: FloatArray, target: FloatArray, steps_left: int, deltas: Binaries
     ) -> tuple[FloatArray, FloatArray, float] | None:
         """The exact problem for these binaries: Clarabel's optimum, or its inaccurate plan if the checker accepts
-        it (R2 of D49), which :attr:`_last_accepted` then marks; a solve without a plan is counted by its status
-        (D47).
+        it (R2), which :attr:`_last_accepted` then marks; a solve without a plan is counted by its status.
 
         Raises:
             SolverFailure: If Clarabel fails.
@@ -666,9 +662,9 @@ class MPCWorker:
     def _optimize(
         self, slot: _Slot, x: FloatArray, target: FloatArray, steps_left: int, bounds: Bounds
     ) -> Plan | None:
-        """The optimal plan; the cheapest exact plan found if the rounds ran out (R1 of D49); ``None`` if there is
-        no plan, the rounds ran out without an exact plan or a solver failed. The exit of the search is recorded
-        (D47), and whether its plan is an accepted inaccurate plan (D49).
+        """The optimal plan; the cheapest exact plan found if the rounds ran out (R1); ``None`` if there is
+        no plan, the rounds ran out without an exact plan or a solver failed. The exit of the search is recorded,
+and whether its plan is an accepted inaccurate plan.
 
         Raises:
             gurobipy.GurobiError: Gurobi's licence errors (:data:`LICENCE_ERRORS`).
@@ -692,7 +688,7 @@ class MPCWorker:
             return None
 
     def _out_of_rounds(self) -> Plan | None:
-        """R1 of D49: when the rounds run out, the cheapest exact plan the search found, with the exit
+        """R1: when the rounds run out, the cheapest exact plan the search found, with the exit
         :data:`~hrlmpc.mpc_command.BEST`; without one, nothing, with the exit :data:`~hrlmpc.mpc_command.ROUNDS`."""
         if self._best is None:
             self._exit = ROUNDS
@@ -703,7 +699,7 @@ class MPCWorker:
 
     def _cut_loop(self, slot: _Slot, x: FloatArray, target: FloatArray, steps_left: int) -> Plan | None:
         """Relaxation, exact problem and cuts, until the exact plan is optimal to the gap (module docstring), or
-        the cheapest uncertified exact plan when the rounds run out (R1 of D49); the exit is recorded, except a
+        the cheapest uncertified exact plan when the rounds run out (R1); the exit is recorded, except a
         failure's, which :meth:`_optimize` records."""
         m = slot.m
         cuts: list[Any] = []
@@ -819,7 +815,7 @@ class MPCWorker:
 
     def act(self, x: ArrayLike, target: ArrayLike, steps_left: int, slot: int = 0) -> tuple[FloatArray, WorkerStep]:
         """One step for ``slot``: the input at the measured state ``x = (p, v)`` through ``target``
-        when the segment ends, ``steps_left`` steps ahead (D37).
+        when the segment ends, ``steps_left`` steps ahead.
 
         Raises:
             ValueError: If ``steps_left`` does not lie in ``1, ..., N``.
@@ -876,8 +872,8 @@ class MPCWorker:
     ) -> tuple[FloatArray | None, SearchReport]:
         """The position at stage ``steps_left`` of the plan for ``target`` from the state ``x``, solved as by a
         fresh Worker: the reachable point nearest to ``target`` up to the trade-off with the effort and, with a
-        tube, the regularizer (D37, D39, D46), or ``None`` if the solvers find no plan; and the report of the
-        search (D47).
+        tube, the regularizer, or ``None`` if the solvers find no plan; and the report of the
+        search.
 
         The slot is reset before and after, so a projection neither uses nor
         leaves a plan or cuts; it is meant for a Worker of its own, whose slots
@@ -935,7 +931,7 @@ class MPCWorker:
 
 
 def reachable_targets(problem: MPCProblem, segment_steps: int, directions: int) -> ReachableTargets:
-    """The targets of architecture 4 (D38, D39): the support points of the reachable set without obstacles in
+    """The targets of architecture 4: the support points of the reachable set without obstacles in
     ``directions`` fixed directions (Clarabel), and the projection by a Worker of their own (Gurobi and Clarabel),
     which :meth:`~hrlmpc.reachability.ReachableTargets.close` releases.
 

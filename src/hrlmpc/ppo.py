@@ -1,19 +1,18 @@
-"""In-house PPO, the one implementation shared by every learner (decision log D5, D15, D19, D43).
+"""In-house PPO, the one implementation shared by every learner.
 
-Flat PPO and both levels of hPPO use it (steps 7-8); the Managers of the MPC
-architectures will (steps 9-10). It is a faithful port of the pre-alignment
-flat PPO (``algorithms/ppo/ppo.py`` at tag ``pre-alignment``): the same
+Flat PPO, both levels of hPPO and the Managers of the MPC architectures use it. It reproduces an
+earlier stand-alone implementation of flat PPO, of which ``tests/reference/`` keeps a frozen copy: the same
 networks, initialization, losses and update schedule, so that given the same
 weights, batch and seed the update ends on bit-identical weights
-(``tests/test_ppo.py``, against the frozen copy in ``tests/reference/``).
+(``tests/test_ppo.py``).
 
-Policy (D15). One Beta distribution per action axis on ``y`` in ``[0, 1]``,
+Policy. One Beta distribution per action axis on ``y`` in ``[0, 1]``,
 with concentrations ``softplus(.) + 1 >= 1``, mapped to the action
 ``x = 2 y - 1`` in the square; the environment maps ``x`` onto ``U``. The
 log-probability is the density of ``x``. Samples are kept in
 ``[LOG_PROB_EPS, 1 - LOG_PROB_EPS]``, so every log-probability is finite and
-every action is admissible. The evaluations run two deterministic actions
-(D20, D43): the mean of each Beta, and its mode, which reaches the edge of
+every action is admissible. The evaluations run two deterministic actions:
+the mean of each Beta, and its mode, which reaches the edge of
 the square (:func:`hrlmpc.action_map.beta_mode`).
 
 Critic. A separate network regresses standardized returns. Running statistics
@@ -229,7 +228,7 @@ class PPOAgent:
         )
         self._base_lrs = [float(group["lr"]) for group in self.optimizer.param_groups]
         # The affine map between y in [0, 1] and x in [-1, 1], as tensors, with the
-        # same arithmetic as the pre-alignment implementation.
+        # same arithmetic as the reference implementation.
         low = torch.tensor(-1.0, device=self.device)
         high = torch.tensor(1.0, device=self.device)
         self._low = low
@@ -267,20 +266,20 @@ class PPOAgent:
 
     @torch.no_grad()
     def deterministic_action(self, obs: ArrayLike) -> FloatArray:
-        """The mean of the policy, for evaluation (D20)."""
+        """The mean of the policy, for evaluation."""
         alpha, beta = self.actor(self._tensor(obs))
         mean = alpha / (alpha + beta)
         return _numpy(mean * self._scale + self._low)
 
     def mode_action(self, obs: ArrayLike) -> FloatArray:
-        """The mode of the policy, for evaluation (D43): the mode of each Beta mapped to the square; on its edge
+        """The mode of the policy, for evaluation: the mode of each Beta mapped to the square; on its edge
         where a concentration is 1."""
         alpha, beta = self.concentrations(obs)
         result: FloatArray = 2.0 * beta_mode(alpha, beta) - 1.0
         return result
 
     def deterministic_policy(self, action: str) -> Callable[[ArrayLike], FloatArray]:
-        """The deterministic action an evaluation names (D43, D50): :meth:`deterministic_action` for ``"mean"``,
+        """The deterministic action an evaluation names: :meth:`deterministic_action` for ``"mean"``,
         :meth:`mode_action` for ``"mode"``.
 
         Raises:

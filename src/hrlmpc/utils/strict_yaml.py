@@ -1,4 +1,4 @@
-"""YAML loading for the configuration files: safe, and strict about repeated keys (code rule C2).
+"""YAML loading for the configuration files: safe, and strict about repeated keys.
 
 PyYAML keeps the last of two equal keys in a mapping without a word, so a
 value written twice in a configuration file would silently override the

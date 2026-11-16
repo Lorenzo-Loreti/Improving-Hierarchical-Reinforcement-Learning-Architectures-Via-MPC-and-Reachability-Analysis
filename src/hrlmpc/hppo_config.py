@@ -1,13 +1,12 @@
-"""Typed configuration of hPPO, loaded from YAML (code rule C2, decision log D24, D27, D28).
+"""Typed configuration of hPPO, loaded from YAML.
 
 ``configs/agent/hppo.yaml`` holds the hierarchy (segment length ``H``, the
 targets' radius as a multiple of a segment's reach, the price of the
-Worker's progress, D66, and optionally the Worker's local map features,
-D75), the rollout, one network
+Worker's progress, and optionally the Worker's local map features), the rollout, one network
 and one PPO update for each level, the evaluation protocol and the runtime. The
 sections shared with flat PPO are validated by :mod:`hrlmpc.ppo_config`. Each
 level has its own discount: the Worker's per step, the Manager's per step
-within a segment and ``gamma^tau`` between decisions (D27). Unknown, missing or
+within a segment and ``gamma^tau`` between decisions. Unknown, missing or
 repeated keys are errors. This module does not import PyTorch.
 """
 
@@ -33,7 +32,7 @@ from hrlmpc.utils.strict_yaml import load_yaml
 
 @dataclass(frozen=True)
 class MapFeaturesConfig:
-    """The learned Worker's local map features (D75): ``rays`` distances to the first wall along as many fixed
+    """The learned Worker's local map features: ``rays`` distances to the first wall along as many fixed
     directions, clipped at ``range`` metres and scaled by it (:class:`hrlmpc.hierarchy.MapFeatures`).
 
     Raises:
@@ -52,20 +51,20 @@ class MapFeaturesConfig:
 
 @dataclass(frozen=True)
 class HierarchyConfig:
-    """Segments, targets, the Worker's price and the Worker's map features (D24, D25, D27, D66, D75).
+    """Segments, targets, the Worker's price and the Worker's map features.
 
     Attributes:
         segment_steps: ``H``, the steps of a full segment.
         target_reach_factor: The targets' radius as a multiple of the longest
             displacement in a segment, ``v_max H T_s``.
-        worker_progress_coef: ``c_p`` of the Worker's reward (D25): the price
+        worker_progress_coef: ``c_p`` of the Worker's reward: the price
             of the decrease of the distance to the target, in seconds per
             metre. It belongs to the hierarchy, not to the environment: the
-            sparse reward of D51 has no progress term (``progress_coef`` 0),
-            and the Worker keeps its dense reward (D66). The shipped value is
+            sparse reward has no progress term (``progress_coef`` 0),
+            and the Worker keeps its dense reward. The shipped value is
             the shaped reward's, 10.
         worker_map_features: The local map features appended to the Worker's
-            input (D75), or ``None`` for the Worker of D26, which knows no
+            input, or ``None`` for the Worker, which knows no
             walls; absent from the file means ``None``.
     """
 
@@ -93,7 +92,7 @@ class LevelConfig:
 
 @dataclass(frozen=True)
 class HPPOConfig:
-    """Complete configuration of hPPO (D28).
+    """Complete configuration of hPPO.
 
     Raises:
         ValueError: If a rollout cannot close a segment per agent, if the
@@ -149,7 +148,7 @@ class HPPOConfig:
 
 
 SHAPED_PROGRESS_COEF = 10.0
-"""The shaped reward's ``progress_coef`` (D13), the shipped price of the Worker's progress (D66)."""
+"""The shaped reward's ``progress_coef``, the shipped price of the Worker's progress."""
 
 _TOP = ("hierarchy", "rollout", "manager", "worker", "evaluation", "runtime")
 _LEVEL = ("network", "update")
@@ -194,7 +193,7 @@ def _hierarchy(data: Any) -> HierarchyConfig:
 
 def with_worker_price(agent: Any) -> Any:
     """``agent`` with ``hierarchy.worker_progress_coef`` set to :data:`SHAPED_PROGRESS_COEF` where it is missing:
-    the ``config.yaml`` of a run from before D66, whose Worker was paid the environment's ``progress_coef``. For
+    the ``config.yaml`` of an older run, whose Worker was paid the environment's ``progress_coef``. For
     reloading a run's policies for evaluation, where the price is immaterial."""
     hierarchy = agent.get("hierarchy") if isinstance(agent, dict) else None
     if isinstance(hierarchy, dict) and "worker_progress_coef" not in hierarchy:

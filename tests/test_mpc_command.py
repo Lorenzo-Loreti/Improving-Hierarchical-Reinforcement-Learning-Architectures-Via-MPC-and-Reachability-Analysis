@@ -1,5 +1,4 @@
-"""Tests of the MPC Worker's adapter to the common loop and of its statistics, without solvers (D34, D37, D47,
-D49)."""
+"""Tests of the MPC Worker's adapter to the common loop and of its statistics, without solvers."""
 
 from __future__ import annotations
 
@@ -74,7 +73,7 @@ def test_the_command_steers_every_agent_with_its_own_slot() -> None:
     u = command.command(obs_map.observe(p, v), p, targets, np.array([10, 3, 1]))
     np.testing.assert_allclose(u, v + targets)
     assert [slot for _, _, slot in worker.calls] == [0, 1, 2]
-    assert worker.steps_left == [10, 3, 1]  # each agent's steps to the end of its segment (D37)
+    assert worker.steps_left == [10, 3, 1]  # each agent's steps to the end of its segment
     for (x, target, _), p_i, v_i, g_i in zip(worker.calls, p, v, targets, strict=True):
         np.testing.assert_allclose(x, np.concatenate([p_i, v_i]))  # the velocity read back from the observation
         np.testing.assert_array_equal(target, g_i)
@@ -93,7 +92,7 @@ def test_the_statistics_are_kept_per_step_and_agent_until_popped() -> None:
     np.testing.assert_array_equal(stats["free_binaries"][2], [0, 2, 4, 6])
     np.testing.assert_array_equal(stats["invalid_candidate"][1], [0, 1, 0, 0])
     np.testing.assert_array_equal(stats["solver_errors"][1], [0, 0, 0, 1])
-    np.testing.assert_array_equal(stats["exit"][0], [CONVERGED, FIXED, BEST, ERROR])  # D47, D49
+    np.testing.assert_array_equal(stats["exit"][0], [CONVERGED, FIXED, BEST, ERROR])
     np.testing.assert_array_equal(stats["exact_inaccurate"][2], [0, 1, 2, 3])
     np.testing.assert_array_equal(stats["exact_infeasible"][2], [0, 0, 1, 0])
     np.testing.assert_array_equal(stats["exact_uncertified"][1], [0, 2, 4, 6])
@@ -148,8 +147,8 @@ def _stats(outcome: list[list[int]], ratio: list[list[float]], exits: list[list[
 
 
 def test_the_exits_of_a_search_are_named() -> None:
-    """D47, D49: every code names one way a search can end, and a report of a search defaults to a clean one.
-    The codes of D47 keep their values; the best uncertified plan of D49 comes last."""
+    """Every code names one way a search can end, and a report of a search defaults to a clean one.
+    The codes keep their values; the best uncertified plan comes last."""
     codes = (CONVERGED, RELAXATION, FIXED, ROUNDS, EMPTY, UNSOLVED, ERROR, BEST)
     assert codes == tuple(range(len(EXITS))) and len(set(EXITS)) == len(EXITS)
     assert EXITS[UNSOLVED] == "unsolved" and EXITS[CONVERGED] == "converged" and EXITS[BEST] == "best"
@@ -159,7 +158,7 @@ def test_the_exits_of_a_search_are_named() -> None:
 
 
 def test_the_metrics_summarise_the_counted_steps() -> None:
-    """D47, D49: the remedies' plans count as applied when the solvers' plan was (outcome SOLVER)."""
+    """The remedies' plans count as applied when the solvers' plan was (outcome SOLVER)."""
     nan = float("nan")
     stats = _stats([[SOLVER, CANDIDATE], [KEPT, EMERGENCY], [SOLVER, EMERGENCY]], [[nan, 0.4], [0.2, 0.9], [nan, 0.7]],
                    exits=[[BEST, CONVERGED], [RELAXATION, ERROR], [FIXED, EMPTY]],

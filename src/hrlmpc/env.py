@@ -1,29 +1,28 @@
-"""The navigation MDP on top of the physical step (decision log D6, D10, D13-D15, D18; rows R1-R5, AM1).
+"""The navigation MDP on top of the physical step.
 
 :class:`NavigationEnv` runs ``num_envs`` independent episodes in lockstep. At
 each step, for every agent:
 
-1. the action ``x`` in ``[-1, 1]^2`` is mapped onto ``U`` (D15); an MPC Worker
+1. the action ``x`` in ``[-1, 1]^2`` is mapped onto ``U``; an MPC Worker
    gives the commanded acceleration directly (:meth:`NavigationEnv.step_input`);
-2. a disturbance is drawn uniformly in area on ``D`` (D10);
+2. a disturbance is drawn uniformly in area on ``D``;
 3. :func:`hrlmpc.physics.physics_step` advances the state;
-4. the reward of D13 is computed, with the contact penalty of D14:
+4. the reward is computed, with the contact penalty:
 
        r_k = -c_t - c_n ||dv_wall_k|| - c_s 1[contact at k] + B 1[p_(k+1) in G]
              + s Phi(p_(k+1)) - Phi(p_k) - c_e ||u_k||^2 / a_max^2,
 
-   ``Phi(p) = -c_p max(goal_x - p_x, 0)``, ``s`` the shaping discount (1 by
-   D22), ``u_k`` the input after the saturation onto ``U``; the unshaped
+   ``Phi(p) = -c_p max(goal_x - p_x, 0)``, ``s`` the shaping discount (1), ``u_k`` the input after the saturation onto ``U``; the unshaped
    reward omits the shaping term;
 5. an episode terminates when ``p_(k+1)`` lies in the goal region and is
    truncated at the horizon. A finished episode restarts at rest, uniformly in
-   the spawn box or, with the reverse spawn curriculum of D62
+   the spawn box or, with the reverse spawn curriculum
    (:mod:`hrlmpc.curriculum`), in the current band of the curriculum, unless
    automatic resets are disabled. Explicit starts (the evaluation) bypass the
    curriculum and do not count for its stage.
 
-Contact is never terminal (D1). Observations are ``(p, v)`` mapped to
-``[-1, 1]`` with the arena's bounding box and ``v_max`` (D13); the map is
+Contact is never terminal. Observations are ``(p, v)`` mapped to
+``[-1, 1]`` with the arena's bounding box and ``v_max``; the map is
 fixed and invertible (:class:`ObservationMap`).
 
 Random numbers. Each agent owns two generators spawned from the seed: one for
@@ -33,7 +32,7 @@ batch size or on the other agents; with a curriculum, the band an agent
 starts from is shared state that every agent's outcomes advance. Every level of ``d_bar`` draws the same unit
 disturbances, scaled by ``d_bar``, which pairs the comparisons across levels.
 
-Samples (D6): every physical step adds ``num_envs`` to ``counter.env_steps``;
+Samples: every physical step adds ``num_envs`` to ``counter.env_steps``;
 resets add nothing.
 """
 
@@ -68,7 +67,7 @@ ACTION_TOL = 1e-12
 
 @dataclass(frozen=True, eq=False)
 class ObservationMap:
-    """The fixed map between states and observations (D13), and its inverse.
+    """The fixed map between states and observations, and its inverse.
 
     Positions are mapped to ``[-1, 1]`` with the bounding box of the arena,
     velocities by ``v_max``. Every state of the environment lies inside these
@@ -116,14 +115,14 @@ class ObservationMap:
 
 @dataclass(frozen=True, eq=False)
 class StepInfo:
-    """Per-agent quantities of one step, for evaluation and for the metrics of rows R3-R4.
+    """Per-agent quantities of one step, for evaluation and for the metrics.
 
     Attributes:
         u_cmd: ``(B, 2)`` commanded accelerations.
         u: ``(B, 2)`` inputs after the saturation onto ``U``.
         disturbance: ``(B, 2)`` disturbances ``d_k``.
-        reward_unshaped: ``(B,)`` rewards without the shaping term (D13).
-        contact: ``(B,)`` contact in the sense of D14.
+        reward_unshaped: ``(B,)`` rewards without the shaping term.
+        contact: ``(B,)`` contact in the sense.
         impulse: ``(B,)`` ``||dv_wall||``, the normal velocity cancelled by the walls [m/s].
         limiter: ``(B,)`` correction of the speed limiter, ``||v^ - v~|| / dt`` [m/s^2].
         saturation: ``(B,)`` correction of the saturation onto ``U``, ``||u - u_cmd||`` [m/s^2].
@@ -152,15 +151,15 @@ class EpisodeStats:
         length: Number of steps.
         success: Whether the episode reached the goal region.
         episode_return: Undiscounted sum of the rewards.
-        unshaped_return: Undiscounted sum of the unshaped rewards (evaluation, D13).
-        contact_steps: Steps with contact (R3, duration).
-        contact_events: Maximal runs of contact steps (R3, number).
-        impulse: Sum of ``||dv_wall||``, the cancelled normal velocity [m/s] (R3).
-        wall_steps: Steps with a wall reaction (R4).
-        limiter_steps: Steps in which the speed limiter acted (R4).
-        limiter_total: Sum of the limiter corrections [m/s^2] (R4).
-        saturation_steps: Steps in which the saturation onto ``U`` acted (R4).
-        saturation_total: Sum of the saturation corrections [m/s^2] (R4).
+        unshaped_return: Undiscounted sum of the unshaped rewards (evaluation).
+        contact_steps: Steps with contact (duration).
+        contact_events: Maximal runs of contact steps (number).
+        impulse: Sum of ``||dv_wall||``, the cancelled normal velocity [m/s].
+        wall_steps: Steps with a wall reaction.
+        limiter_steps: Steps in which the speed limiter acted.
+        limiter_total: Sum of the limiter corrections [m/s^2].
+        saturation_steps: Steps in which the saturation onto ``U`` acted.
+        saturation_total: Sum of the saturation corrections [m/s^2].
     """
 
     env: int
@@ -240,7 +239,7 @@ class NavigationEnv:
         self.curriculum: SpawnCurriculum | None = (
             None if config.task.curriculum is None else SpawnCurriculum(config.task.curriculum, spawn, self.layout)
         )
-        """The reverse spawn curriculum of the training starts (D62), or ``None``."""
+        """The reverse spawn curriculum of the training starts, or ``None``."""
         self._episode_stage = np.full(num_envs, -1, dtype=np.int64)  # the stage each episode started in; -1: explicit
         self._p = np.zeros((num_envs, 2))
         self._v = np.zeros((num_envs, 2))
@@ -268,7 +267,7 @@ class NavigationEnv:
         return {} if self.curriculum is None else self.curriculum.metrics()
 
     def observe(self, p: ArrayLike, v: ArrayLike) -> FloatArray:
-        """Observations of states ``(p, v)``: both mapped to ``[-1, 1]`` (D13, :class:`ObservationMap`)."""
+        """Observations of states ``(p, v)``: both mapped to ``[-1, 1]`` (:class:`ObservationMap`)."""
         return self.obs_map.observe(p, v)
 
     def reset(
@@ -279,7 +278,7 @@ class NavigationEnv:
         Args:
             positions: One position per selected agent, free and outside the
                 goal region; by default drawn uniformly in the spawn box or, with
-                a curriculum, in the free part of its current band (D62).
+                a curriculum, in the free part of its current band.
             velocities: One velocity per selected agent; zero by default.
             mask: ``(B,)`` booleans selecting the agents.
 
@@ -318,7 +317,7 @@ class NavigationEnv:
         return self.observe(self._p, self._v)
 
     def step(self, action: ArrayLike) -> Transition:
-        """Advance every agent with actions ``x`` in ``[-1, 1]^2``, mapped onto ``U`` (D15).
+        """Advance every agent with actions ``x`` in ``[-1, 1]^2``, mapped onto ``U``.
 
         Raises:
             ValueError: If the actions are not ``(B, 2)``, not finite or outside
@@ -390,14 +389,14 @@ class NavigationEnv:
         return Transition(obs, reward, terminated, truncated, final_obs, info, episodes)
 
     def _disturbances(self) -> FloatArray:
-        """One disturbance per agent, uniform in area on ``D`` (D10)."""
+        """One disturbance per agent, uniform in area on ``D``."""
         unit = np.array([rng.random(2) for rng in self._disturbance_rngs])
         angle, radius = 2.0 * np.pi * unit[:, 0], np.sqrt(unit[:, 1])
         result: FloatArray = self.params.d_bar * (radius[:, None] * np.stack([np.cos(angle), np.sin(angle)], axis=1))
         return result
 
     def _potential(self, p: FloatArray) -> FloatArray:
-        """Shaping potential ``Phi(p) = -c_p max(goal_x - p_x, 0)`` (D13)."""
+        """Shaping potential ``Phi(p) = -c_p max(goal_x - p_x, 0)``."""
         result: FloatArray = -self.config.reward.progress_coef * np.maximum(self.layout.goal_x - p[:, 0], 0.0)
         return result
 

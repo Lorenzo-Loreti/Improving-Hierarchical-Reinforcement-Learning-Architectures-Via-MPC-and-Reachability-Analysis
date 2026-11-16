@@ -1,29 +1,29 @@
-"""Minimum-time oracle (decision log D44): the reference of the arrival times on a layout.
+"""Minimum-time oracle: the reference of the arrival times on a layout.
 
-For each start of the evaluation grid (D20) the oracle is the open-loop plan,
+For each start of the evaluation grid the oracle is the open-loop plan,
 without disturbance, that reaches the goal region in the fewest steps and,
 among those, with the least effort ``sum_k ||u_k||^2``, within the class of
-plans defined below. The minimum time replaces the lower bound of F7
+plans defined below. The minimum time replaces the lower bound
 (:func:`hrlmpc.evaluation.arrival_lower_bound`) as the reference of the
 arrival times where obstacles make the bound loose; without obstacles the two
-agree (F7 is attained by thrusting along ``+x``), a check of the oracle.
+agree (the bound is attained by thrusting along ``+x``), a check of the oracle.
 
 Problem for a horizon ``N``, a mixed-integer program with convex quadratic
 constraints (exact disks, no polygonal relaxation), solved by Gurobi to its
 MIP gap, or by Clarabel as a second-order cone program when the reach boxes
 fix every binary (every horizon without obstacles):
 
-    min  sum_{k<N} ||u_k||^2
-    s.t. x_0 = (p_0, 0),  x_{k+1} = A x_k + B u_k,                k = 0, ..., N-1
-         ||u_k||^2 <= (a_max - eps)^2,                            k = 0, ..., N-1
-         ||v_k||^2 <= (v_max - eps)^2,                            k = 1, ..., N
-         m_i' p_k <= b_i - rho                   (every face i of the arena),
+    min sum_{k<N} ||u_k||^2
+    s.t. x_0 = (p_0, 0), x_{k+1} = A x_k + B u_k, k = 0, ..., N-1
+         ||u_k||^2 <= (a_max - eps)^2, k = 0, ..., N-1
+         ||v_k||^2 <= (v_max - eps)^2, k = 1, ..., N
+         m_i' p_k <= b_i - rho (every face i of the arena),
          n_j' p_k >= c_j + rho - M_j (1 - delta_{k,j}),
          n_j' p_{k+1} >= c_j + rho - M_j (1 - delta_{k,j}),
-         sum_j delta_{k,j} >= 1                  (every obstacle, k = 0, ..., N-1; D32),
+         sum_j delta_{k,j} >= 1 (every obstacle, k = 0, ..., N-1),
          p_{x,N} >= goal_x + goal_margin.
 
-The first feasible ``N``, from the bound of F7 upwards, is the minimum time
+The first feasible ``N``, from the bound upwards, is the minimum time
 and its plan the least-effort one. The obstacle constraints are the Worker's
 (:mod:`hrlmpc.mpc_problem`): both ends of each segment lie beyond one face of
 the obstacle enlarged by ``rho``, so the whole segment does, which is what the
@@ -38,7 +38,7 @@ violated by, so that the replay's saturation and speed limiter stay inactive,
 and ``goal_margin`` the tolerance at the goal line. A start whose true
 optimum arrives within these margins of a constraint may be reported one step
 late. Binaries of faces that no plan can reach within the horizon are fixed
-beforehand from the bound of F7, without losing any feasible plan.
+beforehand from the bound, without losing any feasible plan.
 
 Oracle gap. The evaluation reports the arrival time of a policy minus the
 oracle's (:mod:`hrlmpc.evaluation`). It is non-negative for every policy
@@ -47,15 +47,14 @@ where it rounds a vertex more tightly than one face per step allows, or by
 braking on a wall (contact, which the oracle excludes and the reward
 penalizes), so a small negative gap is possible and not an error.
 
-Return. For a contact-free arrival in ``N`` steps the unshaped return of D13
-(and the sparse reward of D51) is ``success_bonus - time_penalty * N -
+Return. For a contact-free arrival in ``N`` steps the unshaped return
+(and the sparse reward) is ``success_bonus - time_penalty * N -
 effort_coef * sum_k ||u_k||^2 / a_max^2``, where the effort term lies in
 ``[0, effort_coef * N]``. When ``effort_coef * N < time_penalty`` no later
 arrival can beat an earlier one, so the oracle's plan also maximizes the
 unshaped return within its class, and its replayed return is the reference
 return of the start (:func:`entry_for` refuses a plan that fails this
-condition). Outside the class, the calibration of the contact penalty (D18,
-an engineering estimate) is meant to keep braking on a wall from paying. The
+condition). Outside the class, the calibration of the contact penalty (an engineering estimate) is meant to keep braking on a wall from paying. The
 shipped rewards (``effort_coef`` 0.01, ``time_penalty`` 1) satisfy the
 condition for ``N < 100``.
 
@@ -128,7 +127,7 @@ class OracleSettings:
             on the squared norm), and the margin must exceed that over twice the smaller radius, so that the plan's
             inputs and speeds stay strictly within the environment's disks.
         mip_gap: Gurobi's relative MIP gap on the effort.
-        max_extra_steps: How many horizons beyond the bound of F7 the search tries before giving up.
+        max_extra_steps: How many horizons beyond the bound the search tries before giving up.
     """
 
     rho: float = 1e-3
@@ -152,7 +151,7 @@ class OracleEntry:
 
     Attributes:
         start: The initial position ``(p_x, p_y)``, at rest.
-        lower_bound: The bound of F7 on the arrival time, in steps.
+        lower_bound: The bound on the arrival time, in steps.
         steps: The minimum time ``N``, in steps.
         effort: ``sum_k ||u_k||^2`` of the plan [m^2/s^4].
         inputs: The ``N`` inputs of the plan, ``((u_x, u_y), ...)``.
@@ -161,7 +160,7 @@ class OracleEntry:
         contact_steps: Contact steps of the replay (0 for a valid entry).
         corrections: Steps of the replay in which the saturation onto ``U``, the speed limiter or a wall reaction
             corrected the plan (0 for a valid entry: the plan is coherent).
-        unshaped_return: Unshaped return of the replay (D13): the reference return of the start (see the module).
+        unshaped_return: Unshaped return of the replay: the reference return of the start (see the module).
     """
 
     start: tuple[float, float]
@@ -333,7 +332,7 @@ def oracle_record(found: tuple[Path, OracleTable] | None) -> str | None:
 def oracle_line(found: tuple[Path, OracleTable] | None) -> str:
     """One line for the console at the start of a run: which table the oracle gaps are measured against."""
     if found is None:
-        return "no oracle table for the layout and starts: the oracle gaps are NaN (D44)"
+        return "no oracle table for the layout and starts: the oracle gaps are NaN"
     return f"oracle table {oracle_record(found)} ({len(found[1].entries)} starts)"
 
 
@@ -387,7 +386,7 @@ class OracleProblem:
         self.goal_x = float(self.layout.goal_x)
 
     def lower_bound(self, start: ArrayLike) -> int:
-        """The bound of F7 on the arrival time from ``start``, at rest, without disturbance."""
+        """The bound on the arrival time from ``start``, at rest, without disturbance."""
         return int(arrival_lower_bound(self.layout, np.atleast_2d(start), self.params)[0])
 
     def check_start(self, start: ArrayLike) -> FloatArray:
@@ -410,8 +409,7 @@ class OracleProblem:
         return point
 
     def reach_boxes(self, start: ArrayLike, horizon: int) -> tuple[FloatArray, FloatArray]:
-        """Bounds on the positions of every plan from ``start`` at rest: stage ``k`` lies within the distance that
-        F7 allows in ``k`` steps of the start on each axis, clipped to the tightened arena's bounding box.
+        """Bounds on the positions of every plan from ``start`` at rest: stage ``k`` lies within the distance that the bounds on input and speed allow in ``k`` steps of the start on each axis, clipped to the tightened arena's bounding box.
 
         Returns:
             ``(lo, hi)``, each ``(horizon + 1, 2)``.
@@ -447,7 +445,7 @@ class OracleProblem:
 
     def minimum_time(self, start: ArrayLike, solve: Solve) -> tuple[int, FloatArray]:
         """The minimum time from ``start`` and its least-effort plan: the first feasible horizon from the bound
-        of F7 upwards, within ``max_extra_steps`` of it.
+        upwards, within ``max_extra_steps`` of it.
 
         Args:
             start: The initial position, at rest.
@@ -468,7 +466,7 @@ class OracleProblem:
                 return horizon, plan
         raise RuntimeError(
             f"no plan from {point.tolist()} within {bound + self.settings.max_extra_steps} steps "
-            f"(bound of F7: {bound}); the search limit max_extra_steps may be too small"
+            f"(lower bound: {bound}); the search limit max_extra_steps may be too small"
         )
 
 
@@ -591,7 +589,7 @@ class OracleSolver:
 
     A horizon whose binaries the reach boxes all fix (:meth:`OracleProblem.fixed_binaries`; every horizon
     without obstacles, as on the tunnel) is convex, a second-order cone program that Clarabel solves through
-    cvxpy, as the Worker's exact problem (D34); the others go to Gurobi, with the settings of
+    cvxpy, as the Worker's exact problem; the others go to Gurobi, with the settings of
     :data:`GUROBI_RETRIES` in turn when a solve ends with a numerical status.
 
     Args:
@@ -659,7 +657,7 @@ class OracleSolver:
         cons = [
             z[0] == np.array([point[0], point[1], 0.0, 0.0]),
             z[1:] == z[:-1] @ pr.A.T + v @ pr.B.T,
-            cp.norm(v, 2, axis=1) <= pr.a_max,  # exact disks (D44), less the disk margin
+            cp.norm(v, 2, axis=1) <= pr.a_max,  # exact disks, less the disk margin
             cp.norm(z[1:, 2:], 2, axis=1) <= pr.v_max,
             z[:, :2] @ pr.arena_normals.T <= np.tile(pr.arena_bounds, (N + 1, 1)),
             z[N, 0] >= pr.goal_x + pr.settings.goal_margin,
@@ -702,7 +700,7 @@ class OracleSolver:
             for k in range(N):
                 ux, uy = us[k]
                 vx, vy = xs[k + 1][2], xs[k + 1][3]
-                m.addQConstr(ux * ux + uy * uy <= a_max**2, name=f"input{k}")  # exact disks (D44)
+                m.addQConstr(ux * ux + uy * uy <= a_max**2, name=f"input{k}")  # exact disks
                 m.addQConstr(vx * vx + vy * vy <= v_max**2, name=f"speed{k + 1}")
                 objective.add(ux * ux + uy * uy)
             m.addConstr(x[:, :2] @ pr.arena_normals.T <= np.tile(pr.arena_bounds, (N + 1, 1)), name="arena")
@@ -768,7 +766,7 @@ def gurobi_status_name(status: int | None) -> str:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Command line: compute the oracle table of a layout and save it as JSON (needs Gurobi)."""
-    parser = argparse.ArgumentParser(description="Compute the minimum-time oracle of a layout (D44).")
+    parser = argparse.ArgumentParser(description="Compute the minimum-time oracle of a layout.")
     parser.add_argument(
         "--env", type=Path, required=True, help="environment configuration, e.g. configs/env/slalom.yaml"
     )
@@ -776,7 +774,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--out", type=Path, default=None, help="output JSON; by default configs/oracle/<env stem>.json"
     )
     parser.add_argument(
-        "--grid", type=int, nargs=2, default=(5, 5), metavar=("NX", "NY"), help="starts on the spawn box (D20)"
+        "--grid", type=int, nargs=2, default=(5, 5), metavar=("NX", "NY"), help="starts on the spawn box"
     )
     parser.add_argument("--rho", type=float, default=OracleSettings.rho, help="margin from the walls [m]")
     parser.add_argument("--goal-margin", type=float, default=OracleSettings.goal_margin, help="margin at the goal [m]")

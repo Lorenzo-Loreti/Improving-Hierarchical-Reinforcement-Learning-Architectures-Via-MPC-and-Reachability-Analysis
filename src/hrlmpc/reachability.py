@@ -1,9 +1,8 @@
-"""Targets of PPO_MPC_reachability: the reachable set and the Manager's action map (decision log D38-D40, D47,
-D49).
+"""Targets of PPO_MPC_reachability: the reachable set and the Manager's action map.
 
 At a decision the Manager's action ``x`` in ``[-1, 1]^2`` sets a target in the
 set ``R_H`` of the positions at stage ``H`` of the plans that the MPC Worker
-may choose from the current state (D38): robust with respect to ``W`` in the
+may choose from the current state: robust with respect to ``W`` in the
 sense of the tube, contact-free, and able to stop by the end of the horizon.
 
 1. Support points of the part of ``R_H`` without obstacles, in ``n`` fixed
@@ -11,24 +10,23 @@ sense of the tube, contact-free, and able to stop by the end of the horizon.
    without obstacles (:class:`hrlmpc.mpc_worker.ReachSupport`). That part is
    convex, so the convex hull ``C`` of its support points is an inner
    approximation; between two directions it loses at most the fraction
-   ``1 - cos(pi / n)`` of a disk's radius (F5).
+   ``1 - cos(pi / n)`` of a disk's radius.
 2. ``q = c + ||m|| rho_C(m / ||m||) m / ||m||``, with ``m = m(x)`` the bijection
-   of D15 onto the unit disk, ``c`` the centroid of ``C`` and ``rho_C(u)`` the
+   onto the unit disk, ``c`` the centroid of ``C`` and ``rho_C(u)`` the
    distance from ``c`` to the boundary of ``C`` along ``u``: a bijection of the
    unit disk onto ``C``, radial about an interior point (:func:`radial_map`).
 3. The target is the position at stage ``H`` of the Worker's plan for ``q``,
    solved as by a fresh Worker (:meth:`hrlmpc.mpc_worker.MPCWorker.project`):
    the point of ``R_H``, obstacles included, nearest to ``q`` up to the
-   trade-off with the effort (D37: millimetres at the edge of the set), and
-   reachable by construction (D39). If no plan is found the target is ``q``,
-   and the failure is counted, with how the projection's search ended (D47).
+   trade-off with the effort (millimetres at the edge of the set), and
+   reachable by construction. If no plan is found the target is ``q``,
+   and the failure is counted, with how the projection's search ended.
    A search whose rounds run out returns the point of the cheapest exact plan
-   it found: reachable all the same, though not certified the nearest (R1 of
-   D49).
+   it found: reachable all the same, though not certified the nearest (R1).
 
-The Worker of architecture 3 treats an unreachable target in the same way
-(D37), so architectures 3 and 4 differ only in the map of the Manager's
-action: onto the disk of D24, or onto ``C``.
+The Worker of architecture 3 treats an unreachable target in the same way,
+so architectures 3 and 4 differ only in the map of the Manager's
+action: onto the disk, or onto ``C``.
 
 Everything here is NumPy; the solvers enter as callables, and their reports
 as :class:`~hrlmpc.mpc_command.SearchReport`.
@@ -60,10 +58,10 @@ Reachable sets are four orders of magnitude larger; this happens only near an in
 
 MOVED = 1e-2
 """A projection that moves the point of the hull by more than this [m] counts as moved by an obstacle or the
-arena: the trade-off with the effort alone moves points on the edge of the set by millimetres (D37)."""
+arena: the trade-off with the effort alone moves points on the edge of the set by millimetres."""
 
 REACHED_MARGIN = 0.1
-"""A target counts as reached when the segment ends within ``r_p + REACHED_MARGIN`` [m] of it (D40)."""
+"""A target counts as reached when the segment ends within ``r_p + REACHED_MARGIN`` [m] of it."""
 
 SupportFn = Callable[[FloatArray], FloatArray]
 """``(4,)`` state to ``(n, 2)`` support points in the fixed directions, a NaN row where a solve failed."""
@@ -71,7 +69,7 @@ SupportFn = Callable[[FloatArray], FloatArray]
 ProjectFn = Callable[[FloatArray, FloatArray], tuple[FloatArray | None, SearchReport]]
 """``(4,)`` state and ``(2,)`` point to the reachable target nearest to it, or ``None`` if no plan was found, and
 the report of the search: the solver failures it survived or ended with, how it ended and how its exact solves
-went (D47)."""
+went."""
 
 REACH_KEYS = (
     "support_ms",
@@ -93,8 +91,8 @@ REACH_KEYS = (
 projection moved the point of the hull; the directions whose solve failed; whether the hull was degenerate,
 so that the point was the support points' mean or the position; whether the projection found no plan; the
 solver failures during the projection; how its search ended, a code of :data:`~hrlmpc.mpc_command.EXITS`; its
-exact solves that were inaccurate or infeasible; its exact plans not certified within the MIP gap (D47); its
-inaccurate exact plans accepted by the checker; and whether its plan was one of those (D49)."""
+exact solves that were inaccurate or infeasible; its exact plans not certified within the MIP gap; its
+inaccurate exact plans accepted by the checker; and whether its plan was one of those."""
 
 
 def support_directions(count: int) -> FloatArray:
@@ -214,7 +212,7 @@ def radial_map(m: ArrayLike, vertices: ArrayLike, center: ArrayLike) -> FloatArr
 
 @dataclass(eq=False)
 class ReachableTargets:
-    """The target map of architecture 4 (D38, D39), with the :class:`~hrlmpc.hierarchy.TargetMap` interface.
+    """The target map of architecture 4, with the :class:`~hrlmpc.hierarchy.TargetMap` interface.
 
     Attributes:
         support: The support points of the part of the reachable set without obstacles.
@@ -315,7 +313,7 @@ class ReachableTargets:
 
 
 def reached_metrics(distances: ArrayLike, tolerance: float, prefix: str) -> dict[str, float]:
-    """How close the agents came to their targets at the end of full segments (D40), under ``<prefix>/``.
+    """How close the agents came to their targets at the end of full segments, under ``<prefix>/``.
 
     ``reached_rate``: the fraction of segments that ended within ``tolerance``
     [m] of the target, ``r_p + REACHED_MARGIN``; ``end_distance_mean`` and
@@ -344,10 +342,10 @@ def reach_metrics(stats: dict[str, FloatArray], prefix: str, mask: ArrayLike | N
     there, ``projection_exit_<name>_count``; the projections' exact solves
     without a plan, ``projection_exact_inaccurate_count`` and
     ``projection_exact_infeasible_count``; their exact plans not certified
-    within the MIP gap, ``projection_exact_uncertified_count`` (D47); their
+    within the MIP gap, ``projection_exact_uncertified_count``; their
     inaccurate exact plans accepted by the checker,
     ``projection_exact_accepted_count``; and the projections whose point came
-    from such a plan, ``projection_plan_accepted_count`` (D49). Those whose
+    from such a plan, ``projection_plan_accepted_count``. Those whose
     point came from the cheapest uncertified plan are ``projection_exit_best_count``.
 
     Args:

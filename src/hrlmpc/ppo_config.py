@@ -1,9 +1,9 @@
-"""Typed configuration of the in-house PPO, loaded from YAML (code rule C2, decision log D19, D20).
+"""Typed configuration of the in-house PPO, loaded from YAML.
 
 A file under ``configs/agent/`` holds the hyperparameters of one learner:
 the networks, the rollout, the PPO update with the learners' discount, the
 evaluation protocol and the runtime. The discount is independent of the
-environment's ``reward.shaping_discount`` (D22). Loading validates every
+environment's ``reward.shaping_discount``. Loading validates every
 value; unknown, missing or repeated keys are errors. This module does not
 import PyTorch.
 """
@@ -46,10 +46,10 @@ class RolloutConfig:
 
 @dataclass(frozen=True)
 class UpdateConfig:
-    """Hyperparameters of the PPO update (D19).
+    """Hyperparameters of the PPO update.
 
     Attributes:
-        discount: The learners' per-step discount ``gamma_RL`` (D13, D22).
+        discount: The learners' per-step discount ``gamma_RL``.
         epochs: Passes over the batch per update.
         minibatches: Minibatches per epoch.
         learning_rate: Adam learning rate of the actor.
@@ -92,7 +92,7 @@ class UpdateConfig:
 
 @dataclass(frozen=True)
 class EvaluationConfig:
-    """Evaluation protocol (D20).
+    """Evaluation protocol.
 
     Attributes:
         every: Samples between two evaluations; also the first one is at zero samples.

@@ -1,6 +1,5 @@
-"""Tests of the minimum-time oracle (decision log D44): the tables, their lookup by content, the replay, the
-search over the horizon and the data of the problem. The solves need Gurobi and run in the author's environment
-(the last section); everything else runs without a solver."""
+"""Tests of the minimum-time oracle: the tables, their lookup by content, the replay, the
+search over the horizon and the data of the problem. The solves need Gurobi (the last section); everything else runs without a solver."""
 
 from __future__ import annotations
 
@@ -40,7 +39,7 @@ def _config(name: str = "slalom") -> EnvConfig:
 
 
 def _thrust_plan(config: EnvConfig, start: tuple[float, float]) -> tuple[int, np.ndarray]:
-    """Full thrust along +x until the speed limit, then the thrust that holds it: the bound of F7, which is the
+    """Full thrust along +x until the speed limit, then the thrust that holds it: the bound, which is the
     minimum time in the tunnel, by a coherent plan (the replay needs no correction)."""
     problem = OracleProblem(config)
     steps = problem.lower_bound(np.array(start))
@@ -54,7 +53,7 @@ def _thrust_plan(config: EnvConfig, start: tuple[float, float]) -> tuple[int, np
 
 
 def _positions(config: EnvConfig, start: np.ndarray, inputs: np.ndarray) -> np.ndarray:
-    """``(N + 1, 2)`` positions of a plan from ``start`` at rest under the model of the specification."""
+    """``(N + 1, 2)`` positions of a plan from ``start`` at rest under the model of the thesis."""
     A, B = system_matrices(config.physics.dt, config.physics.gamma)
     x = np.array([start[0], start[1], 0.0, 0.0])
     out = [x[:2].copy()]
@@ -89,7 +88,7 @@ def _table(config: EnvConfig, starts: np.ndarray, steps: list[int]) -> OracleTab
 
 
 def test_layout_signature_ignores_the_disturbance_and_the_reward() -> None:
-    """One table serves every reward regime and disturbance level of a layout (D44, D51)."""
+    """One table serves every reward regime and disturbance level of a layout."""
     slalom = layout_signature(_config("slalom"))
     assert layout_signature(_config("slalom_d05")) == slalom
     assert layout_signature(_config("slalom_sparse_d10")) == slalom
@@ -150,8 +149,8 @@ def test_find_oracle_matches_by_content(tmp_path: Path) -> None:
 # ------------------------------------------------------------------------------ replay
 
 
-def test_thrust_on_the_tunnel_is_a_valid_entry_at_the_bound_of_f7() -> None:
-    """F7: in the tunnel, from rest, thrusting along +x arrives at the bound; the replay measures the entry."""
+def test_thrust_on_the_tunnel_is_a_valid_entry_at_the_lower_bound() -> None:
+    """In the tunnel, from rest, thrusting along +x arrives at the bound; the replay measures the entry."""
     config = _config("tunnel")
     steps, inputs = _thrust_plan(config, (1.0, 0.0))
     assert steps == 78
@@ -163,7 +162,7 @@ def test_thrust_on_the_tunnel_is_a_valid_entry_at_the_bound_of_f7() -> None:
 
 
 def test_a_plan_the_environment_corrects_is_not_an_entry() -> None:
-    """Full thrust throughout arrives at the bound too, but only because the speed limiter clips it (R4): the oracle's
+    """Full thrust throughout arrives at the bound too, but only because the speed limiter clips it: the oracle's
     plan must be coherent, so that the environment's trajectory is the model's."""
     config = _config("tunnel")
     problem = OracleProblem(config)
@@ -223,7 +222,7 @@ def test_minimum_time_is_the_first_feasible_horizon_from_the_bound() -> None:
     problem = OracleProblem(_config())
     start = np.array([2.0, -1.0])
     bound = problem.lower_bound(start)
-    assert bound == 73  # F7 on the slalom from (2, -1)
+    assert bound == 73  # the lower bound on the slalom from (2, -1)
     asked: list[int] = []
 
     def solve(point: np.ndarray, horizon: int) -> np.ndarray | None:
@@ -257,7 +256,7 @@ def test_starts_are_checked_before_the_search() -> None:
     for start, reason in [
         ([-1.0, 0.0], "arena"),  # on the left wall, inside the margin
         ([2.0, 1.9995], "arena"),
-        ([4.5, -1.0], "obstacle 0"),  # inside the lower block of gate 1 (D16: its live faces only)
+        ([4.5, -1.0], "obstacle 0"),  # inside the lower block of gate 1 (its live faces only)
         ([4.5, 0.2505], "obstacle 0"),  # above it, within the margin of its top face
         ([10.0, 0.0], "goal"),
         ([np.nan, 0.0], "finite"),
@@ -272,7 +271,7 @@ def test_starts_are_checked_before_the_search() -> None:
 
 
 def test_compute_oracle_replays_every_start_and_records_the_signature() -> None:
-    """With a stand-in solve that returns full thrust, the tunnel's table is the bound of F7 at every start."""
+    """With a stand-in solve that returns full thrust, the tunnel's table is the bound at every start."""
     config = _config("tunnel")
     problem = OracleProblem(config)
     starts = spawn_grid(config.task.spawn, (3, 2))
@@ -399,9 +398,9 @@ def test_gurobi_statuses_have_names() -> None:
 
 
 @pytest.mark.parametrize("start", [(0.0, 0.0), (1.0, 1.0), (2.0, -1.0)])
-def test_the_oracle_attains_the_bound_of_f7_on_the_tunnel(start: tuple[float, float]) -> None:
+def test_the_oracle_attains_the_lower_bound_on_the_tunnel(start: tuple[float, float]) -> None:
     """Without obstacles every binary is fixed, Clarabel solves the convex problem, the minimum time is the bound
-    of F7 (from (2, -1) with 3 cm to spare, a horizon the plan can only just meet) and the plan replays without
+    (from (2, -1) with 3 cm to spare, a horizon the plan can only just meet) and the plan replays without
     any correction."""
     pytest.importorskip("cvxpy")
     pytest.importorskip("gurobipy")
@@ -421,7 +420,7 @@ def test_the_oracle_attains_the_bound_of_f7_on_the_tunnel(start: tuple[float, fl
 
 
 def test_the_oracle_on_the_slalom_threads_the_gates_in_the_minimum_time() -> None:
-    """From (2, -1) the slalom's bound of F7 is 73 steps, the shortest free path (8.42 m, round the corners of
+    """From (2, -1) the slalom's bound is 73 steps, the shortest free path (8.42 m, round the corners of
     the gates) at full speed; the plan of the oracle attains it or needs a few steps more (turning at 1.2 m/s with
     2.5 m/s^2 lengthens the path by about a centimetre per corner), threads both gates and replays contact-free."""
     pytest.importorskip("cvxpy")

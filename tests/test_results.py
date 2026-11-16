@@ -1,4 +1,4 @@
-"""Tests of the results of the experiment matrix (decision log D64, D67, D68, D71–D75): the cells, the statistics
+"""Tests of the results of the experiment matrix: the cells, the statistics
 of censored times, the tables, the figures and the command line, on synthetic runs."""
 
 from __future__ import annotations
@@ -184,7 +184,7 @@ def _matrix(tmp_path: Path) -> Path:
 
 
 def test_a_run_is_classified_from_its_configuration() -> None:
-    """D71, D62, D63, D45, D60, D75: the setting from the reward and the curriculum, the level from the physics,
+    """The setting from the reward and the curriculum, the level from the physics,
     the variant from the agent file's name, whichever separator the path uses."""
     slalom, sparse, nocur = _env("slalom"), _env("slalom_sparse"), _env("slalom_sparse_nocur")
     assert classify(_fake_run("ppo", "configs/env/slalom_sparse.yaml", "configs/agent/ppo.yaml", sparse)) == Cell(
@@ -204,7 +204,7 @@ def test_a_run_is_classified_from_its_configuration() -> None:
     assert classify(_fake_run("ppo", "configs/env/tunnel.yaml", None, _env("tunnel"))) == Cell(
         "tunnel", "dense", 0.0, "", "ppo")
     doubled = _fake_run("ppo_mpc", "configs/env/trap_sparse.yaml", "configs/agent/ppo_mpc.yaml", _env("trap_sparse"))
-    doubled.config["budget"] = 2 * BUDGET  # D79: a budget other than the matrix's is a variant of its own
+    doubled.config["budget"] = 2 * BUDGET  # a budget other than the matrix's is a variant of its own
     assert classify(doubled) == Cell("trap", "main", 0.0, "b2", "ppo_mpc")
     doubled.config["agent_file"] = "configs/agent/ppo_mpc_h6.yaml"
     assert classify(doubled).variant == "h6_b2"

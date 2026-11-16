@@ -1,5 +1,5 @@
 # Tunnel: the slalom's arena without obstacles, for quick checks and debugging
-# only; not part of the main comparison (decision log D12).
+# only; not part of the main comparison.
 
 physics:
   dt: 0.1

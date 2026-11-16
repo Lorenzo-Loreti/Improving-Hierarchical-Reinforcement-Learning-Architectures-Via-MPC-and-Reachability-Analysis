@@ -1,4 +1,4 @@
-"""Tests of the hPPO training loop and its command line (decision log D6, D24-D29, D43, D50); they need PyTorch."""
+"""Tests of the hPPO training loop and its command line; they need PyTorch."""
 
 from __future__ import annotations
 
@@ -73,12 +73,12 @@ def test_a_short_run_writes_its_directory(tmp_path: Path) -> None:
         for name in ("reward", "reward_progress", "reward_contact", "reward_effort"):
             assert f"worker/{name}" in record
         assert "hierarchy/target_distance" in record and record["rollout/episodes"] >= 1
-        assert record["time/rollout_s"] > 0.0 and record["time/update_s"] > 0.0  # D50: both levels' updates
+        assert record["time/rollout_s"] > 0.0 and record["time/update_s"] > 0.0  # Both levels' updates
     np.testing.assert_allclose(
         [r["time/train_s"] for r in updates], np.cumsum([r["time/rollout_s"] + r["time/update_s"] for r in updates]),
         rtol=1e-12,
     )
-    for record in evaluations:  # D43, D50: both actions in one record, each with the controller's time per step
+    for record in evaluations:  # Both actions in one record, each with the controller's time per step
         assert {"eval_mode/success_rate", "eval_mode/arrival_gap_max", "eval_mode/contact_fraction"} <= set(record)
         for name in ("eval", "eval_mode"):
             assert record[f"time/{name}_s"] > 0.0
@@ -129,7 +129,7 @@ def test_the_budget_must_end_on_an_update_and_an_evaluation(tmp_path: Path, budg
 
 
 def test_each_level_uses_its_own_discount(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """D25, D27: the Worker's GAE at its discount without terminal states, the Manager's at gamma^tau."""
+    """The Worker's GAE at its discount without terminal states, the Manager's at gamma^tau."""
     import hrlmpc.train_hppo as module
 
     worker_calls: list[tuple[Any, ...]] = []
@@ -156,7 +156,7 @@ def test_each_level_uses_its_own_discount(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 def test_the_updates_get_the_rollouts_transitions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """D25, D27: each level is updated on its own transitions and on the advantages of its own GAE."""
+    """Each level is updated on its own transitions and on the advantages of its own GAE."""
     import hrlmpc.ppo as ppo_module
     import hrlmpc.train_hppo as module
     from hrlmpc.hierarchy import segment_gae
@@ -207,7 +207,7 @@ def test_the_updates_get_the_rollouts_transitions(tmp_path: Path, monkeypatch: p
 
 
 def test_the_final_checkpoint_reproduces_the_last_evaluation(tmp_path: Path) -> None:
-    """With either action (D43)."""
+    """With either action."""
     env, hppo = _env(physics={"d_bar": 0.5}), _hppo()
     run_dir = train(env, hppo, budget=80, seed=2, run_dir=tmp_path / "run")
     manager, worker, hierarchy = load_hierarchy(run_dir)
@@ -221,7 +221,7 @@ def test_the_final_checkpoint_reproduces_the_last_evaluation(tmp_path: Path) -> 
 
 
 def test_a_run_from_before_the_workers_price_is_loaded_at_the_shaped_price(tmp_path: Path) -> None:
-    """D66: a run from before has no ``hierarchy.worker_progress_coef`` in its ``config.yaml``; its Worker was
+    """a run from before has no ``hierarchy.worker_progress_coef`` in its ``config.yaml``; its Worker was
     paid the environment's ``progress_coef``. The reload only evaluates the deterministic policies, so it takes the
     shaped reward's 10."""
     run_dir = train(_env(), _hppo(), budget=40, seed=1, run_dir=tmp_path / "run", echo=None)
@@ -236,7 +236,7 @@ def test_a_run_from_before_the_workers_price_is_loaded_at_the_shaped_price(tmp_p
 
 def test_the_evaluations_take_the_same_statistic_at_both_levels(tmp_path: Path,
                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
-    """D43: the evaluation with the mean takes the means of both policies, the one with the mode their modes, at
+    """The evaluation with the mean takes the means of both policies, the one with the mode their modes, at
     every evaluation point and in this order."""
     import hrlmpc.train_hppo as module
 
@@ -269,11 +269,11 @@ def test_the_command_line_trains_every_seed(tmp_path: Path, capsys: pytest.Captu
     config = yaml.safe_load((runs[0] / "config.yaml").read_text(encoding="utf-8"))
     assert config["env_file"] == str(env_file) and config["agent_file"] == str(agent_file)
     out = capsys.readouterr().out
-    assert str(runs[1]) in out and "mean/mode: success" in out  # D50: both evaluations on the console
+    assert str(runs[1]) in out and "mean/mode: success" in out  # Both evaluations on the console
 
 
 def test_evaluations_do_not_change_the_training(tmp_path: Path) -> None:
-    """D6, D20: with evaluations every 40 or every 80 samples, training follows the same trajectory."""
+    """With evaluations every 40 or every 80 samples, training follows the same trajectory."""
     env = _env(physics={"d_bar": 0.5})
     often = train(env, _hppo(), budget=160, seed=5, run_dir=tmp_path / "often")
     rarely = train(env, _hppo(evaluation__every=80), budget=160, seed=5, run_dir=tmp_path / "rarely")
@@ -320,9 +320,9 @@ def test_training_leaves_the_global_torch_settings_as_they_were(tmp_path: Path) 
 
 
 def test_a_worker_with_map_features_trains_and_reloads(tmp_path: Path) -> None:
-    """D75: with ``hierarchy.worker_map_features`` the Worker's networks take ``6 + K`` inputs, the run records the
+    """With ``hierarchy.worker_map_features`` the Worker's networks take ``6 + K`` inputs, the run records the
     features in its ``config.yaml``, the reload rebuilds the same hierarchy and the checkpoint reproduces the last
-    evaluation; a run without the key reloads with the Worker of D26 (6 inputs)."""
+    evaluation; a run without the key reloads with the Worker (6 inputs)."""
     env = _env()
     hppo = _hppo(hierarchy__worker_map_features={"rays": 8, "range": 1.5})
     assert hppo.hierarchy.worker_map_features is not None and hppo.hierarchy.worker_map_features.rays == 8

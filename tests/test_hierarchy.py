@@ -1,4 +1,4 @@
-"""Tests of the common Manager/Worker loop (decision log D6, D24-D27, D29, D37; rows AR2-AR5, R2, X1)."""
+"""Tests of the common Manager/Worker loop."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ def _config(layout: str = "tunnel", **sections: dict[str, Any]) -> EnvConfig:
 
 
 C_P = 10.0
-"""The Worker's progress coefficient of the shipped configurations (D25, D66): the shaped reward's (D13)."""
+"""The Worker's progress coefficient of the shipped configurations: the shaped reward's."""
 
 
 def _hierarchy(config: EnvConfig, segment_steps: int = H, progress_coef: float = C_P) -> Hierarchy:
@@ -154,7 +154,7 @@ def test_observations_invert_to_the_states() -> None:
 
 @pytest.mark.parametrize("layout", ["slalom", "tunnel"])
 def test_the_target_radius_is_one_and_a_half_segment_reaches(layout: str) -> None:
-    """D24: a segment covers at most v_max H T_s = 1.2 m; the targets reach R = 1.8 m."""
+    """a segment covers at most v_max H T_s = 1.2 m; the targets reach R = 1.8 m."""
     config = _config(layout)
     assert segment_reach(config.physics, 10) == pytest.approx(1.2)
     hierarchy = _hierarchy(config)
@@ -207,7 +207,7 @@ def test_worker_inputs_hold_the_observation_and_the_scaled_offset() -> None:
 
 
 # --------------------------------------------------------------------------
-# Worker reward (D25)
+# Worker reward
 # --------------------------------------------------------------------------
 
 
@@ -232,7 +232,7 @@ def test_worker_reward_of_free_motion_toward_the_target() -> None:
 
 
 def test_worker_reward_of_a_head_on_impact() -> None:
-    """D25 with D14: the Worker pays the environment's contact penalty, at the same price."""
+    """The Worker pays the environment's contact penalty, at the same price."""
     config = _config()
     p, p_next, out = _one_step(config, [2.0, -1.95], [0.0, -1.2], [0.0, 0.0])
     np.testing.assert_allclose(out.info.impulse, [0.64], atol=1e-12)
@@ -245,7 +245,7 @@ def test_worker_reward_of_a_head_on_impact() -> None:
 
 @pytest.mark.parametrize("layout", ["slalom", "tunnel"])
 def test_the_worker_reward_has_no_term_of_the_task(layout: str) -> None:
-    """D25: apart from the progress to its target, the Worker's reward is the environment's contact and effort terms."""
+    """Apart from the progress to its target, the Worker's reward is the environment's contact and effort terms."""
     config = _config(layout, task={"horizon": 120}, physics={"d_bar": 1.0})
     env = NavigationEnv(config, 16, seed=3)
     rng = np.random.default_rng(3)
@@ -273,8 +273,8 @@ def test_the_worker_reward_has_no_term_of_the_task(layout: str) -> None:
 
 @pytest.mark.parametrize("layout", sorted(path.stem for path in CONFIGS.glob("*.yaml")))
 def test_shipped_configs_meet_the_contact_criterion_for_the_worker(layout: str) -> None:
-    """D25: one saved step is worth at most c_p v_max T_s + c_e to the Worker, so c_n must exceed that / (a_max T_s);
-    with c_p the hierarchy's price (D66), in the sparse files too, whose own ``progress_coef`` is 0."""
+    """One saved step is worth at most c_p v_max T_s + c_e to the Worker, so c_n must exceed that / (a_max T_s);
+    with c_p the hierarchy's price, in the sparse files too, whose own ``progress_coef`` is 0."""
     config = _config(layout)
     r, p = config.reward, config.physics
     threshold = (C_P * p.v_max * p.dt + r.effort_coef) / (p.a_max * p.dt)
@@ -298,7 +298,7 @@ def test_the_manager_decides_at_the_start_and_after_every_segment() -> None:
 
 
 def test_segment_rewards_discounts_and_bootstraps() -> None:
-    """D27: reward sum_k gamma^k r_k over the segment, discount gamma^tau, next value of the next segment's start."""
+    """Reward sum_k gamma^k r_k over the segment, discount gamma^tau, next value of the next segment's start."""
     env, hierarchy, state, rollout, after = _run(_config(task={"horizon": 23}), batch=2, steps=50)
     seg = rollout.segments
     expected = _reference_segments(rollout.rewards, rollout.done, state.segment_steps, H, GAMMA)
@@ -332,7 +332,7 @@ def test_a_segment_that_reaches_the_goal_is_terminal_for_the_manager_only() -> N
     assert len(seg) == 1 and seg.terminated[0] and not seg.truncated[0] and seg.next_values[0] == 0.0
     assert seg.steps[0] == 2 and seg.discounts[0] == pytest.approx(GAMMA**2)
     worker = rollout.worker
-    assert worker is not None and not worker.terminated.any()  # D25: no terminal state for the Worker
+    assert worker is not None and not worker.terminated.any()  # No terminal state for the Worker
     assert worker.truncated[:, 0].tolist() == [False, True, False]
     start_obs = seg.obs[:1]  # the target set at the start: p + R m(x)
     target = env.obs_map.positions(start_obs) + square_to_disk(seg.actions[:1], 1.8)
@@ -343,7 +343,7 @@ def test_a_segment_that_reaches_the_goal_is_terminal_for_the_manager_only() -> N
 
 
 def test_segments_in_flight_continue_in_the_next_rollout() -> None:
-    """D27: a segment in flight keeps the decision's log-probability and value, though the policy changed since."""
+    """a segment in flight keeps the decision's log-probability and value, though the policy changed since."""
     config = _config()
     env = NavigationEnv(config, 1, seed=2)
     hierarchy = _hierarchy(config)
@@ -385,7 +385,7 @@ def test_a_rollout_leaves_its_input_state_unchanged() -> None:
 
 
 def test_the_manager_does_not_replan_on_contact() -> None:
-    """D27: a wall contact in the middle of a segment ends neither the segment nor its target."""
+    """a wall contact in the middle of a segment ends neither the segment nor its target."""
     config = _config()
     down = lambda obs: (np.tile([0.0, -1.0], (len(obs), 1)), np.zeros(len(obs)))  # noqa: E731 - a target in the floor
     env, hierarchy, state, rollout, after = _run(config, batch=1, steps=30, manager=down, positions=[[1.0, -1.5]])
@@ -398,7 +398,7 @@ def test_the_manager_does_not_replan_on_contact() -> None:
 
 
 def test_targets_stay_fixed_in_the_plane_during_a_segment() -> None:
-    """D24: g = p + R m(x) with p the position at the segment's start, held until the segment ends."""
+    """g = p + R m(x) with p the position at the segment's start, held until the segment ends."""
     env, hierarchy, state, rollout, after = _run(
         _config(task={"horizon": 27}, physics={"d_bar": 1.0}), batch=4, steps=60, manager=_random_policy(1)
     )
@@ -424,7 +424,7 @@ def test_targets_stay_fixed_in_the_plane_during_a_segment() -> None:
 
 
 def test_the_worker_bootstraps_at_every_episode_end() -> None:
-    """D25: the Worker's transitions are never terminal; at an episode's end it bootstraps under its old target."""
+    """The Worker's transitions are never terminal; at an episode's end it bootstraps under its old target."""
     config = _config(task={"horizon": 17}, physics={"d_bar": 0.5})
     env, hierarchy, state, rollout, after = _run(config, batch=3, steps=40, manager=_random_policy(2))
     worker = rollout.worker
@@ -463,8 +463,8 @@ def test_the_worker_rewards_of_the_rollout() -> None:
 
 
 def test_the_workers_progress_is_priced_by_the_hierarchy_not_by_the_environment() -> None:
-    """D66 (the realization of D51): under the sparse reward the environment's ``progress_coef`` is 0, and the
-    Worker keeps its dense reward of D25 at the hierarchy's price. Before the fix the Worker of every sparse run
+    """Under the sparse reward the environment's ``progress_coef`` is 0, and the
+    Worker keeps its dense reward at the hierarchy's price. Before the fix the Worker of every sparse run
     was paid no progress at all."""
     config = _config("slalom", task={"horizon": 30}, reward={"progress_coef": 0.0})
     assert config.reward.progress_coef == 0.0
@@ -584,7 +584,7 @@ def test_a_command_worker_drives_the_inputs() -> None:
 
 
 def test_the_worker_pays_effort_on_the_saturated_input() -> None:
-    """D25: the effort term is that of the input after the saturation onto U, at most c_e per step."""
+    """The effort term is that of the input after the saturation onto U, at most c_e per step."""
     config = _config()
     strong = CommandWorker(command=lambda obs, p, g, left: np.tile([5.0, 0.0], (len(obs), 1)))
     env, hierarchy, state, rollout, after = _run(config, batch=2, steps=12, worker=strong)
@@ -617,7 +617,7 @@ def _expected_steps_left(done: np.ndarray, first: np.ndarray, segment_steps: int
 
 
 def test_a_command_worker_gets_the_steps_left_in_each_segment() -> None:
-    """D37: the MPC Worker plans to pass the target when the segment ends, so it gets H - j at step j, also
+    """The MPC Worker plans to pass the target when the segment ends, so it gets H - j at step j, also
     across rollouts and after an episode that ends in the middle of a segment."""
     config = _config(task={"horizon": 15})  # episodes of 15 steps: segments of 10 and 5 steps
     obs_map = ObservationMap.from_config(config)
@@ -642,7 +642,7 @@ def test_a_command_worker_gets_the_steps_left_in_each_segment() -> None:
 
 
 # --------------------------------------------------------------------------
-# The deterministic controller of the evaluation (D29)
+# The deterministic controller of the evaluation
 # --------------------------------------------------------------------------
 
 
@@ -692,7 +692,7 @@ def test_the_controller_resets_a_command_worker_and_declares_its_inputs() -> Non
 
 
 def test_the_controller_records_how_far_each_segment_ends_from_its_target() -> None:
-    """D40: at every decision after the first, the distances of the agents from the targets of the segments that
+    """At every decision after the first, the distances of the agents from the targets of the segments that
     ended, with the call at which they ended; a reset forgets them."""
     config = _config()
     obs_map = ObservationMap.from_config(config)
@@ -761,7 +761,7 @@ def test_the_controller_with_a_command_worker() -> None:
 
 
 # --------------------------------------------------------------------------
-# The Worker's local map features (D75)
+# The Worker's local map features
 # --------------------------------------------------------------------------
 
 
@@ -772,7 +772,7 @@ def _map_hierarchy(config: EnvConfig, rays: int = 4, max_range: float = 2.0) -> 
 
 
 def test_map_features_are_the_scaled_ray_distances() -> None:
-    """D75: ``K`` rays at equal angles from ``+x``; each feature is the distance to the first wall along its ray,
+    """``K`` rays at equal angles from ``+x``; each feature is the distance to the first wall along its ray,
     clipped at the range and divided by it: 1 where nothing is within range, 0 against a wall."""
     config = _config("slalom")  # arena [-1, 11] x [-2, 2]; gate 1 blocks [4, 5] x [-2, 0.25] and [4, 5] x [1.75, 2]
     layout = Layout.from_config(config.geometry)

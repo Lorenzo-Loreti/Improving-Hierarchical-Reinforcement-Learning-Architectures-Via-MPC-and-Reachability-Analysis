@@ -3,8 +3,7 @@ __pycache__/
 .pytest_cache/
 **/checkpoints/
 **/wandb/
-# Results produced before the alignment stay on disk but are no longer
-# tracked; the tracked copies remain at tag pre-alignment (decision log D7).
+#  Results of earlier versions of the code stay on disk but are not tracked.
 **/studies/
 # Outputs of the new runs (hrlmpc.utils.runlog).
 runs/

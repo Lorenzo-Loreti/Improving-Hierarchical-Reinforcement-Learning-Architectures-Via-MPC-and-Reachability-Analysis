@@ -1,4 +1,4 @@
-"""Tests of the MPC Worker's problem data, without solvers (decision log D31-D34, D37, D45, D46, D49)."""
+"""Tests of the MPC Worker's problem data, without solvers."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from hrlmpc.mpc_problem import MPCProblem, MPCSettings, project_disk
 def _setup(
     name: str, d_bar: float = 0.0, segment_steps: int | None = None, **settings: float | None
 ) -> tuple[EnvConfig, Layout, MPCProblem]:
-    """The problem of a layout; the horizon is 15 unless given (``None``: automatic, D45)."""
+    """The problem of a layout; the horizon is 15 unless given (``None``: automatic)."""
     cfg = load_env_config(f"configs/env/{name}.yaml")
     params = dataclasses.replace(cfg.physics, d_bar=d_bar)
     layout = Layout.from_config(cfg.geometry)
@@ -50,8 +50,8 @@ def _brake(problem: MPCProblem, speed: float, steps: int) -> float:
 
 def test_settings_are_validated() -> None:
     defaults = MPCSettings()
-    assert (defaults.target_weight, defaults.effort_weight, defaults.r) == (1e4, 0.1, 0.1)  # D37
-    assert defaults.horizon is None and defaults.start_weight == 0.1  # automatic horizon (D45), regularizer (D46)
+    assert (defaults.target_weight, defaults.effort_weight, defaults.r) == (1e4, 0.1, 0.1)
+    assert defaults.horizon is None and defaults.start_weight == 0.1  # automatic horizon, regularizer
     assert MPCSettings(start_weight=0.0).start_weight == 0.0  # no regularizer
     for bad in ({"horizon": 0}, {"horizon": 2.5}, {"horizon": True}, {"horizon": "auto"}, {"q_pos": 0.0},
                 {"r": -1.0}, {"rho": 0.0}, {"target_weight": 0.0}, {"target_weight": float("inf")},
@@ -64,10 +64,10 @@ def test_settings_are_validated() -> None:
 
 @pytest.mark.parametrize(("d_bar", "expected"), [(0.0, 15), (0.5, 16), (1.0, 17)])
 def test_an_automatic_horizon_leaves_just_room_to_stop_after_a_segment(d_bar: float, expected: int) -> None:
-    """D45: without a horizon in the settings, N = H + n_b, the smallest horizon that D37 accepts."""
+    """Without a horizon in the settings, N = H + n_b, the smallest admissible horizon."""
     _, _, problem = _setup("slalom", d_bar=d_bar, segment_steps=10, horizon=None)
     assert problem.N == expected == 10 + problem.stopping_steps()
-    assert f"horizon N = {expected} (automatic, D45)" in problem.summary()
+    assert f"horizon N = {expected} (automatic)" in problem.summary()
     problem.check_segments(10)
     with pytest.raises(ValueError, match="N >= "):
         problem.check_segments(11)
@@ -121,7 +121,7 @@ def test_the_slalom_has_four_obstacles_with_three_live_faces_each() -> None:
     _, layout, problem = _setup("slalom", d_bar=0.5)
     assert len(problem.obstacles) == len(layout.blocked) == 4
     for obstacle, polygon in zip(problem.obstacles, layout.blocked, strict=True):
-        assert obstacle.num_faces == 3  # the face that D16 pushed beyond the wall can never separate
+        assert obstacle.num_faces == 3  # the face that the extension pushed beyond the wall can never separate
         for n, c, b in zip(obstacle.normals, obstacle.offsets, obstacle.bounds, strict=True):
             j = int(np.argmin(np.linalg.norm(polygon.normals - n, axis=1)))
             assert polygon.offsets[j] == pytest.approx(c)
@@ -150,7 +150,7 @@ def test_the_margin_covers_what_a_mixed_integer_plan_may_violate_a_face_by() -> 
 
 
 def test_the_cost_is_the_distance_at_the_waypoint_and_the_effort_before_it() -> None:
-    """D37: q_g ||z_{k*,p} - g||^2 + r_e sum_{k<k*} ||v_k||^2, with k* the steps left in the segment."""
+    """q_g ||z_{k*,p} - g||^2 + r_e sum_{k<k*} ||v_k||^2, with k* the steps left in the segment."""
     _, _, problem = _setup("tunnel", target_weight=100.0, effort_weight=0.5)
     N = problem.N
     rng = np.random.default_rng(4)
@@ -173,7 +173,7 @@ def test_the_cost_is_the_distance_at_the_waypoint_and_the_effort_before_it() -> 
 
 
 def test_with_a_tube_the_cost_adds_the_distance_of_the_nominal_start() -> None:
-    """D46: with a tube the cost gains eps ||x - z_0||^2, which needs the measured state x; without a tube
+    """With a tube the cost gains eps ||x - z_0||^2, which needs the measured state x; without a tube
     (z_0 = x) or with eps = 0 the term is left out."""
     _, _, problem = _setup("tunnel", d_bar=0.5, target_weight=100.0, effort_weight=0.5, start_weight=2.0)
     N = problem.N
@@ -327,7 +327,7 @@ def test_binaries_of_a_plan() -> None:
 
 
 def test_a_segment_beyond_one_face_never_enters_the_obstacle() -> None:
-    """D32: both ends beyond the same face of the enlarged obstacle, errors in Z: the real segment stays out."""
+    """Both ends beyond the same face of the enlarged obstacle, errors in Z: the real segment stays out."""
     _, layout, problem = _setup("slalom", d_bar=1.0)
     rng = np.random.default_rng(3)
     r_p = problem.tube.position_radius
@@ -372,7 +372,7 @@ def test_the_violations_of_plans() -> None:
 
 
 def test_a_plan_within_the_tolerances_of_the_relaxations_own_plan(monkeypatch: pytest.MonkeyPatch) -> None:
-    """D49 (R2): the dynamics, the initial state (without a tube), the terminal rest and the arena to ``tol``; the
+    """The dynamics, the initial state (without a tube), the terminal rest and the arena to ``tol``; the
     disks to ``tol (1 + radius)``, as the cuts of the relaxation; the faces to the face slack. The tube's
     constraint is left to the gauge of ``Z`` (the Worker)."""
     _, _, problem = _setup("slalom", d_bar=0.0)
@@ -432,7 +432,7 @@ def test_the_summary_and_the_stopping_time() -> None:
     _, _, problem = _setup("slalom", d_bar=0.5, horizon=16)
     text = problem.summary()
     assert "planned speed <= 1.083" in text and "4 obstacles, 192 binaries" in text and "q_g = 10000" in text
-    assert "eps = 0.1" in text  # the regularizer of D46, with a tube only
+    assert "eps = 0.1" in text  # the regularizer, with a tube only
     assert problem.stopping_steps() == 6
     _, _, calm = _setup("tunnel")
     assert calm.stopping_steps() == 5 and "eps =" not in calm.summary()  # no tube, no regularizer
@@ -442,7 +442,7 @@ def test_the_summary_and_the_stopping_time() -> None:
 
 
 def test_the_horizon_must_leave_room_to_stop_after_a_segment() -> None:
-    """D37: the waypoint lies at stage H at a decision, so N >= H + n_b: 15 at d_bar = 0, 16 at 0.5, 17 at 1.0."""
+    """The waypoint lies at stage H at a decision, so N >= H + n_b: 15 at d_bar = 0, 16 at 0.5, 17 at 1.0."""
     for d_bar, needed in ((0.0, 15), (0.5, 16), (1.0, 17)):
         _, _, enough = _setup("tunnel", d_bar=d_bar, horizon=needed)
         enough.check_segments(10)

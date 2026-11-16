@@ -1,6 +1,6 @@
-"""The common Manager/Worker loop of the hierarchical architectures (decision log D6, D24-D27, D29; rows AR2-AR5).
+"""The common Manager/Worker loop of the hierarchical architectures.
 
-Segments (D27). The Manager decides at the start of every episode and after
+Segments. The Manager decides at the start of every episode and after
 every segment of ``H`` steps; a segment also ends with its episode. Its
 decision ``x`` in ``[-1, 1]^2`` sets a target that stays fixed in the plane for
 the whole segment. Its reward is the environment's reward discounted within the
@@ -10,25 +10,25 @@ options (Sutton, Precup and Singh, Artificial Intelligence 112, 1999), whose
 return is the discounted return of a flat learner. A segment truncated at the
 horizon is bootstrapped with the value of the state it reached.
 
-Targets (D24). :class:`DiskTargets` maps ``x`` onto the disk of radius ``R``
-around the position at the segment's start, with the bijection of D15. The
-reachable targets of architecture 4 (D38, :class:`hrlmpc.reachability.ReachableTargets`)
+Targets. :class:`DiskTargets` maps ``x`` onto the disk of radius ``R``
+around the position at the segment's start, with the bijection. The
+reachable targets of architecture 4 (:class:`hrlmpc.reachability.ReachableTargets`)
 enter through the same interface, :class:`TargetMap`.
 
 Workers. The Worker is interchangeable. A :class:`LearnedWorker`, the hPPO
-Worker, sees the observation and the target offset ``(g - p) / R`` (D26) and,
-in the ablation of D75, the local map features of :class:`MapFeatures`, and
-returns actions in the square, mapped onto ``U`` by the environment (D15). A
+Worker, sees the observation and the target offset ``(g - p) / R`` and,
+in the ablation, the local map features of :class:`MapFeatures`, and
+returns actions in the square, mapped onto ``U`` by the environment. A
 :class:`CommandWorker`, the MPC Worker, returns commanded accelerations; it
 also gets the steps left in each segment, since it plans to pass the target
-when the segment ends (D37). Every Worker is scored with the reward of D25, for
+when the segment ends. Every Worker is scored with the reward, for
 learning (hPPO) or as a diagnostic. A learned Worker bootstraps its value at
-the end of every episode: its stream of targets has no terminal state (D25).
+the end of every episode: its stream of targets has no terminal state.
 
 Rollouts straddle updates. A segment still in flight when a rollout ends goes
 on in the next one (:class:`HierarchyState`), so the Manager never re-plans
 because a rollout ended and training follows the same segments as the
-evaluation (D29). Such a segment keeps the log-probability and the value of
+evaluation. Such a segment keeps the log-probability and the value of
 the policy that decided it and is stored when it ends; its value then acts
 only as its own baseline, since GAE's return target does not depend on it.
 
@@ -88,11 +88,11 @@ def _checked(values: ArrayLike, shape: tuple[int, ...], name: str) -> FloatArray
 
 
 class TargetMap(Protocol):
-    """Maps the Manager's actions to targets in the plane (D24)."""
+    """Maps the Manager's actions to targets in the plane."""
 
     @property
     def radius(self) -> float:
-        """Length scale [m] of the target offsets; the Worker's input divides them by it (D26)."""
+        """Length scale [m] of the target offsets; the Worker's input divides them by it."""
         ...
 
     def __call__(self, actions: ArrayLike, positions: ArrayLike, velocities: ArrayLike) -> FloatArray:
@@ -102,9 +102,9 @@ class TargetMap(Protocol):
 
 @dataclass(frozen=True)
 class DiskTargets:
-    """Targets ``g = p + R m(x)`` on the disk of radius ``R`` around the position (D24).
+    """Targets ``g = p + R m(x)`` on the disk of radius ``R`` around the position.
 
-    ``m`` is the bijection of D15 from the square onto the unit disk: it keeps
+    ``m`` is the bijection from the square onto the unit disk: it keeps
     the direction of ``x`` and maps ``||x||_inf`` to ``||m(x)||_2``. The
     velocity plays no part.
 
@@ -137,7 +137,7 @@ class DiskTargets:
 
 
 def worker_inputs(obs: ArrayLike, positions: ArrayLike, targets: ArrayLike, radius: float) -> FloatArray:
-    """The learned Worker's input (D26): the observation and the target offset ``(g - p) / R``, ``(..., 6)``.
+    """The learned Worker's input: the observation and the target offset ``(g - p) / R``, ``(..., 6)``.
 
     Raises:
         ValueError: If the shapes do not match ``(..., 4)``, ``(..., 2)``, ``(..., 2)``.
@@ -151,12 +151,12 @@ def worker_inputs(obs: ArrayLike, positions: ArrayLike, targets: ArrayLike, radi
 
 
 BASE_WORKER_INPUT_SIZE = 6
-"""The learned Worker's input without map features: the observation and the target offset (D26)."""
+"""The learned Worker's input without map features: the observation and the target offset."""
 
 
 @dataclass(frozen=True, eq=False)
 class MapFeatures:
-    """Local map features of the learned Worker (D75): the distances to the first wall along ``K`` fixed
+    """Local map features of the learned Worker: the distances to the first wall along ``K`` fixed
     directions, clipped at a range and scaled by it, so that each feature lies in ``[0, 1]`` and equals 1 where
     no wall is within range. The fair counterpart of the MPC Worker's knowledge of the map, restricted to the
     Worker's surroundings; the Manager sees the same observation in every architecture.
@@ -198,11 +198,11 @@ class MapFeatures:
 
 @dataclass(frozen=True, eq=False)
 class WorkerReward:
-    """The Worker's reward of D25, by term.
+    """The Worker's reward, by term.
 
     Attributes:
         progress: ``c_p (||p_k - g|| - ||p_(k+1) - g||)``.
-        contact: ``-c_n ||dv_wall|| - c_s 1[contact]``, the contact penalty of D14.
+        contact: ``-c_n ||dv_wall|| - c_s 1[contact]``, the contact penalty.
         effort: ``-c_e ||u||^2 / a_max^2``.
     """
 
@@ -226,7 +226,7 @@ def worker_reward(
     *,
     progress_coef: float,
 ) -> WorkerReward:
-    """The Worker's reward of one step (D25): the progress at the hierarchy's price, the contact and the effort
+    """The Worker's reward of one step: the progress at the hierarchy's price, the contact and the effort
     at the environment's.
 
     Args:
@@ -235,8 +235,8 @@ def worker_reward(
         next_positions: ``(B, 2)`` positions the step reached, before any reset.
         targets: ``(B, 2)`` targets of the step.
         info: The step's :class:`~hrlmpc.env.StepInfo`, for the contact and the input.
-        progress_coef: ``c_p``, the price of the decrease of the distance to the target (D66); not the
-            environment's ``progress_coef``, which is 0 under the sparse reward of D51.
+        progress_coef: ``c_p``, the price of the decrease of the distance to the target; not the
+            environment's ``progress_coef``, which is 0 under the sparse reward.
 
     Raises:
         ValueError: If ``progress_coef`` is not positive.
@@ -268,7 +268,7 @@ class LearnedWorker:
 
 @dataclass(frozen=True)
 class CommandWorker:
-    """A Worker that commands accelerations, like the MPC Worker (D34, D37); it does not learn.
+    """A Worker that commands accelerations, like the MPC Worker; it does not learn.
 
     Attributes:
         command: ``(obs, positions, targets, steps_left)``, each with one row
@@ -293,14 +293,14 @@ class Hierarchy:
     observation map.
 
     Attributes:
-        targets: Map from the Manager's actions to targets (D24).
-        segment_steps: ``H``, the steps of a full segment (D27).
+        targets: Map from the Manager's actions to targets.
+        segment_steps: ``H``, the steps of a full segment.
         discount: The Manager's per-step discount ``gamma_RL``: its reward is
             discounted by it within a segment, and by ``gamma_RL^tau`` between decisions.
         obs_map: Positions and velocities of the observations.
-        progress_coef: ``c_p`` of the Worker's reward (D25, D66), the price of
+        progress_coef: ``c_p`` of the Worker's reward, the price of
             the decrease of the distance to the target.
-        map_features: The local map features appended to the learned Worker's input (D75), or ``None``.
+        map_features: The local map features appended to the learned Worker's input, or ``None``.
 
     Raises:
         ValueError: If ``segment_steps`` or ``progress_coef`` is not positive or ``discount`` lies outside
@@ -330,7 +330,7 @@ class Hierarchy:
     def worker_inputs(self, obs: ArrayLike, positions: ArrayLike, targets: ArrayLike) -> FloatArray:
         """The learned Worker's input at ``(B, 4)`` observations, ``(B, 2)`` positions and targets: the inputs of
         :func:`worker_inputs` with this hierarchy's radius, followed by the map features at the positions when the
-        hierarchy has them (D75)."""
+        hierarchy has them."""
         base = worker_inputs(obs, positions, targets, self.targets.radius)
         if self.map_features is None:
             return base
@@ -347,8 +347,8 @@ def disk_hierarchy(
     progress_coef: float,
     map_features: MapFeatures | None = None,
 ) -> Hierarchy:
-    """The hierarchy of D24, D25 and D27: targets on the disk of radius ``reach_factor`` times the segment's
-    reach, the Worker paid ``progress_coef`` per metre of progress, with the map features of D75 if given."""
+    """The hierarchy: targets on the disk of radius ``reach_factor`` times the segment's
+    reach, the Worker paid ``progress_coef`` per metre of progress, with the map features if given."""
     radius = reach_factor * segment_reach(config.physics, segment_steps)
     return Hierarchy(
         DiskTargets(radius), segment_steps, discount, ObservationMap.from_config(config), progress_coef, map_features
@@ -457,9 +457,9 @@ class HierarchicalRollout:
             that ends, so their number is also that of the rollout's decisions.
         worker: The learned Worker's transitions, ``None`` for a
             :class:`CommandWorker`. Its observations are the inputs of
-            :func:`worker_inputs` and its rewards those of D25; no transition
+            :func:`worker_inputs` and its rewards those; no transition
             is terminal, and ``truncated`` marks every end of an episode,
-            where the Worker bootstraps (D25).
+            where the Worker bootstraps.
         worker_reward: ``(T, B)`` terms of the Worker's reward, also for a :class:`CommandWorker`.
         obs: ``(T, B, 4)`` observations acted on.
         targets: ``(T, B, 2)`` targets in force.
@@ -489,7 +489,7 @@ class HierarchicalRollout:
 
     @property
     def num_samples(self) -> int:
-        """Physical steps in the rollout (D6)."""
+        """Physical steps in the rollout."""
         return int(self.rewards.size)
 
 
@@ -560,7 +560,7 @@ def collect_hierarchical_rollout(
 
     Episodes that end restart inside the environment, and a new segment starts
     with them. Every step adds the batch size to ``env.counter.env_steps``,
-    every decision one to ``env.counter.manager_decisions`` (D6).
+    every decision one to ``env.counter.manager_decisions``.
 
     Args:
         env: Environment with automatic resets.
@@ -673,7 +673,7 @@ def collect_hierarchical_rollout(
             upcoming_inputs = hierarchy.worker_inputs(out.obs, obs_map.positions(out.obs), new_targets)
             upcoming = _checked(worker.value(upcoming_inputs), (batch,), "Worker's values")
             next_w = upcoming.copy()
-            if done.any():  # D25: the Worker bootstraps under the target it had
+            if done.any():  # The Worker bootstraps under the target it had
                 final_inputs = hierarchy.worker_inputs(out.final_obs[done], reached[done], targets[done])
                 next_w[done] = _checked(worker.value(final_inputs), (int(done.sum()),), "Worker's values")
             w["obs"][t], w["actions"][t], w["log_probs"][t] = inputs, actions, log_probs
@@ -744,7 +744,7 @@ def collect_hierarchical_rollout(
 
 
 class HierarchicalController:
-    """The deterministic hierarchy as one controller for :func:`hrlmpc.evaluation.evaluate` (D29).
+    """The deterministic hierarchy as one controller for :func:`hrlmpc.evaluation.evaluate`.
 
     The Manager decides at the first call after :meth:`reset` and after every
     ``H`` calls, as in training; the Worker acts at every call. The agents start
@@ -772,7 +772,7 @@ class HierarchicalController:
         """Whether the commands are accelerations (:func:`hrlmpc.evaluation.evaluate`'s ``inputs``)."""
         self.segment_ends: list[tuple[int, FloatArray]] = []
         """``(t, d)`` at every decision after the first since :meth:`reset`: the call ``t`` and the ``(B,)``
-        distances [m] of the agents from the targets of the segments that just ended (D40). The agents start
+        distances [m] of the agents from the targets of the segments that just ended. The agents start
         together, so an agent's segment ending at ``t`` lies within its first episode if ``t`` is below its length.
         A segment that ends with the episode is not seen (the next observation is the next episode's), whereas
         training also counts it, from the final observation."""

@@ -1,25 +1,25 @@
-"""The tube of the MPC Worker: the error set ``Z`` for ``W = BD`` (decision log D31, D33).
+"""The tube of the MPC Worker: the error set ``Z`` for ``W = BD``.
 
 The tube MPC of PPO_MPC plans a nominal trajectory ``z`` and applies
 ``u = v + K (x - z)`` at the real state ``x``. The error ``e = x - z`` then
 evolves as
 
-    e+ = A_K e + B d,        A_K = A + B K,        ||d||_2 <= d_bar,
+    e+ = A_K e + B d, A_K = A + B K, ||d||_2 <= d_bar,
 
 with ``A`` and ``B`` the matrices of :func:`hrlmpc.model.system_matrices`. A
 set ``Z`` is robustly positively invariant (RPI) if ``A_K Z (+) BD`` lies in
 ``Z``: an error that starts in ``Z`` stays there for every disturbance.
 
-``W = BD`` is a disk in a plane of R^4, so the algorithm of the tube-MPC note
-(which needs ``0`` inside ``W``) does not apply. D31 takes instead
+``W = BD`` is a disk in a plane of R^4, so the algorithm of Rakovic et al. (2005), which needs ``0`` in the interior of ``W``, does not apply.
+The tube is instead
 
-    Z = (+)_{l < s} A_K^l B D  (+)  eps E,       E = {e : e' P_E e <= 1},
+    Z = (+)_{l < s} A_K^l B D (+) eps E, E = {e: e' P_E e <= 1},
 
 with ``A_K' P_E A_K <= lambda^2 P_E`` for some ``lambda < 1`` and
 ``eps >= d_bar ||P_E^(1/2) A_K^s B||_2 / (1 - lambda)``. Then
 
-    A_K Z (+) BD = (+)_{l < s} A_K^l B D  (+)  A_K^s B D  (+)  eps A_K E
-                 in (+)_{l < s} A_K^l B D  (+)  (mu + eps lambda) E,
+    A_K Z (+) BD = (+)_{l < s} A_K^l B D (+) A_K^s B D (+) eps A_K E
+                 in (+)_{l < s} A_K^l B D (+) (mu + eps lambda) E,
 
 where ``mu = d_bar ||P_E^(1/2) A_K^s B||_2`` bounds ``A_K^s B D`` in the norm of
 ``E``; since ``mu + eps lambda <= eps``, ``Z`` is RPI. Every closed RPI set
@@ -27,13 +27,13 @@ contains the minimal one, and ``Z`` lies within ``eps E`` of it.
 
 ``Z`` is kept as its support function and its lifted representation,
 
-    e in Z  <=>  e = sum_l (A_K^l B) d_l + T eta,  ||d_l||_2 <= d_bar, ||eta||_2 <= 1,
+    e in Z <=> e = sum_l (A_K^l B) d_l + T eta, ||d_l||_2 <= d_bar, ||eta||_2 <= 1,
 
 with ``T = eps P_E^(-1/2)``, never as facets. With isotropic weights every
 ``A_K^l B`` and ``P_E`` are scalar multiples of ``I2`` per block, so ``Z`` is
 invariant under the rotations of the plane: its projections on the positions,
 the velocities and the inputs ``K e`` are disks, and the tightened speed and
-thrust sets of D33 are exact disks.
+thrust sets are exact disks.
 
 This module needs NumPy and SciPy only.
 """
@@ -59,10 +59,9 @@ _ROTATION_ANGLES = (0.3, 1.1, 2.5)
 
 @dataclass(frozen=True)
 class Weights:
-    """Weights of the LQR that gives the ancillary gain ``K`` (D31).
+    """Weights of the LQR that gives the ancillary gain ``K``.
 
-    ``Q = diag(q_pos, q_pos, q_vel, q_vel)`` and ``R = r I2``. Until D37 they
-    were also the stage weights of the plan's cost, with the LQR's cost as its terminal cost.
+    ``Q = diag(q_pos, q_pos, q_vel, q_vel)`` and ``R = r I2``. 
 
     Raises:
         ValueError: If a weight is not positive and finite.
@@ -120,7 +119,7 @@ def is_rotation_invariant(M: FloatArray, atol: float = 1e-10) -> bool:
 
 @dataclass(frozen=True, eq=False)
 class Tube:
-    """The error set ``Z = (+)_{l<s} A_K^l B D (+) T B_1`` of D31, with ``B_1`` the unit ball of R^4.
+    """The error set ``Z = (+)_{l<s} A_K^l B D (+) T B_1``, with ``B_1`` the unit ball of R^4.
 
     Build it with :func:`design_tube`. With ``d_bar = 0`` it is ``{0}``: no
     terms and a zero tail.
@@ -195,7 +194,7 @@ class Tube:
 
     @property
     def next_speed_radius(self) -> float:
-        """Radius of the velocities of ``A_K Z``: the largest ``||(A_K e)_v||`` over ``e`` in ``Z`` [m/s] (D33)."""
+        """Radius of the velocities of ``A_K Z``: the largest ``||(A_K e)_v||`` over ``e`` in ``Z`` [m/s]."""
         return float(self.support(self.closed_loop.T @ np.array([0.0, 0.0, 1.0, 0.0])))
 
     @property
@@ -222,7 +221,7 @@ def design_tube(
     tolerance: float = TAIL_TOLERANCE,
     max_terms: int = MAX_TERMS,
 ) -> Tube:
-    """The RPI set ``Z`` of D31 for ``e+ = A_K e + B d``, ``||d|| <= d_bar``.
+    """The RPI set ``Z`` for ``e+ = A_K e + B d``, ``||d|| <= d_bar``.
 
     ``lambda`` is the midpoint between the spectral radius of ``A_K`` and 1, and
     ``P_E`` solves ``(A_K / lambda)' P_E (A_K / lambda) - P_E + I = 0``, so that

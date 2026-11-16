@@ -1,4 +1,4 @@
-"""Tests of the YAML loader of the configuration files (code rule C2)."""
+"""Tests of the YAML loader of the configuration files."""
 
 from __future__ import annotations
 

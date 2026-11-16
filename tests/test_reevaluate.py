@@ -1,4 +1,4 @@
-"""Tests of the re-evaluation of trained policies from explicit starts (decision log D70): the escape from the
+"""Tests of the re-evaluation of trained policies from explicit starts: the escape from the
 trap; they need PyTorch. The MPC architectures use the stand-ins of ``tests/test_train_ppo_mpc.py``."""
 
 from __future__ import annotations
@@ -138,7 +138,7 @@ def _lines(run_dir: Path) -> list[dict[str, Any]]:
 
 
 def test_every_architecture_is_reevaluated_from_a_grid_in_a_box(tmp_path: Path) -> None:
-    """D70: the final policy of a run, with the mode (D57), from the grid of starts over a box; one line per
+    """The final policy of a run, with the mode, from the grid of starts over a box; one line per
     re-evaluation in ``reevaluations.jsonl`` with its name, the starts and the per-start results."""
     runs = _runs(tmp_path)
     starts = spawn_grid(BOX, (2, 2))

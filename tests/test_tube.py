@@ -1,4 +1,4 @@
-"""Tests of the tube of the MPC Worker: the RPI set Z for W = BD and the tightenings (decision log D31, D33)."""
+"""Tests of the tube of the MPC Worker: the RPI set Z for W = BD and the tightenings."""
 
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ def test_the_gain_is_the_lqr_gain_and_stabilizes() -> None:
     riccati = A.T @ P @ A - A.T @ P @ B @ np.linalg.solve(WEIGHTS.R + B.T @ P @ B, B.T @ P @ A) + WEIGHTS.Q
     np.testing.assert_allclose(P, riccati, atol=1e-8)
     assert np.max(np.abs(np.linalg.eigvals(A + B @ K))) < 1.0
-    np.testing.assert_allclose(K[0, [0, 2]], [-7.757, -3.784], atol=1e-3)  # the numbers of the decision log
+    np.testing.assert_allclose(K[0, [0, 2]], [-7.757, -3.784], atol=1e-3)  # the gain printed in the thesis
     np.testing.assert_allclose(K[:, [0, 2]][1], 0.0, atol=1e-12)  # one block per axis
 
 
@@ -113,7 +113,7 @@ def test_the_radii_of_the_decision_log() -> None:
     assert 2.5 - half.input_radius == pytest.approx(1.848, abs=5e-3)
     assert 1.2 - one.next_speed_radius == pytest.approx(0.967, abs=2e-3)
     assert 2.5 - one.input_radius == pytest.approx(1.197, abs=5e-3)
-    # D33 gains at least T_s d_bar over the tightening by Z
+    # the next-step radius gains at least T_s d_bar over the tightening by Z
     for tube in (half, one):
         assert tube.speed_radius - tube.next_speed_radius >= DT * tube.d_bar - 1e-12
 
@@ -155,13 +155,13 @@ def test_invalid_designs_are_refused() -> None:
 
 @pytest.mark.parametrize("d_bar", [0.5, 1.0])
 def test_the_tube_holds_on_the_real_plant_with_the_speed_limiter(d_bar: float) -> None:
-    """D33 end to end: the nominal plan at the tightened speed, the real plant with its limiter.
+    """End to end: the nominal plan at the tightened speed, the real plant with its limiter.
 
     The nominal state cruises at the tightened speed limit along +x; the real
     plant is the environment's physics. Up to step 60 the disturbance follows
     the sequence that maximizes the candidate speed at step 60 (the sign of
     the velocity response ``(A_K^l B)_v`` of each lag), so the speed limiter
-    acts there; afterwards it is random. By F3 the limiter's action is a
+    acts there; afterwards it is random. By Proposition A.4 of the thesis the limiter's action is a
     disturbance in D, so the error must stay in Z (checked on its support
     function), and the input never needs a saturation.
     """
@@ -203,4 +203,4 @@ def test_the_tube_holds_on_the_real_plant_with_the_speed_limiter(d_bar: float) -
         x = np.concatenate([step.p[0], step.v[0]])
         z = nxt
         assert np.all(directions @ (x - z) <= h + 1e-9), f"error left Z at step {k}"
-    assert limited > 0  # the speed limiter did act, so F3 was exercised
+    assert limited > 0  # the speed limiter did act, so the equivalence was exercised

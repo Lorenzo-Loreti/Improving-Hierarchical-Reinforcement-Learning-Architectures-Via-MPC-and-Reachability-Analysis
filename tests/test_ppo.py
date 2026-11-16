@@ -1,8 +1,7 @@
-"""Tests of the in-house PPO (decision log D5, D15, D19); they need PyTorch.
+"""Tests of the in-house PPO; they need PyTorch.
 
-The strongest check is the comparison with the pre-alignment implementation,
-of which ``tests/reference/pre_alignment_ppo.py`` keeps a frozen copy since the
-pre-alignment code was removed (D21, D29): given the same weights, batch and
+The strongest check is the comparison with an earlier stand-alone implementation of flat PPO,
+of which ``tests/reference/pre_alignment_ppo.py`` keeps a frozen copy: given the same weights, batch and
 seed, the update must end on bit-identical weights.
 """
 
@@ -63,7 +62,7 @@ def _obs(n: int, seed: int = 0) -> np.ndarray:
 
 
 def _legacy() -> ModuleType:
-    """The frozen copy of the pre-alignment flat PPO (D29)."""
+    """The frozen copy of the earlier implementation of flat PPO."""
     spec = importlib.util.spec_from_file_location("pre_alignment_ppo", REFERENCE)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -90,7 +89,7 @@ def _random_batch(agent: PPOAgent, n: int, seed: int) -> Batch:
 
 
 # --------------------------------------------------------------------------
-# Policy: a Beta per axis on the square (D15)
+# Policy: a Beta per axis on the square
 # --------------------------------------------------------------------------
 
 
@@ -160,7 +159,7 @@ def test_the_deterministic_action_is_the_mean_mapped_to_the_square() -> None:
 
 
 def test_the_mode_action_is_the_mode_mapped_to_the_square() -> None:
-    """D43: the second deterministic action, the mode of each Beta, reaches the edge of the square when a
+    """The second deterministic action, the mode of each Beta, reaches the edge of the square when a
     concentration is 1, where the mean stays inside."""
     agent = _agent(5)
     obs = _obs(50, seed=3)
@@ -175,7 +174,7 @@ def test_the_mode_action_is_the_mode_mapped_to_the_square() -> None:
 
 
 def test_an_evaluation_names_its_deterministic_policy() -> None:
-    """D43, D50: the evaluations run the mean or the mode, by name."""
+    """The evaluations run the mean or the mode, by name."""
     agent = _agent(5)
     obs = _obs(8, seed=1)
     np.testing.assert_array_equal(agent.deterministic_policy("mean")(obs), agent.deterministic_action(obs))
@@ -229,7 +228,7 @@ def test_the_running_statistics_match_the_pre_alignment_ones() -> None:
 
 @pytest.mark.parametrize(("steps", "envs", "max_grad_norm"), [(16, 4, 0.5), (14, 5, 0.05)])
 def test_the_update_reproduces_the_pre_alignment_update_exactly(steps: int, envs: int, max_grad_norm: float) -> None:
-    """Same weights, batches and seed: bit-identical weights, statistics and metrics (D19).
+    """Same weights, batches and seed: bit-identical weights, statistics and metrics.
 
     The second case splits 70 samples unevenly and clips the gradients of both
     networks; two consecutive updates carry Adam's moments and the target

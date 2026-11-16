@@ -1,6 +1,5 @@
-# Flat PPO (decision log D5, D19): a faithful port of the pre-alignment
-# implementation. Tuned under D65 (2026-10-14): configuration c5 of
-# configs/agent/tuning/ppo/ (learning rate 1.0e-3; the rest as before the tuning).
+#  Flat PPO. The values are those selected by the tuning: configuration c5 of
+#  configs/agent/tuning/ppo/ (learning rate 1.0e-3).
 # Write floats with a dot and a signed exponent (3.0e-4, 1.0e+5): YAML 1.1 reads 3e-4 and 1.0e5 as strings.
 
 network:
@@ -11,10 +10,10 @@ rollout:
   num_steps: 128               # steps per agent and update: 1 024 samples per update
 
 update:
-  discount: 0.99               # gamma_RL (D13); independent of the environment's shaping_discount (D22)
+  discount: 0.99               # gamma_RL; independent of the environment's shaping_discount
   epochs: 10
   minibatches: 4               # 256 samples per minibatch
-  learning_rate: 1.0e-3        # actor (D65: c5; 3.0e-4 before the tuning)
+  learning_rate: 1.0e-3        # actor (c5; 3.0e-4 before the tuning)
   anneal_learning_rate: true   # linear decay to 0 over the budget
   critic_lr_mult: 3.0          # critic learning rate = 3 x learning_rate
   adam_eps: 1.0e-5
@@ -24,7 +23,7 @@ update:
   max_grad_norm: 0.5           # per network
   value_norm_horizon: 10       # updates in the running statistics of the critic's targets
 
-evaluation:                    # decision log D20
+evaluation:
   every: 10240                 # samples between evaluations (10 updates); the first is at 0
   grid: [5, 5]                 # starts on the spawn box, at rest
   seed: 12345                  # evaluation environment: the same for every run, distinct from the training seeds

@@ -1,4 +1,4 @@
-"""Tests of the run directory and the learning-curve log (code rules C3, C4; decision log D6, D50)."""
+"""Tests of the run directory and the learning-curve log."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ def test_run_directory_layout(tmp_path: Path) -> None:
     assert meta["seed"] == 7
     assert meta["git"] == {"commit": None, "dirty": None}  # tmp_path is not a git checkout
     assert meta["packages"]["numpy"] == np.__version__
-    assert meta["machine"]["host"] == platform.node()  # D50
+    assert meta["machine"]["host"] == platform.node()
 
     records = [json.loads(line) for line in (run_dir / "metrics.jsonl").read_text(encoding="utf-8").splitlines()]
     assert records == [
@@ -88,7 +88,7 @@ def test_package_versions_reports_missing_packages() -> None:
 
 
 def test_the_machine_is_described(monkeypatch: pytest.MonkeyPatch) -> None:
-    """D50: processor, cores, host, the load when the run starts and the threads' variables; the Slurm job only
+    """Processor, cores, host, the load when the run starts and the threads' variables; the Slurm job only
     inside one."""
     for name in SLURM_VARIABLES.values():
         monkeypatch.delenv(name, raising=False)

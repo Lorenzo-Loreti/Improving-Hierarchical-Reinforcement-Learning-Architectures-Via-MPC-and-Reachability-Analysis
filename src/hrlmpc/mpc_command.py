@@ -1,14 +1,12 @@
-"""The MPC Worker's interface to the common loop, and its statistics, without solvers (decision log D34, D37, D47,
-D49).
+"""The MPC Worker's interface to the common loop, and its statistics, without solvers.
 
 :class:`MPCCommand` turns any :class:`StepActor` -- the solver-based
 :class:`hrlmpc.mpc_worker.MPCWorker`, or a stand-in in tests -- into the
 :class:`~hrlmpc.hierarchy.CommandWorker` of the common loop, and records each
 step's outcome, solve time, free binaries, tube ratio, cut rounds, shifted
 plan outside its tube, solver failures, how the search for a plan ended and
-how its exact solves went (D47), with the plans of the remedies of D49. The
-summaries of :func:`mpc_metrics` are logged in training and evaluation (row
-AR3e of ``ALIGNMENT.md``).
+how its exact solves went, with the plans of the remedies. The
+summaries of :func:`mpc_metrics` are logged in training and evaluation.
 """
 
 from __future__ import annotations
@@ -31,11 +29,11 @@ SOLVER, CANDIDATE, EMERGENCY, KEPT = 0, 1, 2, 3
 no plan at all (a brake); the shifted previous plan because it was cheaper than the solvers' plan."""
 
 CONVERGED, RELAXATION, FIXED, ROUNDS, EMPTY, UNSOLVED, ERROR, BEST = range(8)
-"""How the search for a plan ended (D47, D49). With some binaries free (module docstring of
+"""How the search for a plan ended. With some binaries free (module docstring of
 :mod:`hrlmpc.mpc_worker`): the exact plan within the MIP gap of the relaxation's bound; the relaxation's own
 plan, because a round added no cut; the rounds exhausted; the relaxation without a solution. With every
 binary fixed, Clarabel alone: a plan; no plan (infeasible, or inaccurate and not accepted). In both: a solver
-failure ended the search. ``BEST`` (R1 of D49): the rounds ran out after the search had found exact plans,
+failure ended the search. ``BEST`` (R1): the rounds ran out after the search had found exact plans,
 none certified within the gap, and the cheapest of them is its plan; ``ROUNDS`` thus means that the rounds
 ran out without an exact plan. A relaxation without a solution or a solver failure ends the search without a
 plan whatever it found before (``EMPTY``, ``ERROR``)."""
@@ -49,7 +47,7 @@ FOUND = (CONVERGED, RELAXATION, FIXED, BEST)
 
 @dataclass(frozen=True)
 class SearchReport:
-    """How one search for a plan went (D47, D49): a step of the Worker, or a projection of D39.
+    """How one search for a plan went: a step of the Worker, or a projection.
 
     Attributes:
         errors: Solver failures caught during the search, whether it survived them or ended with them; for a
@@ -58,13 +56,13 @@ class SearchReport:
             :data:`EMPTY`, :data:`UNSOLVED`, :data:`ERROR` or :data:`BEST`.
         exact_inaccurate: Exact solves (Clarabel, binaries fixed) that stopped short of the solver's accuracy
             without finding the binaries infeasible (an inaccurate optimum, or the iteration limit) and left no
-            plan the checker accepts (R2 of D49): no plan, though one may exist.
+            plan the checker accepts (R2): no plan, though one may exist.
         exact_infeasible: Exact solves that found the binaries infeasible, certified or almost: no plan.
         exact_uncertified: Exact plans that the relaxation's bound did not certify within the MIP gap: feasible
             plans that the search went on from; if the rounds then ran out, the cheapest is its plan
-            (:data:`BEST`, R1 of D49).
+            (:data:`BEST`, R1).
         exact_accepted: Exact solves that stopped short of the solver's accuracy with a plan that the checker
-            accepted (R2 of D49): plans, certified or not like any other.
+            accepted (R2): plans, certified or not like any other.
         plan_accepted: 1 if the plan the search returned is one of those accepted inaccurate plans, 0 otherwise.
     """
 
@@ -89,7 +87,7 @@ class WorkerStep:
             last plan's prediction; at most 1 while the disturbance stays in
             ``D`` (a necessary condition for ``e`` in ``Z``). NaN without a plan or a tube.
         cost: The plan's cost, NaN in an emergency.
-        cut_rounds: Mixed-integer solves the step started, whether or not its search found a plan (D47);
+        cut_rounds: Mixed-integer solves the step started, whether or not its search found a plan;
             0 when Clarabel solved alone.
         plan: The nominal states of the applied plan, or ``None`` in an emergency.
         invalid_candidate: 1 if the shifted plan would have been applied
@@ -98,13 +96,13 @@ class WorkerStep:
             benchmark, and applied only as the last resort; 0 otherwise.
         solver_errors: Solver failures caught during the step (exceptions, or
             results the step could not use).
-        exit: How the search for a plan ended (:class:`SearchReport`, D47, D49).
+        exit: How the search for a plan ended (:class:`SearchReport`).
         exact_inaccurate: Exact solves that stopped short of Clarabel's accuracy, not infeasible, without a plan
             the checker accepts.
         exact_infeasible: Exact solves that found their binaries infeasible.
         exact_uncertified: Exact plans not certified within the MIP gap.
-        exact_accepted: Inaccurate exact plans that the checker accepted (D49).
-        plan_accepted: 1 if the solvers' plan is an accepted inaccurate plan (D49), applied or not.
+        exact_accepted: Inaccurate exact plans that the checker accepted.
+        plan_accepted: 1 if the solvers' plan is an accepted inaccurate plan, applied or not.
     """
 
     outcome: int
@@ -133,7 +131,7 @@ class StepActor(Protocol):
         ...
 
     def act(self, x: ArrayLike, target: ArrayLike, steps_left: int, slot: int = 0) -> tuple[FloatArray, WorkerStep]:
-        """The input at state ``x`` through ``target`` when the segment ends, ``steps_left`` steps ahead (D37),
+        """The input at state ``x`` through ``target`` when the segment ends, ``steps_left`` steps ahead,
         and the step's report."""
         ...
 
@@ -180,7 +178,7 @@ class MPCCommand:
         self, obs: FloatArray, positions: FloatArray, targets: FloatArray, steps_left: ArrayLike
     ) -> FloatArray:
         """The commanded accelerations of every agent, ``(B, 2)``; ``steps_left`` ``(B,)`` counts the steps to the
-        end of each agent's segment, the stage of its waypoint (D37)."""
+        end of each agent's segment, the stage of its waypoint."""
         velocities = self.obs_map.velocities(obs)
         n = len(positions)
         if n > self.worker.num_slots:
@@ -226,10 +224,10 @@ def mpc_metrics(stats: dict[str, FloatArray], prefix: str, mask: BoolArray | Non
     and ``solver_error_count``; per exit of :data:`EXITS`, the steps whose
     search ended there, ``exit_<name>_count``; the exact solves without a plan,
     ``exact_inaccurate_count`` and ``exact_infeasible_count``; the exact
-    plans not certified within the MIP gap, ``exact_uncertified_count`` (D47);
+    plans not certified within the MIP gap, ``exact_uncertified_count``;
     the inaccurate exact plans accepted by the checker,
     ``exact_accepted_count``; and the steps that applied the plan of a remedy
-    of D49 (outcome :data:`SOLVER`): the cheapest uncertified exact plan,
+    (outcome :data:`SOLVER`): the cheapest uncertified exact plan,
     ``best_applied_count`` (R1), or an accepted inaccurate plan,
     ``accepted_applied_count`` (R2).
     ``tube_ratio_max`` is logged only when some step had a tube ratio, so

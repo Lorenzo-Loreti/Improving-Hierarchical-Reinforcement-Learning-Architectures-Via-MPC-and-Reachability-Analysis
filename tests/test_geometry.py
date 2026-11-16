@@ -1,4 +1,4 @@
-"""Tests of the polygonal geometry (row M6; decision log D11, D16)."""
+"""Tests of the polygonal geometry."""
 
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ def test_room_and_width() -> None:
 
 
 def test_an_obstacle_widening_away_from_the_wall_is_extended_by_half_its_room() -> None:
-    """D16 for a general convex obstacle: its base on the floor, its sides meeting 0.5 m below the floor."""
+    """A general convex obstacle: its base on the floor, its sides meeting 0.5 m below the floor."""
     trapezoid = ConvexPolygon.from_vertices([[4, 0], [5, 0], [6, 1], [3, 1]])
     layout = Layout.build(_box(0, 0, 10, 4), [trapezoid], goal_x=9.0)
     np.testing.assert_allclose(layout.blocked[0].vertices, [[4.25, -0.25], [4.75, -0.25], [6, 1], [3, 1]], atol=1e-12)
@@ -112,7 +112,7 @@ def test_tunnel_layout_has_only_the_arena() -> None:
 
 
 def test_obstacles_touching_a_wall_are_extended_beyond_it() -> None:
-    """D16: O1 and O3 rest on the floor, O2 and O4 hang from the ceiling."""
+    """O1 and O3 rest on the floor, O2 and O4 hang from the ceiling."""
     layout = _layout("slalom")
     below, above = -2.0 - EXTENSION, 2.0 + EXTENSION
     np.testing.assert_allclose(layout.blocked[0].vertices, [[4, below], [5, below], [5, 0.25], [4, 0.25]])
@@ -129,7 +129,7 @@ def test_extension_changes_nothing_inside_the_arena() -> None:
 
 
 def test_free_space_has_no_zero_width_gaps() -> None:
-    """D16: the walls under and over the obstacles are not free."""
+    """The walls under and over the obstacles are not free."""
     layout = _layout("slalom")
     gaps = np.array([[4.5, -2.0], [7.5, -2.0], [4.5, 2.0], [7.5, 2.0], [4.0 + 1e-6, -2.0]])
     assert not layout.in_free_space(gaps).any()
@@ -196,7 +196,7 @@ def test_degenerate_layouts_are_rejected(obstacles: list[ConvexPolygon], goal_x:
 
 
 # --------------------------------------------------------------------------
-# Ray distances to the walls (decision log D75: the local map features of the learned Worker)
+# Ray distances to the walls (the local map features of the learned Worker)
 # --------------------------------------------------------------------------
 
 

@@ -1,4 +1,4 @@
-"""Rollout collection and generalized advantage estimation (decision log D6, D13, D19).
+"""Rollout collection and generalized advantage estimation.
 
 The training loops collect fixed-length rollouts from the batched
 :class:`~hrlmpc.env.NavigationEnv` and estimate advantages with GAE
@@ -6,7 +6,7 @@ The training loops collect fixed-length rollouts from the batched
 Advantage Estimation", ICLR 2016). Everything here is plain NumPy, so it is
 tested without PyTorch; the policy and the value function enter as callables.
 
-Time limits. The observation carries no time (D13), so the truncation at the
+Time limits. The observation carries no time, so the truncation at the
 horizon is not a terminal state of the task: a truncated transition is
 bootstrapped with the value of the state it reached ("partial-episode
 bootstrapping", Pardo et al., "Time Limits in Reinforcement Learning", ICML
@@ -14,7 +14,7 @@ bootstrapping", Pardo et al., "Time Limits in Reinforcement Learning", ICML
 
 Discounts. :func:`compute_gae` accepts one discount per transition, so a
 Manager's transition spanning ``tau`` steps can be discounted by
-``gamma ** tau`` (D13, step 8).
+``gamma ** tau``.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ _EPISODE_MEANS = (
 
 
 def episode_metrics(episodes: Sequence[EpisodeStats], prefix: str = "rollout/") -> dict[str, float]:
-    """Means over the training episodes that ended in a rollout (rows R3-R4); only the count if none did."""
+    """Means over the training episodes that ended in a rollout; only the count if none did."""
     result: dict[str, float] = {prefix + "episodes": float(len(episodes))}
     if episodes:
         result[prefix + "success_rate"] = float(np.mean([ep.success for ep in episodes]))
@@ -167,7 +167,7 @@ class Rollout:
 
     @property
     def num_samples(self) -> int:
-        """Number of physical steps in the rollout (decision log D6)."""
+        """Number of physical steps in the rollout."""
         return int(self.rewards.size)
 
 
@@ -185,7 +185,7 @@ def collect_rollout(
 
     Episodes that end restart inside the environment (automatic resets), so
     the rollout runs across episode boundaries. Every step adds the batch size
-    to ``env.counter`` (decision log D6).
+    to ``env.counter``.
 
     Args:
         env: Environment with automatic resets.

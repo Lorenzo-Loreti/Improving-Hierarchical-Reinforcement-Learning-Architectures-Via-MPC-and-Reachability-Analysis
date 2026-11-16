@@ -1,23 +1,20 @@
-"""Learning curves and summaries of training runs (code rule C4 and the analysis rules; decision log D6, D20, D43,
-D50).
+"""Learning curves and summaries of training runs and the analysis rules).
 
 Reads the run directories written by :class:`hrlmpc.utils.runlog.RunLogger`
 and aggregates them over seeds: means with Student-t confidence intervals,
-against the sample counter ``env_steps`` (D6). Runs are pooled only within a
+against the sample counter ``env_steps``. Runs are pooled only within a
 group of runs that share their whole configuration except the seed.
 
-It also checks the acceptance criterion of step 7 (D20): success from every
-start of the evaluation grid, arrival within a relative gap of the bound of
-F7, and no contact. The criterion applies to layouts without obstacles only,
-where the bound of F7 is the minimum time; with obstacles the gap is reported
+It also checks an acceptance criterion: success from every
+start of the evaluation grid, arrival within a relative gap of the bound, and no contact. The criterion applies to layouts without obstacles only,
+where the bound is the minimum time; with obstacles the gap is reported
 but measures the distance from a lower bound, not from the optimum, unless an
-oracle table was used (D59). The time to solve is reported at the levels of
-D67: full success from the grid (primary), full success with the gap at most
-10 %, the strict criterion of D20, and full success without contact.
+oracle table was used. The time to solve is reported at four levels: full success from the grid (primary), full success with the gap at most
+10 %, the strict criterion, and full success without contact.
 
-Since D43 every evaluation point evaluates the policy's mean and its mode,
-logged under ``eval/`` and ``eval_mode/`` (D50). The summary reports both, the
-mode in a table of its own; the criterion of D20 stays on the mean. The
+Every evaluation point evaluates the policy's mean and its mode,
+logged under ``eval/`` and ``eval_mode/``. The summary reports both, the
+mode in a table of its own; the criterion stays on the mean. The
 curves are plotted for one action (``--action``). Runs of steps 7-10 have the
 mean only.
 
@@ -25,7 +22,7 @@ Usage::
 
     python -m hrlmpc.analysis runs/tunnel/ppo runs/slalom/ppo [--plot curves.png] [--action mode]
 
-The statistical comparison between architectures belongs to step 11 (Q13).
+The statistical comparison between architectures is in :mod:`hrlmpc.results`.
 """
 
 from __future__ import annotations
@@ -58,14 +55,14 @@ CURVE_KEYS: tuple[str, ...] = (
     "eval/arrival_gap_mean",
     "eval/contact_fraction",
 )
-"""Evaluation metrics plotted by the command line, those of the mean (D20)."""
+"""Evaluation metrics plotted by the command line, those of the mean."""
 
 _FRACTIONS = ("/success_rate", "/contact_fraction")
 _PROVENANCE = {"seed", "env_file", "agent_file", "oracle_file"}
 
 
 def curve_keys(action: str = "mean") -> tuple[str, ...]:
-    """:data:`CURVE_KEYS` for the evaluation with ``action``, ``"mean"`` or ``"mode"`` (D50).
+    """:data:`CURVE_KEYS` for the evaluation with ``action``, ``"mean"`` or ``"mode"``.
 
     Raises:
         ValueError: For any other action.
@@ -149,7 +146,7 @@ _ROUND_TRIPS: dict[str, tuple[Callable[[Mapping[str, Any]], Any], Callable[[Any]
 
 def _normalized(config: Mapping[str, Any]) -> dict[str, Any]:
     """The configuration without its provenance, with the environment and agent sections as today's loaders
-    record them: an optional key that did not exist when a run was written (the bands' height of D69, say) is
+    record them: an optional key that did not exist when a run was written (the bands' height, say) is
     filled with its default, so that runs of one configuration share their fingerprint across versions of the
     schema. A section today's loader refuses is kept as written."""
     shared = {k: v for k, v in config.items() if k not in _PROVENANCE}
@@ -197,7 +194,7 @@ def group_runs(runs: Sequence[Run]) -> dict[str, list[Run]]:
         agent_file = config.get("agent_file")
         agent = PureWindowsPath(agent_file).stem if agent_file else algorithm
         label = f"{algorithm} {layout}"
-        if agent != algorithm:  # a tuning or sweep file (D60, D65): named, so that the groups read well
+        if agent != algorithm:  # a tuning or sweep file: named, so that the groups read well
             label = f"{label} {agent}"
         labels[fingerprint] = label
     groups: dict[str, list[Run]] = {}
@@ -287,16 +284,16 @@ def _value(record: Mapping[str, Any], key: str) -> float | None:
 
 
 def criterion_gap(record: Mapping[str, Any], action: str = "mean", oracle: bool = True) -> float | None:
-    """The largest arrival gap the criterion of D20 is judged on: the oracle gap where it is logged (D59), else the
-    gap of F7; ``None`` where neither is."""
+    """The largest arrival gap the criterion is judged on: the oracle gap where it is logged, else the
+    gap; ``None`` where neither is."""
     p = f"{evaluation_name(action)}/"
     gap = _value(record, p + "oracle_gap_max") if oracle else None
     return gap if gap is not None else _value(record, p + "arrival_gap_max")
 
 
 def accepted(record: Mapping[str, Any], max_gap: float, action: str = "mean", oracle: bool = True) -> bool:
-    """Acceptance criterion of step 7 (D20) on one evaluation record: success from every start, the largest arrival
-    gap (:func:`criterion_gap`) at most ``max_gap``, no contact; on the evaluation with ``action`` (D57)."""
+    """The acceptance criterion on one evaluation record: success from every start, the largest arrival
+    gap (:func:`criterion_gap`) at most ``max_gap``, no contact; on the evaluation with ``action``."""
     p = f"{evaluation_name(action)}/"
     success, contact = _value(record, p + "success_rate"), _value(record, p + "contact_fraction")
     gap = criterion_gap(record, action, oracle)
@@ -314,12 +311,12 @@ def first_accepted(run: Run, max_gap: float, action: str = "mean", oracle: bool 
 
 
 SOLVED_LEVELS: tuple[str, ...] = ("success", "gap_10", "strict", "contact_free")
-"""The levels of "solved" (D64, D67): full success from the grid (the primary threshold), full success with the
-largest gap of :func:`criterion_gap` at most :data:`GAP_LENIENT`, the strict criterion of D20 (:func:`accepted`:
+"""The levels of "solved": full success from the grid (the primary threshold), full success with the
+largest gap of :func:`criterion_gap` at most :data:`GAP_LENIENT`, the strict criterion (:func:`accepted`:
 gap at most ``max_gap``, no contact), and full success without contact (reported beside them)."""
 
 GAP_LENIENT = 0.10
-"""The gap of the second level of D67."""
+"""The gap of the second level."""
 
 
 def solved(record: Mapping[str, Any], level: str, action: str = "mean", max_gap: float = 0.05,
@@ -347,7 +344,7 @@ def solved(record: Mapping[str, Any], level: str, action: str = "mean", max_gap:
 
 
 def time_to_solve(run: Run, action: str = "mean", max_gap: float = 0.05, oracle: bool = True) -> dict[str, int | None]:
-    """``env_steps`` of the first evaluation meeting each level of :data:`SOLVED_LEVELS` (D67), ``None`` where the
+    """``env_steps`` of the first evaluation meeting each level of :data:`SOLVED_LEVELS`, ``None`` where the
     run never does (censored at its end)."""
     evaluations = [r for r in run.records if "eval/success_rate" in r]
     return {
@@ -359,7 +356,7 @@ def time_to_solve(run: Run, action: str = "mean", max_gap: float = 0.05, oracle:
 def success_auc(run: Run, action: str = "mean") -> float:
     """The area under the success curve of the evaluation with ``action``, by the trapezoidal rule over the
     samples, divided by the run's budget (by the samples of the last evaluation when no budget is recorded): in
-    ``[0, 1]`` (the selection rule of D65), and an incomplete run counts the area it reached only; NaN with fewer
+    ``[0, 1]`` (the selection rule), and an incomplete run counts the area it reached only; NaN with fewer
     than two evaluations or without the action."""
     steps, values = series(run, f"{evaluation_name(action)}/success_rate")
     if steps.size < 2 or steps[-1] <= 0:
@@ -370,12 +367,12 @@ def success_auc(run: Run, action: str = "mean") -> float:
 
 
 def has_oracle(record: Mapping[str, Any], action: str = "mean") -> bool:
-    """Whether the evaluation record carries the oracle gap (D44)."""
+    """Whether the evaluation record carries the oracle gap."""
     return _value(record, f"{evaluation_name(action)}/oracle_gap_max") is not None
 
 
 def uses_oracle(run: Run, action: str = "mean") -> bool:
-    """Whether the run measures the oracle gap (D44): an oracle table is named in its configuration, or some
+    """Whether the run measures the oracle gap: an oracle table is named in its configuration, or some
     evaluation with ``action`` carries the gap (an evaluation without arrivals carries none)."""
     if run.config.get("oracle_file"):
         return True
@@ -383,7 +380,7 @@ def uses_oracle(run: Run, action: str = "mean") -> bool:
 
 
 def curriculum_summary(run: Run) -> tuple[int, int, int | None] | None:
-    """``(stage, stages, samples)`` of a run with the spawn curriculum (D62): the stage at the end, the number of
+    """``(stage, stages, samples)`` of a run with the spawn curriculum: the stage at the end, the number of
     stages and the ``env_steps`` of the first update at the last stage (``None`` if never); ``None`` without one."""
     updates = [r for r in run.records if "curriculum/stage" in r]
     if not updates:
@@ -427,7 +424,7 @@ def _table(
             f"{extra[i] if extra else ''}"
         )
     lines.append("")
-    oracle_keys = (p + "oracle_gap_mean", p + "oracle_gap_max")  # reported where measured (D44)
+    oracle_keys = (p + "oracle_gap_mean", p + "oracle_gap_max")  # reported where measured
     for key in (*curve_keys(action), *oracle_keys):
         values = np.array([math.nan if f.get(key) is None else f[key] for f in finals], dtype=np.float64)
         values = values[~np.isnan(values)]
@@ -438,9 +435,9 @@ def _table(
 
 
 def _summarize_group(label: str, runs: Sequence[Run], max_gap: float) -> list[str]:
-    """The tables of a group: the mean's and, where logged, the mode's; the acceptance of D20 is decided on the mode
-    where it is logged (D57) and on the mean otherwise, on the oracle gap where a table was used (D59) and on the
-    gap of F7 otherwise, which applies to layouts without obstacles only."""
+    """The tables of a group: the mean's and, where logged, the mode's; the acceptance is decided on the mode
+    where it is logged and on the mean otherwise, on the oracle gap where a table was used and on the
+    gap otherwise, which applies to layouts without obstacles only."""
     finals = [_last_evaluation(run) for run in runs]
     with_mode = all(f"{evaluation_name('mode')}/success_rate" in final for final in finals)
     primary = "mode" if with_mode else "mean"
@@ -459,11 +456,11 @@ def _summarize_group(label: str, runs: Sequence[Run], max_gap: float) -> list[st
     acceptance_columns = f" {'accepted':>8} {'first':>8} {'auc':>6}"
     lines = [f"== {label} ({len(runs)} runs)", *incomplete]
     if primary == "mean":
-        lines.append("action: mean; acceptance on the mean (D20)")
+        lines.append("action: mean; acceptance on the mean")
         lines += _table(runs, finals, "mean", verdicts, acceptance_columns)
     else:
-        lines += ["action: mean (D43)", *_table(runs, finals, "mean"), ""]
-        lines.append("action: mode; acceptance on the mode (D57)")
+        lines += ["action: mean", *_table(runs, finals, "mean"), ""]
+        lines.append("action: mode; acceptance on the mode")
         lines += _table(runs, finals, "mode", verdicts, acceptance_columns)
     valid = aucs[~np.isnan(aucs)]
     if valid.size:
@@ -472,20 +469,20 @@ def _summarize_group(label: str, runs: Sequence[Run], max_gap: float) -> list[st
         lines.append(f"auc of the success curve ({primary}) mean {mean:.3f}  {interval}  (n={valid.size})")
     if applicable:
         count = sum(accepted(f, max_gap, primary) for f in finals)
-        basis = "on the oracle gap, D59" if with_oracle else "on the gap of F7"
+        basis = "on the oracle gap" if with_oracle else "on the gap to the lower bound"
         lines.append(f"accepted at the end: {count}/{len(runs)} (max gap {max_gap:g}, {basis})")
     else:
         lines.append(
-            "acceptance not applicable: the layout has obstacles and no oracle table, so the bound of F7 is not the "
+            "acceptance not applicable: the layout has obstacles and no oracle table, so the lower bound is not the "
             "minimum time"
         )
     lines += ["", *_time_to_solve_block(runs, primary, max_gap, applicable)]
     if primary == "mean":
         lines.append("")
-        lines.append("action: mode (D43): not evaluated in these runs")
+        lines.append("action: mode: not evaluated in these runs")
     curricula = [curriculum_summary(run) for run in runs]
     if any(c is not None for c in curricula):
-        lines += ["", "curriculum (D62): stage at the end and samples to the last stage"]
+        lines += ["", "curriculum: stage at the end and samples to the last stage"]
         reached = []
         for run, summary in zip(runs, curricula, strict=True):
             if summary is None:
@@ -506,11 +503,11 @@ _LEVEL_NAMES = {"success": "full success", "gap_10": "gap <= 10%", "strict": "st
 
 
 def _time_to_solve_block(runs: Sequence[Run], action: str, max_gap: float, applicable: bool) -> list[str]:
-    """The first samples at which each run meets the levels of D67 on ``action``, and their counts over the runs;
+    """The first samples at which each run meets the levels on ``action``, and their counts over the runs;
     the gap levels are not applicable on an obstacle layout without an oracle table."""
     header = f"{'run':<28} {'success':>8} {'gap<=10%':>9} {'strict':>8} {'no-contact':>11}"
     lines = [
-        f"time to solve (D67): the first evaluation of the {action} meeting the level (max gap {max_gap:g} for strict)",
+        f"time to solve: the first evaluation of the {action} meeting the level (max gap {max_gap:g} for strict)",
         header,
         "-" * len(header),
     ]
@@ -540,7 +537,7 @@ def _time_to_solve_block(runs: Sequence[Run], action: str, max_gap: float, appli
 
 def _ranking(groups: Mapping[str, Sequence[Run]]) -> list[str]:
     """The groups ranked by the mean AUC of the success curve of their primary action, then by the mean final
-    unshaped return of that action: the selection rule of the tuning protocol (D65)."""
+    unshaped return of that action: the selection rule of the tuning protocol."""
     rows = []
     for label, members in groups.items():
         finals = [_last_evaluation(run) for run in members]
@@ -557,15 +554,15 @@ def _ranking(groups: Mapping[str, Sequence[Run]]) -> list[str]:
         return (-auc if not math.isnan(auc) else 1.0, -ret if not math.isnan(ret) else math.inf)
 
     rows.sort(key=order)
-    lines = ["groups ranked by the AUC of the success curve (the mode where logged), then by the final return (D65)"]
+    lines = ["groups ranked by the AUC of the success curve (the mode where logged), then by the final return"]
     for rank, (label, primary, auc, n, ret) in enumerate(rows, start=1):
         lines.append(f"{rank:>3}. {label:<40} auc {_fmt(auc)} ({primary}, n={n})  final return {_fmt(ret, 1)}")
     return lines
 
 
 def summarize(runs: Sequence[Run], max_gap: float = 0.05) -> str:
-    """For every group: the last evaluation of each run, means over runs and the acceptance status (D20); with
-    several groups, their ranking by the AUC of the success curve (D65)."""
+    """For every group: the last evaluation of each run, means over runs and the acceptance status; with
+    several groups, their ranking by the AUC of the success curve."""
     lines: list[str] = []
     groups = group_runs(runs)
     for label, members in groups.items():
@@ -580,7 +577,7 @@ def plot_curves(runs: Sequence[Run], path: str | Path, keys: Sequence[str] = CUR
     """Plot the mean curves of every group with their 95% intervals into an image file (needs matplotlib).
 
     Points where some runs have no value (NaN) are drawn dashed. ``keys`` are those of one action, e.g.
-    ``curve_keys("mode")``; a group's runs without a key (those before D43, for the mode) are left out of its
+    ``curve_keys("mode")``; a group's runs without a key (older runs, for the mode) are left out of its
     curve, and a group without any is left out.
     """
     import matplotlib
@@ -607,7 +604,7 @@ def plot_curves(runs: Sequence[Run], path: str | Path, keys: Sequence[str] = CUR
             ax.fill_between(curve.env_steps, low, high, color=f"C{color}", alpha=0.2, lw=0)
         ax.set_ylabel(key.split("/", 1)[1].replace("_", " "))
         ax.grid(alpha=0.3)
-    axes[-1, 0].set_xlabel("samples (environment steps, D6)")
+    axes[-1, 0].set_xlabel("samples (environment steps)")
     axes[0, 0].set_title("mean and 95% t-interval over seeds; dashed: some runs without a value")
     axes[0, 0].legend(fontsize="small")
     fig.tight_layout()
@@ -636,10 +633,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     ``--inventory``, only the list of the groups with their seeds and incomplete runs."""
     parser = argparse.ArgumentParser(description="Summarize training runs: final evaluation and learning curves.")
     parser.add_argument("paths", nargs="+", type=Path, help="run directories or directories containing runs")
-    parser.add_argument("--max-gap", type=float, default=0.05, help="largest accepted arrival gap (D20)")
+    parser.add_argument("--max-gap", type=float, default=0.05, help="largest accepted arrival gap")
     parser.add_argument("--plot", type=Path, default=None, help="image file for the learning curves")
     parser.add_argument(
-        "--action", choices=EVAL_ACTIONS, default="mean", help="the evaluation whose curves are plotted (D43)"
+        "--action", choices=EVAL_ACTIONS, default="mean", help="the evaluation whose curves are plotted"
     )
     parser.add_argument("--inventory", action="store_true", help="list the groups, their seeds and incomplete runs")
     args = parser.parse_args(argv)

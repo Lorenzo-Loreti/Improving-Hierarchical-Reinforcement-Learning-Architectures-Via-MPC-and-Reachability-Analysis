@@ -1,5 +1,4 @@
-"""Training of flat PPO on the navigation environment (architecture 1; decision log D5, D6, D13, D19, D20, D43,
-D50).
+"""Training of flat PPO on the navigation environment (architecture 1).
 
 Usage, from the repository root::
 
@@ -8,20 +7,19 @@ Usage, from the repository root::
 
 Each seed writes the run directory ``<runs-dir>/<layout>/ppo/seed<seed>-<UTC time>`` with:
 
-    config.yaml        resolved configuration: environment, agent, budget, seed, discount
-    meta.json          provenance and machine (hrlmpc.utils.runlog)
-    metrics.jsonl      one record per update and per evaluation point, keyed by the sample counter
-    evaluations.jsonl  per-start results of every evaluation, one line per action
-    final.pt           weights, optimizer state and target statistics after the last update
+    config.yaml resolved configuration: environment, agent, budget, seed, discount
+    meta.json provenance and machine (hrlmpc.utils.runlog)
+    metrics.jsonl one record per update and per evaluation point, keyed by the sample counter
+    evaluations.jsonl per-start results of every evaluation, one line per action
+    final.pt weights, optimizer state and target statistics after the last update
 
 The budget counts samples: calls of the physical step during training, summed
-over the parallel agents (D6). It must be a whole number of updates and of
+over the parallel agents. It must be a whole number of updates and of
 evaluation intervals, so the last evaluation scores the final policy. The
-discount is the agent configuration's ``update.discount`` (``gamma_RL``,
-D13, D22). Evaluations run in an environment of their own, draw no random
-number of the training and are not samples (D20). Every evaluation point
-evaluates the policy's mean and then its mode (D43), logged under ``eval/``
-and ``eval_mode/`` (D50). The compute is logged under ``time/``: per update the
+discount is the agent configuration's ``update.discount`` (``gamma_RL``). Evaluations run in an environment of their own, draw no random
+number of the training and are not samples. Every evaluation point
+evaluates the policy's mean and then its mode, logged under ``eval/``
+and ``eval_mode/``. The compute is logged under ``time/``: per update the
 rollout and the update apart, per evaluation its duration and the policy's time
 per agent and step (:meth:`hrlmpc.evaluation.Evaluation.timing`).
 """
@@ -67,7 +65,7 @@ def train(
     Args:
         env_config: Layout, physics, task and reward.
         ppo_config: Learner, rollout, evaluation and runtime.
-        budget: Samples (D6); a positive multiple of the samples per update
+        budget: Samples; a positive multiple of the samples per update
             and of the evaluation interval.
         seed: Seed of PyTorch, NumPy and the training environment.
         run_dir: Directory of the run; it must not exist.
@@ -75,7 +73,7 @@ def train(
         repo_dir: Directory inside the git checkout, for ``meta.json``; by
             default the package's own directory.
         echo: Receives one line per evaluation; ``None`` keeps quiet.
-        oracle_dir: Where to look for the oracle table of the layout (D44); by default the repository's
+        oracle_dir: Where to look for the oracle table of the layout; by default the repository's
             ``configs/oracle/``. Without a table the oracle gaps are NaN.
 
     Returns:
@@ -151,7 +149,7 @@ def _train(
 
         def evaluate_now() -> None:
             metrics: dict[str, float] = {}
-            for action in EVAL_ACTIONS:  # the mean, then the mode (D43)
+            for action in EVAL_ACTIONS:  # the mean, then the mode
                 name = evaluation_name(action)
                 policy = agent.deterministic_policy(action)
                 result = evaluate(policy, env_config, starts, seed=ppo_config.evaluation.seed, oracle=oracle)
@@ -189,7 +187,7 @@ def _train(
             update_s = time.perf_counter() - tick
             training_time += rollout_s + update_s
             metrics.update(episode_metrics(rollout.episodes))
-            metrics.update(env.curriculum_metrics())  # the stage of the spawn curriculum, if any (D62)
+            metrics.update(env.curriculum_metrics())  # the stage of the spawn curriculum, if any
             metrics.update(
                 {
                     "train/updates": k + 1,
@@ -233,7 +231,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--agent", type=Path, required=True, help="PPO configuration, e.g. configs/agent/ppo.yaml")
     parser.add_argument(
-        "--budget", type=int, required=True, help="samples per run: physical steps summed over the agents (D6)"
+        "--budget", type=int, required=True, help="samples per run: physical steps summed over the agents"
     )
     parser.add_argument("--seeds", type=int, nargs="+", required=True, help="training seeds, one run each")
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="root of the run directories")

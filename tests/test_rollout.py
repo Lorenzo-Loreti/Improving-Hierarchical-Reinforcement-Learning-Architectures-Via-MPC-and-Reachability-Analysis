@@ -1,4 +1,4 @@
-"""Tests of the rollout collection and of generalized advantage estimation (decision log D6, D13, D19)."""
+"""Tests of the rollout collection and of generalized advantage estimation."""
 
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ def test_gae_matches_its_definition(seed: int, lam: float) -> None:
 
 
 def test_gae_accepts_one_discount_per_transition() -> None:
-    """A Manager's transition spans several steps and is discounted by gamma to their number (step 8)."""
+    """A Manager's transition spans several steps and is discounted by gamma to their number."""
     r = _random_rollout(7)
     discount = 0.99 ** np.random.default_rng(8).integers(1, 11, r["rewards"].shape)
     advantages, returns = compute_gae(**r, discount=discount, gae_lambda=0.95)
@@ -101,7 +101,7 @@ def test_with_lambda_one_the_returns_are_the_bootstrapped_discounted_returns() -
 
 
 def test_truncated_transitions_bootstrap_and_terminated_ones_do_not() -> None:
-    """Partial-episode bootstrapping: a time limit is not a terminal state (D13 has no time in the observation)."""
+    """Partial-episode bootstrapping: a time limit is not a terminal state (the observation carries no time)."""
     rewards, values, next_values = np.ones((1, 2)), np.zeros((1, 2)), np.full((1, 2), 10.0)
     terminated = np.array([[True, False]])
     done = np.array([[True, True]])  # agent 0 terminated, agent 1 truncated
@@ -185,7 +185,7 @@ def test_the_rollout_records_what_the_agents_saw_and_did() -> None:
     np.testing.assert_array_equal(rollout.log_probs, rollout.obs[..., 0])
     np.testing.assert_array_equal(rollout.values, _value(rollout.obs))
     assert rollout.num_samples == 18
-    assert env.counter.env_steps == 18  # D6: every step of every agent
+    assert env.counter.env_steps == 18  # Every step of every agent
     twin, twin_obs = _mixed_env()
     np.testing.assert_array_equal(twin_obs, obs)
     for t in range(6):

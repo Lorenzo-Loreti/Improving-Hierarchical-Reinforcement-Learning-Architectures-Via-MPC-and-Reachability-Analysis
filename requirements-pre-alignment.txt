@@ -1,6 +1,6 @@
 # Package versions of the global Python 3.12 environment on the author's
 # laptop that produced the results at tag pre-alignment (pip freeze of
-# 2026-10-06; decision log D5). A record, not an installation file: install
+# 2026-10-06). A record, not an installation file: install
 # the reference stack from requirements.txt.
 absl-py==2.2.2
 annotated-types==0.8.0

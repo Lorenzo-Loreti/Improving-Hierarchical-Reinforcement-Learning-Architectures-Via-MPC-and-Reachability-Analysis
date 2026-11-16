@@ -1,4 +1,4 @@
-"""Tests of the reverse spawn curriculum (decision log D62): the bands, the sampling in the free space, the
+"""Tests of the reverse spawn curriculum: the bands, the sampling in the free space, the
 advancement rule, the metrics, and its place in the environment."""
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ def _curriculum(name: str = "slalom_sparse", **changes: float) -> SpawnCurriculu
 
 
 def test_the_bands_slide_from_the_goal_to_the_spawn_box() -> None:
-    """D62: x_start 8, step 1 m and the spawn box [0, 2] x [-1, 1] give nine bands, the last the spawn box."""
+    """x_start 8, step 1 m and the spawn box [0, 2] x [-1, 1] give nine bands, the last the spawn box."""
     cur = _curriculum()
     assert cur.stages == 9 and cur.stage == 0 and not cur.final
     assert cur.band == Box(x=(8.0, 10.0), y=(-1.0, 1.0))
@@ -131,7 +131,7 @@ def _in_cavity(points: np.ndarray) -> np.ndarray:
 
 
 def test_excluded_regions_are_never_sampled_and_lower_the_free_fraction() -> None:
-    """D69: `exclude` lists boxes no training start is drawn from (here the cavity of the trap's U, applied to
+    """`exclude` lists boxes no training start is drawn from (here the cavity of the trap's U, applied to
     the trap's file); the free fraction of a band counts them as blocked, and the last band is still the spawn
     box."""
     config = _config("trap_sparse")
@@ -156,7 +156,7 @@ def test_excluded_regions_are_never_sampled_and_lower_the_free_fraction() -> Non
 
 
 def test_the_traps_cavity_carries_training_starts_from_the_third_stage_on() -> None:
-    """D69 (second amendment, 2026-10-16): the shipped trap file excludes nothing, so the cavity enters the bands
+    """The shipped trap file excludes nothing, so the cavity enters the bands
     gradually — a sliver at stage 3 ([5, 7]: x in [5, 5.25]), about a third of the starts at stages 4 and 5 — and
     is learned before the starts in front of the mouth, which lead into it: every stage extends the one before."""
     config = _config("trap_sparse")
@@ -174,7 +174,7 @@ def test_the_traps_cavity_carries_training_starts_from_the_third_stage_on() -> N
 
 
 def test_the_bands_may_span_another_y_range_than_the_spawn_box() -> None:
-    """D69 (amended after the smoke runs): on the trap the bands span the arena's height, so that the corridors
+    """On the trap the bands span the arena's height, so that the corridors
     around the U carry training starts and every stage extends the one before; the last band is the spawn box
     exactly; the slalom keeps the spawn box's height (the default)."""
     trap = _config("trap_sparse")
@@ -355,7 +355,7 @@ def test_explicit_starts_bypass_the_curriculum() -> None:
 
 def test_the_evaluation_ignores_the_curriculum() -> None:
     """``evaluate`` resets with explicit starts and automatic resets: its environment has no curriculum, so the
-    agents that finish early restart in the spawn box, as before D62, and nothing is recorded."""
+    agents that finish early restart in the spawn box, as without a curriculum, and nothing is recorded."""
     from hrlmpc.evaluation import evaluate
 
     config = _config("tunnel_sparse")

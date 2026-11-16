@@ -1,19 +1,19 @@
-"""Polygonal geometry of the navigation environment (decision log D11, D16).
+"""Polygonal geometry of the navigation environment.
 
 The arena ``P`` and the obstacles ``O_i`` are convex polygons, stored both by
 their vertices and in H-representation. The same layout serves the
-environment, the MPC Worker, the oracle and the reachability analysis (D11).
+environment, the MPC Worker, the oracle and the reachability analysis.
 A non-convex obstacle is a union of overlapping convex ones.
 
-Free space (D16). The free positions form the closure of the interior of the
+Free space. The free positions form the closure of the interior of the
 free region,
 
     P_free = cl( int P minus (O_1 u ... u O_m) ),
 
 so the free space has no part of zero width. The set ``P minus U_i int O_i``
-of the project instructions differs from it only where an obstacle touches a
+differs from it only where an obstacle touches a
 wall or another obstacle without overlapping it: there it contains a segment
-of zero width that a sliding agent could follow. To realize D16, every
+of zero width that a sliding agent could follow. To exclude such segments, every
 obstacle that touches the arena boundary with a face is extended beyond that
 wall (inside the arena nothing changes, see :attr:`Layout.blocked`), and
 every other degenerate contact is rejected: two obstacles that touch without
@@ -47,7 +47,7 @@ MIN_GAP = 1e-6
 """Smallest gap between two walls, and smallest obstacle width, that a layout may have [m]."""
 
 EXTENSION = 1.0
-"""Distance [m] by which an obstacle touching a wall is pushed beyond it (D16), unless its shape allows less."""
+"""Distance [m] by which an obstacle touching a wall is pushed beyond it, unless its shape allows less."""
 
 RAY_TOL = 1e-9
 """Cosine below which a ray counts as parallel to a face (:func:`ray_distances`)."""
@@ -274,7 +274,7 @@ class Faces:
 
 @dataclass(frozen=True, eq=False)
 class Layout:
-    """Arena, obstacles and goal region of one map (D11), with the free space of D16.
+    """Arena, obstacles and goal region of one map, with the free space.
 
     Build it with :meth:`build` or :meth:`from_config`.
 
@@ -282,11 +282,11 @@ class Layout:
         arena: The arena ``P``; every face is a wall.
         obstacles: The obstacles ``O_i`` as given, inside the arena.
         blocked: The obstacles as the physics sees them: an obstacle touching
-            the arena boundary with a face is extended beyond that wall (D16),
+            the arena boundary with a face is extended beyond that wall,
             by :data:`EXTENSION` or, if its neighbouring faces converge
             outside the arena, by half the room they leave. Inside the arena
             ``blocked[i]`` and ``obstacles[i]`` coincide.
-        goal_x: The goal region is ``{p in P_free : p_x >= goal_x}``.
+        goal_x: The goal region is ``{p in P_free: p_x >= goal_x}``.
         faces: All wall faces, oriented toward the free space.
     """
 
@@ -306,7 +306,7 @@ class Layout:
                 :data:`MIN_GAP`, lies closer than :data:`MIN_GAP` to a wall
                 it does not touch, or touches a wall with a vertex only; or
                 two obstacles touch, or are closer than :data:`MIN_GAP`,
-                without overlapping (D16).
+                without overlapping.
         """
         x_lo, x_hi = float(arena.vertices[:, 0].min()), float(arena.vertices[:, 0].max())
         if not x_lo < goal_x < x_hi:
@@ -315,13 +315,13 @@ class Layout:
         for (i, a), (j, b) in combinations(enumerate(obstacles), 2):
             if -TOL <= _separation(a, b) < MIN_GAP:
                 raise ValueError(
-                    f"obstacles {i} and {j} touch or are closer than MIN_GAP; separate them or let them overlap (D16)"
+                    f"obstacles {i} and {j} touch or are closer than MIN_GAP; separate them or let them overlap"
                 )
         return cls(arena, tuple(obstacles), tuple(blocked), float(goal_x), Faces.of(arena, blocked))
 
     @staticmethod
     def _extended(arena: ConvexPolygon, obstacle: ConvexPolygon, index: int) -> ConvexPolygon:
-        """``obstacle`` with every face that lies on a wall pushed beyond it (D16)."""
+        """``obstacle`` with every face that lies on a wall pushed beyond it."""
         if obstacle.width() < MIN_GAP:
             raise ValueError(f"obstacle {index} is thinner than MIN_GAP")
         clearance = arena.offsets[:, None] - dot(obstacle.vertices, arena.normals).T  # (walls, vertices), >= 0 inside
@@ -339,13 +339,13 @@ class Layout:
             )
             if on_wall.size == 0:
                 raise ValueError(
-                    f"obstacle {index} touches the arena boundary with a vertex only; move it off the wall (D16)"
+                    f"obstacle {index} touches the arena boundary with a vertex only; move it off the wall"
                 )
             for face in on_wall:
                 shifts[face] = min(EXTENSION, 0.5 * obstacle.room(int(face)))
                 if shifts[face] < MIN_GAP:
                     raise ValueError(
-                        f"obstacle {index} meets the arena boundary at too shallow an angle to be extended (D16)"
+                        f"obstacle {index} meets the arena boundary at too shallow an angle to be extended"
                     )
         return obstacle.pushed_out(shifts) if shifts.any() else obstacle
 
@@ -359,7 +359,7 @@ class Layout:
         )
 
     def in_free_space(self, points: ArrayLike, tol: float = TOL) -> BoolArray:
-        """Whether each point lies in ``P_free`` (D16), up to ``tol``."""
+        """Whether each point lies in ``P_free``, up to ``tol``."""
         pts = _points(points)
         free = self.arena.contains(pts, tol)
         for polygon in self.blocked:
@@ -381,7 +381,7 @@ def ray_distances(layout: Layout, points: ArrayLike, directions: ArrayLike, max_
     interior (the slab test of its half-planes). A ray that starts on a face
     and points into the wall has distance 0; one that runs along the face is
     free beyond it, so a sliding agent sees the way along the wall open. The
-    local map features of the learned Worker (decision log D75) scale these
+    local map features of the learned Worker scale these
     distances by the range.
 
     Args:

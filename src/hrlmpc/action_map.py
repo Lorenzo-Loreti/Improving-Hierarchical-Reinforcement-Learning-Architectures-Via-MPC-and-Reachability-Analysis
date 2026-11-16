@@ -1,11 +1,11 @@
-"""Map from the policy's action to the input set ``U`` (decision log D15, row AM1), and the Beta's mode (D43).
+"""Map from the policy's action to the input set ``U``, and the Beta's mode.
 
 The policy of flat PPO and of the hPPO Worker samples ``x`` in the square
 ``[-1, 1]^2``, one Beta distribution per axis. The bijection
 
-    u = a_max (||x||_inf / ||x||_2) x        (u = 0 for x = 0)
+    u = a_max (||x||_inf / ||x||_2) x (u = 0 for x = 0)
 
-maps the square onto the disk ``U = {u : ||u||_2 <= a_max}``. It keeps the
+maps the square onto the disk ``U = {u: ||u||_2 <= a_max}``. It keeps the
 direction of ``x`` and sends the square of "radius" ``||x||_inf = r`` onto the
 circle of radius ``a_max r``, so no two actions give the same input and the
 physical corrections of the commanded action come only from the speed limiter
@@ -15,9 +15,9 @@ Distortion. Away from the diagonals the map is smooth, with Jacobian
 determinant ``a_max^2 cos^2(theta)``, where ``theta`` is the angle of ``x``
 from the nearest axis (``|theta| <= 45`` degrees). Areas, and densities,
 therefore change by a factor between ``a_max^2 / 2`` and ``a_max^2``. The
-log-probability of an action is taken on ``x`` (D15).
+log-probability of an action is taken on ``x``.
 
-Deterministic actions (D20, D43). An evaluation runs the policy without
+Deterministic actions. An evaluation runs the policy without
 sampling, once with the mean of each Beta and once with its mode,
 ``(alpha - 1) / (alpha + beta - 2)`` for concentrations of at least 1
 (:func:`beta_mode`). The mode lies beyond the mean, on the same side of 1/2,
@@ -33,7 +33,7 @@ from numpy.typing import ArrayLike, NDArray
 FloatArray = NDArray[np.float64]
 
 EVAL_ACTIONS: tuple[str, ...] = ("mean", "mode")
-"""The deterministic actions of an evaluation, in the order they run (D43): the mean of each Beta, then its mode."""
+"""The deterministic actions of an evaluation, in the order they run: the mean of each Beta, then its mode."""
 
 
 def square_to_disk(x: ArrayLike, a_max: float) -> FloatArray:
@@ -57,7 +57,7 @@ def disk_to_square(u: ArrayLike, a_max: float) -> FloatArray:
 
 
 def beta_mode(alpha: ArrayLike, beta: ArrayLike) -> FloatArray:
-    """The mode of Beta distributions on ``[0, 1]`` with concentrations of at least 1, elementwise (D43).
+    """The mode of Beta distributions on ``[0, 1]`` with concentrations of at least 1, elementwise.
 
     ``(alpha - 1) / (alpha + beta - 2)``, the point of largest density: 0 for
     ``alpha = 1 < beta``, 1 for ``beta = 1 < alpha``. With both equal to 1 the

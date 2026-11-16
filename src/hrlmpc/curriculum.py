@@ -1,8 +1,8 @@
-"""The reverse spawn curriculum of the training episodes (decision log D62).
+"""The reverse spawn curriculum of the training episodes.
 
-With the sparse reward of D51 no architecture finds the goal of the slalom by
-chance (the smoke runs of 2026-10-13: no success in 1024 episodes per seed
-for PPO and hPPO, whose policies converge to standing still), so the training
+With the sparse reward no architecture finds the goal of the slalom by
+chance (in trial runs PPO and hPPO had no success in 1024 episodes per seed, and their
+policies converged to standing still), so the training
 starts are drawn from a band of the spawn box's shape that begins near the
 goal and slides back towards the spawn box as the policy succeeds:
 
@@ -10,8 +10,8 @@ goal and slides back towards the spawn box as the policy succeeds:
   ``[x_start - s step, x_start - s step + width] x [y_lo, y_hi]``, with the
   width of the spawn box and its ``y``-range or the one the configuration
   gives (the arena's height on the trap, so that the corridors around its U
-  carry starts, D69), the left end clamped to the spawn box's, outside the
-  excluded boxes of the configuration (the dead ends of a layout, D69); the
+  carry starts), the left end clamped to the spawn box's, outside the
+  excluded boxes of the configuration (the dead ends of a layout); the
   last stage is the spawn box itself;
 - the finished episodes started in a stage are counted in blocks of
   ``window``: when a block is complete and its success rate reaches
@@ -19,9 +19,8 @@ goal and slides back towards the spawn box as the policy succeeds:
   stage never goes back. In the last stage nothing advances, and the success
   rate of the last ``window`` episodes is kept as a metric (the training
   success rate from the spawn box);
-- the evaluation keeps the starts of D20 (its environment has no curriculum),
-  so the arrival times and the time to solve are measured from the spawn box
-  as before.
+- the evaluation keeps its fixed grid of starts on the spawn box (its environment has no curriculum),
+  so the arrival times and the time to solve are measured from the spawn box.
 
 The rule is the same for every architecture and lives in the environment, so
 the training loops do not change; the stage is logged with the rollout
@@ -60,7 +59,7 @@ CHECK_POINTS = 4_000
 
 
 class SpawnCurriculum:
-    """The bands, the sampler and the advancement rule of D62.
+    """The bands, the sampler and the advancement rule.
 
     Args:
         settings: ``x_start``, ``step``, ``window`` and ``threshold``.
@@ -100,7 +99,7 @@ class SpawnCurriculum:
         return Box(x=(x_min, x_min + self.width), y=y)
 
     def _free(self, points: FloatArray) -> NDArray[np.bool_]:
-        """Free, short of the goal line and outside the excluded boxes (D69)."""
+        """Free, short of the goal line and outside the excluded boxes."""
         result: NDArray[np.bool_] = self.layout.in_free_space(points) & ~self.layout.in_goal(points)
         for box in self.settings.exclude:
             inside = (

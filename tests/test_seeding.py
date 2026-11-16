@@ -1,4 +1,4 @@
-"""Tests of the seeding utility (code rule C3)."""
+"""Tests of the seeding utility."""
 
 from __future__ import annotations
 

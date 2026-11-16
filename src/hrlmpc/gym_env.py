@@ -1,8 +1,8 @@
 """Gymnasium adapter of :class:`hrlmpc.env.NavigationEnv` for a single agent.
 
 The training loops use :class:`~hrlmpc.env.NavigationEnv` directly, which steps
-many agents at once. This adapter exposes one agent through the Gymnasium API
-(D5), for Gymnasium's checks and tools; importing it requires Gymnasium.
+many agents at once. This adapter exposes one agent through the Gymnasium API,
+for Gymnasium's checks and tools; importing it requires Gymnasium.
 """
 
 from __future__ import annotations
@@ -24,8 +24,8 @@ FloatArray = NDArray[np.float64]
 class NavigationGymEnv(gym.Env[FloatArray, FloatArray]):
     """One agent of the navigation MDP behind the Gymnasium API.
 
-    The action is ``x`` in ``[-1, 1]^2`` (D15), the observation ``(p, v)``
-    mapped to ``[-1, 1]`` (D13). A reset with a seed restarts the random
+    The action is ``x`` in ``[-1, 1]^2``, the observation ``(p, v)``
+    mapped to ``[-1, 1]``. A reset with a seed restarts the random
     streams; ``options`` may set the initial ``"position"`` and ``"velocity"``.
     The ``info`` of a step holds the quantities of
     :class:`~hrlmpc.env.StepInfo` and, when the episode ends, its
@@ -33,7 +33,7 @@ class NavigationGymEnv(gym.Env[FloatArray, FloatArray]):
     ``"episode"`` belongs to Gymnasium's ``RecordEpisodeStatistics``). After
     the end of an episode, :meth:`reset` must be called before the next step.
     A reset without a ``"position"`` draws the start as the training does:
-    uniformly in the spawn box or, with a curriculum (D62), in its current
+    uniformly in the spawn box or, with a curriculum, in its current
     band, which the episode's outcome then feeds; a reset with a seed rebuilds
     the environment and so restarts the curriculum.
 

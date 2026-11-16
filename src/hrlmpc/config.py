@@ -1,8 +1,8 @@
-"""Typed configuration of the environment, loaded from YAML (code rule C2).
+"""Typed configuration of the environment, loaded from YAML.
 
-A file under ``configs/env/`` describes one layout: the physical parameters
-(decision log D9), the geometry (D11), the task (D13; with the optional
-reverse spawn curriculum of D62) and the reward coefficients (D13, D14).
+A file under ``configs/env/`` describes one layout: the physical parameters,
+the geometry, the task (with the optional
+reverse spawn curriculum) and the reward coefficients.
 Loading validates every value. Unknown or missing keys are errors, so a typo
 cannot silently fall back to a default.
 """
@@ -54,13 +54,13 @@ class Box:
 
 @dataclass(frozen=True)
 class GeometryConfig:
-    """Arena, obstacles and goal region (decision log D11).
+    """Arena, obstacles and goal region.
 
     Attributes:
         arena: The arena ``P``. Every face of ``P`` is a wall.
         obstacles: The obstacles ``O_i``, each inside the arena. Every face is
             a wall.
-        goal_x: The goal region is ``{p in P_free : p_x >= goal_x}``.
+        goal_x: The goal region is ``{p in P_free: p_x >= goal_x}``.
 
     Raises:
         ValueError: If an obstacle leaves the arena or the goal line is not
@@ -81,7 +81,7 @@ class GeometryConfig:
 
 @dataclass(frozen=True)
 class CurriculumConfig:
-    """The reverse spawn curriculum of the training episodes (decision log D62).
+    """The reverse spawn curriculum of the training episodes.
 
     Training starts are drawn from a band of the spawn box's shape that begins
     at ``x_start`` and slides back by ``step`` whenever a block of ``window``
@@ -94,14 +94,14 @@ class CurriculumConfig:
         step: By how much [m] the band slides back per stage; at most the spawn box's width.
         window: Episodes of a block, over which the success rate is measured.
         threshold: Success rate of a block that advances the stage, in ``(0, 1]``.
-        exclude: Boxes no training start is drawn from (D69): the dead ends of
+        exclude: Boxes no training start is drawn from: the dead ends of
             a layout, such as the cavity of the trap's U, which the policies
             meet on their way instead of starting in. Inside the arena and
             apart from the spawn box; empty by default.
         y: The ``y``-range of the bands before the last, the spawn box's by
             default (``None``); the trap's bands span the arena's height, so
             that the corridors around its U carry training starts and every
-            stage extends the one before (D69). It contains the spawn box's
+            stage extends the one before. It contains the spawn box's
             ``y``-range and lies inside the arena; the last band is the spawn
             box whatever it is.
 
@@ -130,7 +130,7 @@ class CurriculumConfig:
 
 @dataclass(frozen=True)
 class TaskConfig:
-    """Initial-state distribution and horizon (decision log D13), and the curriculum of the training starts (D62).
+    """Initial-state distribution and horizon, and the curriculum of the training starts.
 
     Attributes:
         spawn: Initial positions are uniform on this box, with zero velocity;
@@ -153,7 +153,7 @@ class TaskConfig:
 
 @dataclass(frozen=True)
 class RewardConfig:
-    """Reward coefficients (decision log D13, D14).
+    """Reward coefficients.
 
     The reward of step ``k`` is
 
@@ -169,8 +169,8 @@ class RewardConfig:
     With ``shaping_discount`` equal to the learners' discount the progress
     term is exact potential-based shaping (Ng, Harada and Russell, ICML
     1999), which leaves the optimal policy unchanged but gives partial
-    progress no lasting value. The configurations use 1 (D22): the
-    undiscounted progress reward of the pre-alignment code, which keeps
+    progress no lasting value. The configurations use 1: the
+    undiscounted progress reward, which keeps
     rewarding the agent for being closer to the goal.
 
     Raises:
