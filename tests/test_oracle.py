@@ -375,7 +375,7 @@ def test_the_problem_uses_the_model_of_the_specification() -> None:
     np.testing.assert_allclose(problem.position_high, [11.0 - 1e-3, 2.0 - 1e-3])
 
 
-# --------------------------------------------------- with the solvers (author's machine)
+# --------------------------------------------- with the solvers (a Gurobi licence for the models)
 
 
 @contextlib.contextmanager

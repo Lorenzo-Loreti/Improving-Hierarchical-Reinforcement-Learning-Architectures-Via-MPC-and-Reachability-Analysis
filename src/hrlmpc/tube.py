@@ -10,7 +10,8 @@ with ``A`` and ``B`` the matrices of :func:`hrlmpc.model.system_matrices`. A
 set ``Z`` is robustly positively invariant (RPI) if ``A_K Z (+) BD`` lies in
 ``Z``: an error that starts in ``Z`` stays there for every disturbance.
 
-``W = BD`` is a disk in a plane of R^4, so the algorithm of Rakovic et al. (2005), which needs ``0`` in the interior of ``W``, does not apply.
+``W = BD`` is a disk in a plane of R^4, so the algorithm of Rakovic et al. (2005),
+which needs ``0`` in the interior of ``W``, does not apply.
 The tube is instead
 
     Z = (+)_{l < s} A_K^l B D (+) eps E, E = {e: e' P_E e <= 1},
@@ -61,7 +62,7 @@ _ROTATION_ANGLES = (0.3, 1.1, 2.5)
 class Weights:
     """Weights of the LQR that gives the ancillary gain ``K``.
 
-    ``Q = diag(q_pos, q_pos, q_vel, q_vel)`` and ``R = r I2``. 
+    ``Q = diag(q_pos, q_pos, q_vel, q_vel)`` and ``R = r I2``.
 
     Raises:
         ValueError: If a weight is not positive and finite.

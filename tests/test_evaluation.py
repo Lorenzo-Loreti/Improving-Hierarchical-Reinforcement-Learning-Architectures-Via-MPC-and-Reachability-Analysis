@@ -396,7 +396,7 @@ def test_an_evaluation_built_without_its_times_has_none() -> None:
 
 
 def test_the_evaluations_are_named_by_their_action() -> None:
-    """The evaluation with the mean keeps the names of steps 7-10; the one with the mode adds ``_mode``."""
+    """The evaluation with the mean logs under the plain names; the one with the mode adds ``_mode``."""
     assert EVAL_ACTIONS == ("mean", "mode")
     assert [evaluation_name(action) for action in EVAL_ACTIONS] == ["eval", "eval_mode"]
     assert [evaluation_name(action, "mpc") for action in EVAL_ACTIONS] == ["eval_mpc", "eval_mode_mpc"]
@@ -431,4 +431,3 @@ def test_the_console_line_shows_both_actions() -> None:
     assert console_line(metrics) == (
         "mean/mode: success 1.00/0.75 | unshaped return 950.3/-12.0 | gap 0.050/  -   | contact 0.00/0.25"
     )
-

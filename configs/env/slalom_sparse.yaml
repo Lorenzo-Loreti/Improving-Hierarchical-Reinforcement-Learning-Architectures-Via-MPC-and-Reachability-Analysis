@@ -1,6 +1,6 @@
-# Slalom with the sparse reward, the main reward of the comparison:
-# configs/env/slalom.yaml with only the progress term removed (progress_coef 0), so
-# the reward is the time penalty, the success bonus, the contact penalty and the effort.
+# Slalom, curriculum setting of the thesis ("main" in the code): configs/env/slalom.yaml with the
+# progress term removed (progress_coef 0), so that the reward is the time penalty, the success bonus,
+# the contact penalty and the effort, and with the reverse curriculum on the training starts (a test).
 
 physics:
   dt: 0.1          # sampling time T_s [s]

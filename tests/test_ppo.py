@@ -1,7 +1,7 @@
 """Tests of the in-house PPO; they need PyTorch.
 
 The strongest check is the comparison with an earlier stand-alone implementation of flat PPO,
-of which ``tests/reference/pre_alignment_ppo.py`` keeps a frozen copy: given the same weights, batch and
+of which ``tests/reference/reference_ppo.py`` keeps a frozen copy: given the same weights, batch and
 seed, the update must end on bit-identical weights.
 """
 
@@ -30,7 +30,7 @@ from hrlmpc.ppo_config import NetworkConfig, UpdateConfig  # noqa: E402
 from hrlmpc.rollout import collect_rollout, compute_gae  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
-REFERENCE = Path(__file__).resolve().parent / "reference" / "pre_alignment_ppo.py"
+REFERENCE = Path(__file__).resolve().parent / "reference" / "reference_ppo.py"
 NETWORK = NetworkConfig(hidden_sizes=(64, 64))
 _UPDATE = UpdateConfig(
     discount=0.99,
@@ -61,9 +61,9 @@ def _obs(n: int, seed: int = 0) -> np.ndarray:
     return np.random.default_rng(seed).uniform(-1.0, 1.0, (n, 4))
 
 
-def _legacy() -> ModuleType:
+def _reference() -> ModuleType:
     """The frozen copy of the earlier implementation of flat PPO."""
-    spec = importlib.util.spec_from_file_location("pre_alignment_ppo", REFERENCE)
+    spec = importlib.util.spec_from_file_location("reference_ppo", REFERENCE)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -210,9 +210,9 @@ def test_values_undo_the_normalisation_of_the_targets() -> None:
     np.testing.assert_allclose(agent.value(obs), raw * (170.0 + 1e-8) + 700.0, rtol=1e-6)
 
 
-def test_the_running_statistics_match_the_pre_alignment_ones() -> None:
-    legacy = _legacy()
-    old, new = legacy.RunningMeanStd(), RunningMeanStd(horizon=10)
+def test_the_running_statistics_match_the_reference_ones() -> None:
+    reference = _reference()
+    old, new = reference.RunningMeanStd(), RunningMeanStd(horizon=10)
     gen = torch.Generator().manual_seed(0)
     for i in range(30):
         x = torch.randn(1024, generator=gen) * (i + 1) + 10.0 * i
@@ -227,16 +227,16 @@ def test_the_running_statistics_match_the_pre_alignment_ones() -> None:
 
 
 @pytest.mark.parametrize(("steps", "envs", "max_grad_norm"), [(16, 4, 0.5), (14, 5, 0.05)])
-def test_the_update_reproduces_the_pre_alignment_update_exactly(steps: int, envs: int, max_grad_norm: float) -> None:
+def test_the_update_reproduces_the_reference_update_exactly(steps: int, envs: int, max_grad_norm: float) -> None:
     """Same weights, batches and seed: bit-identical weights, statistics and metrics.
 
     The second case splits 70 samples unevenly and clips the gradients of both
     networks; two consecutive updates carry Adam's moments and the target
     statistics over.
     """
-    legacy = _legacy()
+    reference = _reference()
     torch.manual_seed(0)
-    old = legacy.PPOAgent(
+    old = reference.PPOAgent(
         4, 2, act_limit_low=-1.0, act_limit_high=1.0, lr=3e-4, gamma=0.99, gae_lambda=0.95, clip_coef=0.2,
         ent_coef=0.01, max_grad_norm=max_grad_norm, critic_lr_mult=3.0, device="cpu",
     )
@@ -253,7 +253,7 @@ def test_the_update_reproduces_the_pre_alignment_update_exactly(steps: int, envs
         values = torch.randn(n, generator=gen) * 100
         returns = values + torch.randn(n, generator=gen) * 30
         advantages = returns - values + torch.randn(n, generator=gen)
-        buffer = legacy.RolloutBuffer(steps, envs, 4, 2, "cpu")
+        buffer = reference.RolloutBuffer(steps, envs, 4, 2, "cpu")
         buffer.states = obs.clone()
         buffer.actions = actions.reshape(steps, envs, 2).clone()
         buffer.logprobs = log_probs.reshape(steps, envs).clone()
@@ -280,19 +280,19 @@ def test_the_update_reproduces_the_pre_alignment_update_exactly(steps: int, envs
     assert any(changed)  # the updates did something
 
 
-def test_the_networks_start_like_the_pre_alignment_ones() -> None:
-    legacy = _legacy()
+def test_the_networks_start_like_the_reference_ones() -> None:
+    reference = _reference()
     torch.manual_seed(3)
-    old_actor, old_critic = legacy.ActorNetwork(4, 2), legacy.CriticNetwork(4)
+    old_actor, old_critic = reference.ActorNetwork(4, 2), reference.CriticNetwork(4)
     new = _agent(3)
     for old, mine in ((old_actor, new.actor), (old_critic, new.critic)):
         for (name, a), (name_new, b) in zip(old.state_dict().items(), mine.state_dict().items(), strict=True):
             assert name == name_new and torch.equal(a, b), name
 
 
-def test_gae_agrees_with_the_pre_alignment_gae() -> None:
-    """Explicit bootstrap values and the old convention (truncations bootstrapped through the reward) agree."""
-    legacy = _legacy()
+def test_gae_agrees_with_the_reference_gae() -> None:
+    """Explicit bootstrap values and the reference's convention (truncations bootstrapped through the reward) agree."""
+    reference = _reference()
     steps, envs, gamma = 12, 3, 0.99
     rng = np.random.default_rng(0)
     rewards = rng.normal(0.0, 10.0, (steps, envs))
@@ -305,7 +305,7 @@ def test_gae_agrees_with_the_pre_alignment_gae() -> None:
     following = np.vstack([values[1:], last[None]])
     next_values = np.where(done, np.where(truncated, reached, 0.0), following)
     advantages, returns = compute_gae(rewards, values, next_values, terminated, done, discount=gamma, gae_lambda=0.95)
-    buffer = legacy.RolloutBuffer(steps, envs, 4, 2, "cpu")
+    buffer = reference.RolloutBuffer(steps, envs, 4, 2, "cpu")
     buffer.rewards = torch.tensor(rewards + np.where(truncated, gamma * reached, 0.0), dtype=torch.float64)
     buffer.values = torch.tensor(values, dtype=torch.float64)
     buffer.dones = torch.tensor(done, dtype=torch.float64)

@@ -11,7 +11,8 @@ disturbance comes with the environment's file, one per level, e.g.
 file sets one, its horizon follow it.
 
 A PPO Manager sets a target every ``H`` steps on the common loop of
-:mod:`hrlmpc.hierarchy`, exactly as in hPPO; the Worker is the tube MPC (:mod:`hrlmpc.mpc_worker`), which knows the model, the constraints and
+:mod:`hrlmpc.hierarchy`, exactly as in hPPO; the Worker is the tube MPC (:mod:`hrlmpc.mpc_worker`),
+which knows the model, the constraints and
 the obstacles, plans contact-free and does not learn. It plans to pass the
 target when the segment ends, or to end the segment at the reachable point
 nearest to it. After each rollout the Manager is updated on the segments
@@ -136,7 +137,7 @@ def solver_targets(problem: MPCProblem, config: PPOMPCConfig) -> ReachableTarget
 
 def hierarchy_of(env_config: EnvConfig, config: PPOMPCConfig) -> Hierarchy:
     """Targets and segments, as hPPO's, with the Manager's discount and the Worker's price (a
-    diagnostic here); architecture 4 replaces the targets by those (:func:`solver_targets`)."""
+    diagnostic here); architecture 4 replaces the targets by the reachable ones (:func:`solver_targets`)."""
     return disk_hierarchy(
         env_config,
         segment_steps=config.hierarchy.segment_steps,
@@ -391,7 +392,8 @@ def load_manager(
     The Worker itself is built from the problem by the caller (it needs the solvers). For architecture 4 the
     hierarchy's targets are built by ``targets_factory`` (:func:`solver_targets` by default, which needs the
     solvers); the caller closes them. An older run has no ``mpc.start_weight`` in
-    its ``config.yaml``; its Worker had no regularizer, so it is rebuilt with ``start_weight = 0``. An older run has no ``hierarchy.worker_progress_coef``; it is reloaded at the shaped price
+    its ``config.yaml``; its Worker had no regularizer, so it is rebuilt with ``start_weight = 0``.
+    An older run has no ``hierarchy.worker_progress_coef``; it is reloaded at the shaped price
     (:func:`~hrlmpc.hppo_config.with_worker_price`), a diagnostic for this Worker.
     """
     path = Path(run_dir)
@@ -399,7 +401,7 @@ def load_manager(
     env_config = env_config_from_dict(raw["env"])
     agent = with_worker_price(raw["agent"])
     mpc = agent.get("mpc") if isinstance(agent, dict) else None
-    if isinstance(mpc, dict) and "start_weight" not in mpc:  # a run of steps 9 and 10
+    if isinstance(mpc, dict) and "start_weight" not in mpc:  # a run written before the regularizer
         agent = {**agent, "mpc": {**mpc, "start_weight": 0.0}}
     config = ppo_mpc_config_from_dict(agent)
     m_cfg = config.manager

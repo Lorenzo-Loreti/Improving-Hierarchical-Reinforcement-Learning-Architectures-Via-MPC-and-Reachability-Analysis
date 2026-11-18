@@ -19,7 +19,8 @@ AGENTS = Path(__file__).resolve().parents[1] / "configs" / "agent"
 LEARNING_RATES = (3.0e-4, 1.0e-3)
 ENTROPIES = (0.01, 0.03)
 SELECTED = {"ppo": 5, "hppo": 3, "ppo_mpc": 7, "ppo_mpc_reachability": 7}
-"""The configuration each shipped file equals: the selections of the tuning (PPO c5, hPPO c3, both MPC architectures c7: the Manager's learning
+"""The configuration each shipped file equals: the selections of the tuning (PPO c5, hPPO c3,
+both MPC architectures c7: the Manager's learning
 rate 1e-3 and entropy 0.03, the Worker's effort weight 0.1)."""
 
 

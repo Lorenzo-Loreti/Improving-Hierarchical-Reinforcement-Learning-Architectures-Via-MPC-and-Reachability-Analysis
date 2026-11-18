@@ -223,7 +223,7 @@ def test_curves_need_the_same_evaluation_points(tmp_path: Path) -> None:
         mean_curve([a, b], "eval/success_rate")
 
 
-def test_the_acceptance_criterion_of_step_7() -> None:
+def test_the_acceptance_criterion() -> None:
     """Success from every start, arrival within 5% of the bound, no contact."""
     assert accepted(_eval(1.0, 0.05, 0.0, 0.0), max_gap=0.05)
     assert not accepted(_eval(1.0, 0.051, 0.0, 0.0), max_gap=0.05)
@@ -271,8 +271,8 @@ def test_acceptance_does_not_apply_with_obstacles_and_no_oracle(tmp_path: Path) 
 
 
 def test_the_acceptance_uses_the_oracle_gap_where_it_is_logged(tmp_path: Path) -> None:
-    """With an oracle table the criterion applies to the slalom too, on the oracle gap; the gap
-    stays reported."""
+    """With an oracle table the criterion applies to the slalom too, on the oracle gap; the gap to the
+    lower bound stays reported."""
     first = _eval(1.0, 0.20, 0.0, 850.0)
     first.update({"eval/oracle_gap_max": 0.08, "eval/oracle_gap_mean": 0.04})
     last = _eval(1.0, 0.12, 0.0, 900.0)
@@ -307,8 +307,8 @@ def test_a_run_without_arrivals_at_the_end_is_rejected_not_exempted(tmp_path: Pa
 
 
 def test_the_acceptance_is_decided_on_the_mode_where_it_is_logged(tmp_path: Path) -> None:
-    """From the final runs on, the mode is the primary action: the acceptance is decided on its evaluation when
-    it is logged, and on the mean's otherwise (the runs of steps 7-10)."""
+    """The mode is the primary action: the acceptance is decided on its evaluation when it is logged, and on the
+    mean's otherwise (a run directory written before the mode was evaluated)."""
     run = load_run(_make_run(tmp_path, 1, [_eval(1.0, 0.04, 0.0, 905.0, mode=(1.0, 0.10, 0.0, 880.0))]))
     text = summarize([run], max_gap=0.05)
     assert "acceptance on the mode" in text and "accepted at the end: 0/1" in text
@@ -356,7 +356,7 @@ def test_the_command_line_prints_and_plots(
 
 
 def test_the_summary_reports_the_mode_beside_the_mean(tmp_path: Path) -> None:
-    """a table for each action; where the mode is logged the criterion is decided on it."""
+    """A table for each action; where the mode is logged the criterion is decided on it."""
     run = load_run(_make_run(tmp_path, 1, [_eval(1.0, 0.04, 0.0, 905.0, mode=(0.75, 0.01, 0.25, 640.0))]))
     text = summarize([run], max_gap=0.05)
     assert _rows(text)["seed1"][2:7] == ["1.00", "905.0", "0.020", "0.040", "0.00"]
@@ -366,7 +366,7 @@ def test_the_summary_reports_the_mode_beside_the_mean(tmp_path: Path) -> None:
 
 
 def test_runs_without_the_mode_say_so(three_runs: list[Path]) -> None:
-    """The runs of steps 7-10 were evaluated with the mean only."""
+    """A run directory written before the mode was evaluated holds the mean only."""
     text = summarize([load_run(p) for p in three_runs])
     assert "action: mode: not evaluated in these runs" in text and not _rows(text, "mode")
 
@@ -432,7 +432,8 @@ def test_the_summary_ranks_the_groups_by_the_auc(tmp_path: Path) -> None:
 def test_the_time_to_solve_at_the_three_thresholds(tmp_path: Path) -> None:
     """The first evaluation with full success from the grid (primary), with full success and the gap at most
     10 %, and meeting the strict criterion (gap at most 5 %, no contact); the contact-free full success is
-    reported beside them. On the primary action, the gap of the oracle where logged, else."""
+    reported beside them. On the primary action; the gap is the oracle's where it is logged, else the gap to the
+    lower bound."""
     assert SOLVED_LEVELS == ("success", "gap_10", "strict", "contact_free") and GAP_LENIENT == 0.10
     evaluations = [
         _eval(0.0, math.nan, 0.0, -200.0, mode=(0.0, math.nan, 0.0, -200.0)),

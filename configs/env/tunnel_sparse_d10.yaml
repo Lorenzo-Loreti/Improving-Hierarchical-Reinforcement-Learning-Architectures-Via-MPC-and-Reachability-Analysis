@@ -1,6 +1,6 @@
-# Tunnel with the sparse reward at the disturbance level
-# d_bar = 1.0: configs/env/tunnel_d10.yaml with only the progress term removed
-# (progress_coef 0).
+# Tunnel with the sparse reward and the reverse curriculum at the disturbance level d_bar = 1.0:
+# configs/env/tunnel_d10.yaml with the progress term removed (progress_coef 0) and the curriculum
+# added (a test). Not used by the experiments of the thesis.
 
 physics:
   dt: 0.1

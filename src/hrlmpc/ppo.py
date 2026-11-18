@@ -240,7 +240,7 @@ class PPOAgent:
     # ------------------------------------------------------------------
 
     def _tensor(self, values: ArrayLike) -> torch.Tensor:
-        # A copy in memory allocated by PyTorch, as in the legacy code: the BLAS kernels
+        # A copy in memory allocated by PyTorch, as in the reference implementation: the BLAS kernels
         # may round differently on inputs aligned differently.
         return torch.tensor(np.asarray(values, dtype=np.float32), device=self.device)
 

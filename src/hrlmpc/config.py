@@ -94,10 +94,10 @@ class CurriculumConfig:
         step: By how much [m] the band slides back per stage; at most the spawn box's width.
         window: Episodes of a block, over which the success rate is measured.
         threshold: Success rate of a block that advances the stage, in ``(0, 1]``.
-        exclude: Boxes no training start is drawn from: the dead ends of
-            a layout, such as the cavity of the trap's U, which the policies
-            meet on their way instead of starting in. Inside the arena and
-            apart from the spawn box; empty by default.
+        exclude: Boxes no training start is drawn from, for the dead ends
+            of a layout, which the policies then meet on their way instead of
+            starting in. Inside the arena and apart from the spawn box; empty
+            by default, and no configuration of the thesis uses it.
         y: The ``y``-range of the bands before the last, the spawn box's by
             default (``None``); the trap's bands span the arena's height, so
             that the corridors around its U carry training starts and every

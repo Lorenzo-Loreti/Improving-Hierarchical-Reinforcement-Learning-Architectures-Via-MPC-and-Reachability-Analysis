@@ -1,13 +1,14 @@
-"""Numerical checks of the facts M and F1-F6 on the model, which the thesis proves in Appendix A.
+"""Numerical checks of the facts M and F1-F6 about the model, on which the code relies.
 
-They run against :mod:`hrlmpc.model`. These are numerical checks, not proofs. Every random draw comes from a seeded generator, so the tests
-are deterministic.
+They run against :mod:`hrlmpc.model`. These are numerical checks, not proofs: the thesis states M in
+Section 3.1 and proves F1 to F4 in Appendix A; F5 and F6 are elementary facts of plane geometry and of the
+isotropy of the model. Every random draw comes from a seeded generator, so the tests are deterministic.
 
     M compact form x+ = A x + B u + B d of the update equations
-    F1 the disk of radius a_max/gamma is invariant for every u in U (d = 0)
-    F2 V is robustly control invariant iff d_bar <= min(a_max + gamma v_max, v_max/dt)
-    F3 the speed-limiter saturation is absorbed into the disturbance disk
-    F4 speed saturation and wall reaction are mutually compatible
+    F1 the disk of radius a_max/gamma is invariant for every u in U (d = 0): Proposition A.1
+    F2 V is robustly control invariant iff d_bar <= min(a_max + gamma v_max, v_max/dt): Proposition A.2
+    F3 the speed-limiter saturation is absorbed into the disturbance disk: Proposition A.4
+    F4 speed saturation and wall reaction are mutually compatible: Proposition A.3
     F5 the inner regular N-gon of a disk loses a fraction 1 - cos(pi/N) of the radius
     F6 isotropy: without state constraints, the positions reachable in H steps
         with a disk-shaped U form a disk
@@ -148,7 +149,7 @@ def test_f5_inner_polygon_radius_loss(sides: int) -> None:
     assert abs(inradius - np.cos(np.pi / sides)) < 1e-12
 
 
-def test_f5_radius_losses_quoted_in_the_decision_log() -> None:
+def test_f5_radius_losses_in_per_cent() -> None:
     quoted = {8: 7.61, 12: 3.41, 16: 1.92, 32: 0.48}
     for sides, percent in quoted.items():
         assert round(100.0 * (1.0 - np.cos(np.pi / sides)), 2) == percent
@@ -183,7 +184,7 @@ def test_position_gains_rejects_an_empty_horizon() -> None:
 
 
 @pytest.mark.parametrize("d_bar", [0.0, 0.5, 1.0])
-def test_d9_parameters_satisfy_f1_and_f2(d_bar: float) -> None:
+def test_the_parameters_of_the_thesis_satisfy_f1_and_f2(d_bar: float) -> None:
     params = PhysicsParams(dt=0.1, a_max=2.5, v_max=1.2, gamma=0.5, gamma_w=1.0, d_bar=d_bar)
     assert params.velocity_factor == pytest.approx(0.95)
     assert params.invariant_speed == pytest.approx(5.0)

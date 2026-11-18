@@ -104,7 +104,7 @@ def test_z_is_rotation_invariant() -> None:
         np.testing.assert_allclose(tube.support(a @ rotation(theta).T), tube.support(a), rtol=1e-10)
 
 
-def test_the_radii_of_the_decision_log() -> None:
+def test_the_radii_of_the_tube() -> None:
     half, one = _tube(0.5), _tube(1.0)
     assert half.position_radius == pytest.approx(0.0649, abs=2e-3)
     assert half.speed_radius == pytest.approx(0.1666, abs=2e-3)

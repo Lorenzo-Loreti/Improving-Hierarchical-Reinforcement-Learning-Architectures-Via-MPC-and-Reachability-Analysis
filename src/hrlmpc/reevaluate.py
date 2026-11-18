@@ -2,8 +2,9 @@
 
 The final policies of a run (its ``final.pt``) are evaluated once more, with
 the mode of the Beta by default, from the grid of starts over a box
-given on the command line instead of the spawn box: for the trap layout, a grid inside the cavity of the U — starts the exploration setting never
-drew (the agents met the cavity on their own, if at all) and the main setting
+given on the command line instead of the spawn box: for the trap layout, a grid
+inside the cavity of the U — starts that the sparse setting never drew (the
+agents met the cavity on their own, if at all) and that the curriculum setting
 drew in its middle stages: the exit from the
 dead end, learned or not. The same tool serves diagnoses from any box (the
 mouth of the U, a corridor). Nothing is trained; the results go to one line

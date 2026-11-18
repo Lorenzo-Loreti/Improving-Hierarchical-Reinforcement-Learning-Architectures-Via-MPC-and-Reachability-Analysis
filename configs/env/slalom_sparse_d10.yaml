@@ -1,6 +1,6 @@
-# Slalom with the sparse reward at the disturbance level
-# d_bar = 1.0: configs/env/slalom_d10.yaml with only the progress term removed
-# (progress_coef 0).
+# Slalom, curriculum setting ("main" in the code) at the disturbance level d_bar = 1.0:
+# configs/env/slalom_d10.yaml with the progress term removed (progress_coef 0) and the
+# reverse curriculum added (a test).
 
 physics:
   dt: 0.1          # sampling time T_s [s]

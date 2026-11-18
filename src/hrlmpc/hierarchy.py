@@ -11,7 +11,7 @@ return is the discounted return of a flat learner. A segment truncated at the
 horizon is bootstrapped with the value of the state it reached.
 
 Targets. :class:`DiskTargets` maps ``x`` onto the disk of radius ``R``
-around the position at the segment's start, with the bijection. The
+around the position at the segment's start, with the bijection of :mod:`hrlmpc.action_map`. The
 reachable targets of architecture 4 (:class:`hrlmpc.reachability.ReachableTargets`)
 enter through the same interface, :class:`TargetMap`.
 
@@ -21,7 +21,7 @@ in the ablation, the local map features of :class:`MapFeatures`, and
 returns actions in the square, mapped onto ``U`` by the environment. A
 :class:`CommandWorker`, the MPC Worker, returns commanded accelerations; it
 also gets the steps left in each segment, since it plans to pass the target
-when the segment ends. Every Worker is scored with the reward, for
+when the segment ends. Every Worker is scored with the Worker's reward (:func:`worker_reward`), for
 learning (hPPO) or as a diagnostic. A learned Worker bootstraps its value at
 the end of every episode: its stream of targets has no terminal state.
 
@@ -457,7 +457,7 @@ class HierarchicalRollout:
             that ends, so their number is also that of the rollout's decisions.
         worker: The learned Worker's transitions, ``None`` for a
             :class:`CommandWorker`. Its observations are the inputs of
-            :func:`worker_inputs` and its rewards those; no transition
+            :func:`worker_inputs` and its rewards those of :func:`worker_reward`; no transition
             is terminal, and ``truncated`` marks every end of an episode,
             where the Worker bootstraps.
         worker_reward: ``(T, B)`` terms of the Worker's reward, also for a :class:`CommandWorker`.

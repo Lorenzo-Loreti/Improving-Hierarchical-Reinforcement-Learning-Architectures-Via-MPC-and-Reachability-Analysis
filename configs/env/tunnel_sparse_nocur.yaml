@@ -1,7 +1,7 @@
-# Tunnel with the sparse reward and WITHOUT the spawn curriculum: the exploration setting, in which the training starts are uniform on the spawn box from the first episode. Identical to
-# configs/env/tunnel_sparse.yaml apart from task.curriculum (a test). The control: the tunnel is run
-# in this setting only (5 seeds), for the certified minimum time and the cost of the hierarchy where no
-# obstacle justifies it.
+# Tunnel, sparse setting of the thesis ("exploration" in the code): the sparse reward without the
+# curriculum, so the training starts are uniform on the spawn box from the first episode. Identical to
+# configs/env/tunnel_sparse.yaml apart from task.curriculum (a test). The tunnel is the reference layout
+# of the thesis: its minimum time is known exactly, and no obstacle justifies a hierarchy.
 
 physics:
   dt: 0.1

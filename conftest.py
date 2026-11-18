@@ -24,4 +24,4 @@ if os.environ.get("CI") == "true":
     _required = ("torch", "gymnasium", "matplotlib", "cvxpy", "clarabel", "gurobipy")
     _missing = [name for name in _required if importlib.util.find_spec(name) is None]
     if _missing:
-        raise RuntimeError(f"the CI must install {_missing} (extras rl, mpc, plots); see .github/workflows/tests.yml")
+        raise RuntimeError(f"the CI must install {_missing} (the extras rl, mpc and plots of pyproject.toml)")

@@ -222,7 +222,7 @@ def test_the_tunnel_is_convex_and_reaches_the_goal() -> None:
     assert sum(log["uncertified"]) == sum(log["accepted"]) == 0  # Every plan Clarabel's optimum
     _nominal(log, problem)
     assert max(_worst(log).values()) <= 1e-6  # Clarabel's plans alone
-    assert len(log["outcome"]) == 78  # the bound from (1, 0): the waypoint Worker drives at full speed
+    assert len(log["outcome"]) == 78  # the bound from (1, 0): the Worker drives at full speed
 
 
 def test_a_manager_that_aims_at_the_openings_threads_the_slalom() -> None:
@@ -265,7 +265,7 @@ def test_a_reachable_target_is_passed_when_the_segment_ends(d_bar: float) -> Non
 
 
 def test_an_unreachable_target_is_projected_onto_the_reachable_set() -> None:
-    """a target beyond reach leaves the agent at the reachable point nearest to it, here the farthest point
+    """A target beyond reach leaves the agent at the reachable point nearest to it, here the farthest point
     straight ahead: full thrust from rest covers the displacement of the bound in 10 steps."""
     cfg, layout, problem = _setup("tunnel")
     x = _segment(MPCWorker(problem), problem, cfg, layout, np.array([1.0, 0.0, 0.0, 0.0]), np.array([4.0, 0.0]))
@@ -312,8 +312,8 @@ def test_the_tube_holds_with_the_disturbance_along_the_velocity() -> None:
 
 @pytest.mark.parametrize("d_bar", [0.5, 1.0])
 def test_the_shifted_plan_is_feasible_after_every_disturbance_in_d(d_bar: float) -> None:
-    """Theorem 4.1, constraint by constraint: after a disturbance on the edge of ``D``, the shift of the applied
-    plan meets every constraint at the new state, the tube constraint by its gauge."""
+    """Proposition A.7 (iv) of the thesis, constraint by constraint: after a disturbance on the edge of ``D``, the
+    shift of the applied plan meets every constraint at the new state, the tube constraint by its gauge."""
     cfg, layout, problem = _setup("slalom", d_bar=d_bar)
     worker = MPCWorker(problem)
     rng = np.random.default_rng(3)
@@ -620,7 +620,7 @@ def test_a_search_out_of_rounds_ends_as_such(monkeypatch: pytest.MonkeyPatch) ->
 @pytest.mark.parametrize("d_bar", [0.0, 0.5])
 def test_an_inaccurate_exact_plan_within_the_tolerances_is_accepted(d_bar: float,
                                                                      monkeypatch: pytest.MonkeyPatch) -> None:
-    """a plan that Clarabel returns inaccurate, or at its iteration limit, is applied if the checker
+    """A plan that Clarabel returns inaccurate, or at its iteration limit, is applied if the checker
     accepts it, here Clarabel's own optimum; with every input 1e-3 off, the velocities miss the dynamics by 1e-4,
     beyond the tolerance of 1e-6, and it is not."""
     _, _, problem = _setup("tunnel", d_bar=d_bar)
@@ -921,7 +921,7 @@ def test_the_worker_is_deterministic_and_reset_forgets_the_plan() -> None:
 
 
 def test_a_reset_slot_solves_as_a_fresh_worker() -> None:
-    """a reset forgets the plan, the cuts of ``Z`` and Gurobi's last solution, so an evaluation does
+    """A reset forgets the plan, the cuts of ``Z`` and Gurobi's last solution, so an evaluation does
     not depend on the earlier ones, and a saved Manager evaluated with a new Worker reproduces it."""
     _, _, problem = _setup("slalom", d_bar=0.5, horizon=5)
     x, target = NEAR_THE_GATE, [5.4, 1.2]
@@ -1072,8 +1072,8 @@ def test_the_command_adapter_steers_every_agent() -> None:
 # --------------------------------------------------------------------------
 
 
-def _f7_travel(problem: MPCProblem, speed: float, steps: int) -> float:
-    """The displacement of full thrust along a line in ``steps`` steps from ``speed`` (the recursion)."""
+def _thrust_travel(problem: MPCProblem, speed: float, steps: int) -> float:
+    """The displacement of full thrust along a line in ``steps`` steps from ``speed``, with the Worker's bounds."""
     travel = 0.0
     for _ in range(steps):
         speed = min((1.0 - problem.params.gamma * problem.dt) * speed + problem.dt * problem.u_bar, problem.v_bar)
@@ -1088,7 +1088,7 @@ def test_the_support_points_from_rest_lie_on_the_circle_of_the_reach() -> None:
     support = ReachSupport(problem, H, support_directions(16))
     x = np.array([5.0, 0.0, 0.0, 0.0])
     points = support(x)
-    radius = _f7_travel(problem, 0.0, H)
+    radius = _thrust_travel(problem, 0.0, H)
     assert radius == pytest.approx(0.95092, abs=1e-5)
     np.testing.assert_allclose(points - x[:2], radius * support_directions(16), atol=1e-5)
     assert support.failures == 0
@@ -1138,7 +1138,7 @@ def test_every_support_point_is_a_target_the_worker_reaches() -> None:
 
 
 def test_a_projection_solves_as_a_fresh_worker() -> None:
-    """a projection neither uses nor leaves a plan or cuts of Z, near a gate, where Gurobi and the cuts work."""
+    """A projection neither uses nor leaves a plan or cuts of Z, near a gate, where Gurobi and the cuts work."""
     _, _, problem = _setup("slalom", d_bar=0.5)
     x, q = np.array([3.75, 0.45, 1.0, 0.0]), np.array([5.4, 1.2])
     assert problem.free_binaries(problem.fixed_binaries(x)) > 0

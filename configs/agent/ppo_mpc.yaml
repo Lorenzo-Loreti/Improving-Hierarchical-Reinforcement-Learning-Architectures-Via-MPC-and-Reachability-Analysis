@@ -4,8 +4,8 @@
 # disturbance d_bar of the environment's configuration (one file per level:
 # configs/env/<layout>_d05.yaml and _d10.yaml), so this file serves every
 # level. The values are those selected by the tuning: configuration c7 of configs/agent/tuning/
-#  (the Manager's learning rate 1.0e-3 and entropy coefficient 0.03; the Worker's effort weight 0.1),
-#  the same for both MPC architectures.
+# (the Manager's learning rate 1.0e-3 and entropy coefficient 0.03; the Worker's effort weight 0.1),
+# the same for both MPC architectures.
 # Write floats with a dot and a signed exponent (3.0e-4, 1.0e+5): YAML 1.1 reads 3e-4 and 1.0e5 as strings.
 
 hierarchy:

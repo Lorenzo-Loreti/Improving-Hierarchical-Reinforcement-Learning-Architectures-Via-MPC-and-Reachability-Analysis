@@ -1,7 +1,7 @@
 # hPPO with segments of H = 6 steps: the agility sweep (alpha = v_max / (a_max H dt) = 0.80 against 0.48 at H = 10).
 # Identical to configs/agent/hppo.yaml apart from segment_steps (a test); the target radius, the
 # Worker's horizon N = H + n_b and the map of architecture 4 follow from H. Run with
-# --runs-dir runs/sweep_h6 so that the runs do not mix with those of H = 10.
+# --runs-dir runs/final_h6 so that the runs do not mix with those of H = 10.
 # Write floats with a dot and a signed exponent (3.0e-4, 1.0e+5): YAML 1.1 reads 3e-4 and 1.0e5 as strings.
 
 hierarchy:

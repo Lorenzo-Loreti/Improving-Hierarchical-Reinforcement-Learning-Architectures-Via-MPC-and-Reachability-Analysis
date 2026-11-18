@@ -1,4 +1,4 @@
-"""Learning curves and summaries of training runs and the analysis rules).
+"""Learning curves and summaries of training runs.
 
 Reads the run directories written by :class:`hrlmpc.utils.runlog.RunLogger`
 and aggregates them over seeds: means with Student-t confidence intervals,
@@ -6,7 +6,8 @@ against the sample counter ``env_steps``. Runs are pooled only within a
 group of runs that share their whole configuration except the seed.
 
 It also checks an acceptance criterion: success from every
-start of the evaluation grid, arrival within a relative gap of the bound, and no contact. The criterion applies to layouts without obstacles only,
+start of the evaluation grid, arrival within a relative gap of the bound, and no contact.
+The criterion applies to layouts without obstacles only,
 where the bound is the minimum time; with obstacles the gap is reported
 but measures the distance from a lower bound, not from the optimum, unless an
 oracle table was used. The time to solve is reported at four levels: full success from the grid (primary), full success with the gap at most
@@ -14,9 +15,9 @@ oracle table was used. The time to solve is reported at four levels: full succes
 
 Every evaluation point evaluates the policy's mean and its mode,
 logged under ``eval/`` and ``eval_mode/``. The summary reports both, the
-mode in a table of its own; the criterion stays on the mean. The
-curves are plotted for one action (``--action``). Runs of steps 7-10 have the
-mean only.
+mode in a table of its own, and decides the criterion on the mode. The
+curves are plotted for one action (``--action``). A run directory written
+before the mode was evaluated has the mean only, and is judged on it.
 
 Usage::
 
@@ -145,10 +146,10 @@ _ROUND_TRIPS: dict[str, tuple[Callable[[Mapping[str, Any]], Any], Callable[[Any]
 
 
 def _normalized(config: Mapping[str, Any]) -> dict[str, Any]:
-    """The configuration without its provenance, with the environment and agent sections as today's loaders
-    record them: an optional key that did not exist when a run was written (the bands' height, say) is
+    """The configuration without its provenance, with the environment and agent sections as the loaders
+    record them: an optional key that a run directory lacks (the bands' height, say) is
     filled with its default, so that runs of one configuration share their fingerprint across versions of the
-    schema. A section today's loader refuses is kept as written."""
+    schema. A section that its loader refuses is kept as written."""
     shared = {k: v for k, v in config.items() if k not in _PROVENANCE}
     env = shared.get("env")
     if isinstance(env, Mapping):
@@ -285,7 +286,7 @@ def _value(record: Mapping[str, Any], key: str) -> float | None:
 
 def criterion_gap(record: Mapping[str, Any], action: str = "mean", oracle: bool = True) -> float | None:
     """The largest arrival gap the criterion is judged on: the oracle gap where it is logged, else the
-    gap; ``None`` where neither is."""
+    gap to the lower bound; ``None`` where neither is."""
     p = f"{evaluation_name(action)}/"
     gap = _value(record, p + "oracle_gap_max") if oracle else None
     return gap if gap is not None else _value(record, p + "arrival_gap_max")
@@ -356,8 +357,8 @@ def time_to_solve(run: Run, action: str = "mean", max_gap: float = 0.05, oracle:
 def success_auc(run: Run, action: str = "mean") -> float:
     """The area under the success curve of the evaluation with ``action``, by the trapezoidal rule over the
     samples, divided by the run's budget (by the samples of the last evaluation when no budget is recorded): in
-    ``[0, 1]`` (the selection rule), and an incomplete run counts the area it reached only; NaN with fewer
-    than two evaluations or without the action."""
+    ``[0, 1]``, and an incomplete run counts the area it reached only; NaN with fewer than two evaluations or
+    without the action. The tuning ranks the configurations by its mean (Appendix B.2 of the thesis)."""
     steps, values = series(run, f"{evaluation_name(action)}/success_rate")
     if steps.size < 2 or steps[-1] <= 0:
         return math.nan
@@ -437,7 +438,7 @@ def _table(
 def _summarize_group(label: str, runs: Sequence[Run], max_gap: float) -> list[str]:
     """The tables of a group: the mean's and, where logged, the mode's; the acceptance is decided on the mode
     where it is logged and on the mean otherwise, on the oracle gap where a table was used and on the
-    gap otherwise, which applies to layouts without obstacles only."""
+    gap to the lower bound otherwise, which applies to layouts without obstacles only."""
     finals = [_last_evaluation(run) for run in runs]
     with_mode = all(f"{evaluation_name('mode')}/success_rate" in final for final in finals)
     primary = "mode" if with_mode else "mean"

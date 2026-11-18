@@ -13,7 +13,8 @@ Worker is updated on its own transitions (GAE at its discount, bootstrapping at
 every end of an episode), then the Manager on the segments that ended
 (GAE at ``gamma^tau``).
 
-Each seed writes the run directory ``<runs-dir>/<layout>/hppo/seed<seed>-<UTC time>`` with:
+Each seed writes the run directory ``<runs-dir>/<env>/hppo/seed<seed>-<UTC time>``, ``<env>`` being
+the stem of the environment's file, with:
 
     config.yaml resolved configuration: environment, agent, budget, seed
     meta.json provenance and machine (hrlmpc.utils.runlog)
@@ -311,9 +312,10 @@ def _train(
 
 
 def load_hierarchy(run_dir: str | Path, checkpoint: str = "final.pt") -> tuple[PPOAgent, PPOAgent, Hierarchy]:
-    """The Manager, the Worker and the hierarchy of a run, rebuilt from its ``config.yaml`` and a checkpoint. An older run has no ``hierarchy.worker_progress_coef``: it is reloaded at the shaped price
-    (:func:`~hrlmpc.hppo_config.with_worker_price`), immaterial to the evaluation; not for continuing the
-    training of a sparse run from before, whose Worker was paid no progress."""
+    """The Manager, the Worker and the hierarchy of a run, rebuilt from its ``config.yaml`` and a checkpoint.
+    An older run has no ``hierarchy.worker_progress_coef``: it is reloaded at the shaped price
+    (:func:`~hrlmpc.hppo_config.with_worker_price`), immaterial to the evaluation; it is not meant for
+    continuing the training of such a run."""
     path = Path(run_dir)
     config = yaml.safe_load((path / "config.yaml").read_text(encoding="utf-8"))
     env_config = env_config_from_dict(config["env"])

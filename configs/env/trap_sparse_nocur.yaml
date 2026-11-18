@@ -1,4 +1,4 @@
-# Trap layout, exploration setting: trap_sparse.yaml without the
+# Trap layout, sparse setting of the thesis ("exploration" in the code): trap_sparse.yaml without the
 # curriculum (task.curriculum: null), so the training starts are the spawn box's
 # and the sparse reward alone must be found by exploration. Nothing else differs.
 

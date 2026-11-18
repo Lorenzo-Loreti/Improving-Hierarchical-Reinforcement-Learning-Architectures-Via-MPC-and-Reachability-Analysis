@@ -2,11 +2,13 @@
 
 Code of the master's thesis *Improving Hierarchical Reinforcement Learning Architectures via MPC and
 Reachability Analysis* (Lorenzo Loreti, Institute for Systems Theory and Automatic Control, University of
-Stuttgart, Master Thesis 163, November 2026).
+Stuttgart, Master Thesis 163, November 2026). The statement on the use of tools in this work, which covers
+the code, is Appendix B.6 of the thesis.
 
 The package `hrlmpc` contains the navigation environment, the four architectures that the thesis compares,
-the minimum-time oracle and the analysis that writes every table and every result figure of the thesis.
-Chapters, sections and tables named below are those of the thesis.
+the minimum-time oracle and the analysis that writes the result tables and the result figures of the thesis.
+Chapters, sections and tables named below are those of the thesis. Every command below is run from this
+directory, which is `code/` in the hand-in archive.
 
 | Number | Architecture | Agent file | Training module |
 |---|---|---|---|
@@ -15,7 +17,9 @@ Chapters, sections and tables named below are those of the thesis.
 | 3 | PPO_MPC (learned Manager, tube-MPC Worker) | `configs/agent/ppo_mpc.yaml` | `hrlmpc.train_ppo_mpc` |
 | 4 | PPO_MPC,reach (as 3, targets restricted to the reachable set) | `configs/agent/ppo_mpc_reachability.yaml` | `hrlmpc.train_ppo_mpc` |
 
-The comments of the code call the architectures by these numbers.
+The comments of the code call the architectures by these numbers. For three things the code has names of its
+own: the curriculum setting of the thesis is `main`, its sparse setting is `exploration`, and its start box is
+the *spawn box*. Section 4 of this file has the table.
 
 ## 1. Installation
 
@@ -43,9 +47,9 @@ without it.
     python -m pytest tests -q
 
 A test module whose packages are not installed is skipped, so the environment, the configurations and the
-analysis can be tested without PyTorch and without the solvers. `tests/reference/pre_alignment_ppo.py` is a
-frozen copy of an earlier stand-alone implementation of flat PPO: one test checks that the PPO of the
-package reproduces its update bit for bit.
+analysis can be tested without PyTorch and without the solvers. `tests/reference/reference_ppo.py` is a
+frozen copy of an earlier stand-alone implementation of flat PPO, which the PPO of the package was written to
+reproduce: four tests of `tests/test_ppo.py` compare the two, and the update agrees bit for bit.
 
 ## 3. Layout of the repository
 
@@ -77,7 +81,9 @@ package reproduces its update bit for bit.
 | `<layout>_sparse_nocur.yaml` | sparse: sparse reward, starts in the start box | `exploration` |
 
 The suffixes `_d05` and `_d10` set the disturbance bound to 0.5 and 1.0 m/s²; without a suffix there is no
-disturbance. The code calls the start box of the thesis the *spawn box*.
+disturbance. The code calls the start box of the thesis the *spawn box*. Five files complete the grid of
+layouts, settings and levels and are used by the tests, not by the experiments of the thesis: `slalom_d05.yaml`,
+`tunnel_d05.yaml`, `tunnel_sparse.yaml`, `tunnel_sparse_d05.yaml` and `tunnel_sparse_d10.yaml`.
 
 **Agent**, `configs/agent/`: the four files of the table above with the hyperparameters selected by the
 tuning (Table B.1); `*_h6.yaml` and `*_h4.yaml` with segments of six and four steps (the agility sweep);
@@ -85,7 +91,22 @@ tuning (Table B.1); `*_h6.yaml` and `*_h4.yaml` with segments of six and four st
 `c8.yaml`, the eight configurations of the tuning of each architecture (Appendix B.2).
 
 **Oracle**, `configs/oracle/*.json`: the minimum times from the 25 evaluation starts of each layout. They
-are shipped; `python -m hrlmpc.oracle --env configs/env/slalom.yaml` computes a table again (Gurobi).
+are shipped; `python -m hrlmpc.oracle --env configs/env/slalom.yaml` computes a table again (Gurobi). A table
+is found by its content, not by its name, so one table serves every setting and level of its layout; the
+trap's is named `trap_sparse.json` after the file it was computed from.
+
+Symbols that differ between the thesis and the docstrings of the code:
+
+| In the thesis | In the code |
+|---|---|
+| start box | spawn box, `task.spawn` |
+| PPO_MPC,reach | `ppo_mpc_reachability`, architecture 4 |
+| goal bonus c_g, wall friction γ_wall | `success_bonus`, `gamma_w` |
+| weights q_g, q_e, q_0 of the Worker's cost | `q_g`, `r_e`, `eps` (`target_weight`, `effort_weight`, `start_weight`) |
+| margin ρ_wall | `rho` |
+| n_stop, the steps needed to stop | `n_b`, `stopping_steps` |
+| n_Z, μ, ε_E of the tube | `s` (`num_terms`), `lambda`, `eps` |
+| tightened bounds v_max − r_v′ and a_max − r_u | `v_bar`, `u_bar` |
 
 ## 5. One training run
 
@@ -113,18 +134,20 @@ hours with a disturbance (Table 6.6). A short check of an installation is a run 
 
 All 980 runs of Table 5.3 use the seeds 1 to 10 and the budget 204 800, except the doubled budget.
 
-| Experiments of Table 5.3 | Environment files | Agent files | `--runs-dir` |
-|---|---|---|---|
-| Slalom and trap, three settings, no disturbance | `slalom.yaml`, `slalom_sparse.yaml`, `slalom_sparse_nocur.yaml`, and the same for `trap` | the four architectures | `runs/final` |
-| Tunnel, sparse and dense settings | `tunnel_sparse_nocur.yaml`, `tunnel.yaml` | the four architectures | `runs/final` |
-| Disturbance 0.5 on the slalom | `slalom_sparse_d05.yaml`, `slalom_sparse_nocur_d05.yaml` | the four architectures | `runs/final` |
-| Disturbance 1.0, every setting above | the same files with `_d10` | the four architectures | `runs/final` |
-| Agility sweep on the slalom | `slalom_sparse.yaml`, `slalom_sparse_nocur.yaml` | `hppo`, `ppo_mpc`, `ppo_mpc_reachability` with `_h6` and `_h4` | `runs/final_h6`, `runs/final_h4` |
-| Doubled budget on the trap (`--budget 409600`) | `trap_sparse.yaml` | the four architectures | `runs/final_budget2` |
-| Ablation of hPPO | every setting above without disturbance, and the curriculum settings with `_d10` | `hppo_map.yaml` | `runs/final_map` |
+| Experiments of Table 5.3 | Environment files | Agent files | `--runs-dir` | Runs |
+|---|---|---|---|---|
+| Slalom and trap, three settings, no disturbance | `slalom.yaml`, `slalom_sparse.yaml`, `slalom_sparse_nocur.yaml`, and the same for `trap` | the four architectures | `runs/final` | 240 |
+| Tunnel, sparse and dense settings | `tunnel_sparse_nocur.yaml`, `tunnel.yaml` | the four architectures | `runs/final` | 80 |
+| Disturbance 0.5 on the slalom, curriculum and sparse settings | `slalom_sparse_d05.yaml`, `slalom_sparse_nocur_d05.yaml` | the four architectures | `runs/final` | 80 |
+| Disturbance 1.0, the eight settings of the first two rows | the eight files of the first two rows with `_d10` | the four architectures | `runs/final` | 320 |
+| Agility sweep on the slalom, curriculum and sparse settings | `slalom_sparse.yaml`, `slalom_sparse_nocur.yaml` | `hppo`, `ppo_mpc`, `ppo_mpc_reachability` with `_h6` and `_h4` | `runs/final_h6`, `runs/final_h4` | 120 |
+| Doubled budget on the trap (`--budget 409600`) | `trap_sparse.yaml` | the four architectures | `runs/final_budget2` | 40 |
+| Ablation of hPPO | the eight files of the first two rows, `slalom_sparse_d10.yaml` and `trap_sparse_d10.yaml` | `hppo_map.yaml` | `runs/final_map` | 100 |
 
 The tuning (Appendix B.2) runs the eight files of `configs/agent/tuning/<architecture>/` on
-`configs/env/slalom_sparse.yaml` with `--seeds 101 102 103` and `--runs-dir runs/tuning/<architecture>`.
+`configs/env/slalom_sparse.yaml` with `--budget 204800 --seeds 101 102 103` and
+`--runs-dir runs/tuning/<architecture>`. `python -m hrlmpc.analysis runs/tuning/<architecture>` then prints the
+ranking of the eight configurations by the mean area under the success curve, on which the selection rests.
 
 The escape evaluation of the trap (Section 5.3, Table 6.3) evaluates final policies from two grids of starts
 and adds its result to each run directory:
@@ -132,14 +155,17 @@ and adds its result to each run directory:
     python -m hrlmpc.reevaluate --name escape --box 4.0 5.0 -0.4 0.4 --grid 3 3 runs/final/trap runs/final/trap_sparse runs/final/trap_sparse_nocur
     python -m hrlmpc.reevaluate --name mouth  --box 3.0 3.7 -0.7 0.7 --grid 3 3 runs/final/trap runs/final/trap_sparse runs/final/trap_sparse_nocur
 
-The episodes of Figure 6.4 are recorded with `python -m hrlmpc.trajectories <run directories>`.
+The episodes of Figure 6.4 are recorded with `python -m hrlmpc.trajectories <run directory>` for one run of
+each architecture on `slalom_sparse` and on `trap_sparse`: the run whose final success rate is closest to the
+median of its cell, as the caption of the figure says. The command of Section 7 of this file draws the replays
+that it finds below the run directories.
 
 ## 7. Tables and figures
 
     python -m hrlmpc.results runs/final runs/final_h6 runs/final_h4 runs/final_map runs/final_budget2 --out results
 
 reads the run directories and writes `results/summary.json` (every number), `results/report.md` (the same,
-readable), `results/tables/*.tex` (the bodies of the tables of the thesis, which are these files unchanged)
+readable), `results/tables/*.tex` (the bodies of the result tables of the thesis, which are these files unchanged)
 and `results/figures/*.pdf`. With `--no-figures` only the tables and the report are written.
 
     python -m hrlmpc.analysis runs/final/slalom_sparse --inventory
@@ -150,5 +176,5 @@ list and summarize any set of runs and plot their learning curves.
 ## 8. Data
 
 The logs of the 980 runs (about 800 MB) are not part of this archive. They are available from the author
-on request; with them, the command of Section 7 reproduces every table and result figure of the thesis
-without training.
+on request; with them, the command of Section 7 of this file reproduces every result table and result figure
+of the thesis without training.

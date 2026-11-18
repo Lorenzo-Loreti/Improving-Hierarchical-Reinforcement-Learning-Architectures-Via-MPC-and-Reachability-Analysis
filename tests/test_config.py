@@ -21,7 +21,7 @@ def _slalom_dict() -> dict[str, Any]:
     return data
 
 
-def test_slalom_config_matches_the_decision_log() -> None:
+def test_the_slalom_configuration_has_the_values_of_the_thesis() -> None:
     cfg = load_env_config(CONFIG_DIR / "slalom.yaml")
     p = cfg.physics
     assert (p.dt, p.a_max, p.v_max, p.gamma, p.gamma_w, p.d_bar) == (0.1, 2.5, 1.2, 0.5, 1.0, 0.0)
@@ -199,7 +199,7 @@ def test_a_yaml_file_with_curriculum_null_loads_without_one(tmp_path: Path) -> N
 
 
 @pytest.mark.parametrize("d_bar", [0.0, 0.5, 1.0])
-def test_every_disturbance_level_of_d9_is_valid(d_bar: float) -> None:
+def test_every_disturbance_level_of_the_thesis_is_valid(d_bar: float) -> None:
     data = _slalom_dict()
     data["physics"]["d_bar"] = d_bar
     assert env_config_from_dict(data).physics.d_bar == d_bar
@@ -375,11 +375,6 @@ def test_the_dense_setting_of_the_trap_is_the_trap_exploration_file_with_the_pro
     dense = load_env_config(CONFIG_DIR / "trap.yaml")
     assert dense.task.curriculum is None and dense.reward.shaping_discount == 1.0
     assert dense == dataclasses.replace(plain, reward=dataclasses.replace(plain.reward, progress_coef=10.0))
-
-
-def test_the_narrow_gate_files_are_gone() -> None:
-    """The trap layout contains the narrow gate."""
-    assert not list(CONFIG_DIR.glob("slalom_narrow*"))
 
 
 @pytest.mark.parametrize("layout", ["slalom", "tunnel"])

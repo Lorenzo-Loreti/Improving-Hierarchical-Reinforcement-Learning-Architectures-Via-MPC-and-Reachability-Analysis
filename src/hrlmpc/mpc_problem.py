@@ -1,9 +1,9 @@
 """Data of the MPC Worker's problem, without the solvers.
 
 The Worker of PPO_MPC and PPO_MPC_reachability (architectures 3 and 4) solves
-at every step the robust tube-MPC problem of Chapter 4 of the thesis, specialised to
-this plant and its polygonal map, with the cost of the waypoint Worker
-and, with a tube, the regularizer:
+at every step the robust tube-MPC problem of Section 4.3 of the thesis, specialised to
+this plant and its polygonal map, with the waypoint cost (the target is a waypoint: the
+plan passes it at the stage where the segment ends) and, with a tube, the regularizer:
 
     min q_g ||z_{k*,p} - g||^2 + r_e sum_{k<k*} ||v_k||^2 + eps ||x - z_0||^2, k* the steps left in the segment
     s.t. z_{k+1} = A z_k + B v_k, k = 0, ..., N-1
@@ -46,8 +46,8 @@ first two terms see it only through the waypoint's position, so without the
 third neither ``z_0`` nor the applied input need be unique. The third term
  makes the cost strictly convex in ``z_0`` and in the inputs before the
 waypoint, hence the optimal applied input unique for the binaries the search
-settles on (faces may still tie). Without a tube ``z_0 = x``: the term is left
-out and the problem is that (:attr:`MPCProblem.regularized`).
+settles on (faces may still tie). Without a tube ``z_0 = x`` and the term is left
+out (:attr:`MPCProblem.regularized` says whether the cost has it).
 
 Every rest state is an equilibrium, so the shifted plan (drop the first step,
 hold the last state at rest) is feasible at the next step whenever the

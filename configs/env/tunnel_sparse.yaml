@@ -1,6 +1,6 @@
-# Tunnel with the sparse reward, the main reward of the comparison:
-# configs/env/tunnel.yaml with only the progress term removed (progress_coef 0), so
-# the reward is the time penalty, the success bonus, the contact penalty and the effort.
+# Tunnel with the sparse reward and the reverse curriculum: configs/env/tunnel.yaml with the progress
+# term removed (progress_coef 0) and the curriculum added (a test). The thesis does not run the tunnel
+# in the curriculum setting: the file completes the grid of layouts and settings, and the tests use it.
 
 physics:
   dt: 0.1

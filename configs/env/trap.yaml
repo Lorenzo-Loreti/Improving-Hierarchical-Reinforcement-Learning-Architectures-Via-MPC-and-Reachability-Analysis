@@ -1,6 +1,6 @@
 # Trap layout with the dense (shaped) reward: the
 # third setting of the comparison: trap_sparse_nocur.yaml with the progress term added
-#  (progress_coef 10, undiscounted), so the training starts are the spawn
+# (progress_coef 10, undiscounted), so the training starts are the spawn
 # box's and the reward points along x, into the cavity of the U. Nothing else
 # differs (a test). The shaped files of the other layouts are slalom.yaml and
 # tunnel.yaml.

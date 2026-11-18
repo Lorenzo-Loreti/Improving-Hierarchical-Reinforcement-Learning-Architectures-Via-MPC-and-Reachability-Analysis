@@ -1,4 +1,4 @@
-#  Locked reference environment: the versions of every third-party package. Install into a Python 3.12 virtual
+# Locked reference environment: the versions of every third-party package. Install into a Python 3.12 virtual
 # environment with
 #     python -m pip install -r requirements.txt
 # The lock was taken on Windows (CPython 3.12, win_amd64). On other platforms
@@ -17,8 +17,7 @@ clarabel==0.11.1
 gurobipy==13.0.3
 matplotlib==3.9.2
 pytest==9.0.3
-# Imported by the legacy training loops (algorithms/*/*_train.py); drop it
-# once they are replaced.
+# Installed in the reference environment; this package and its tests do not import it.
 wandb==0.28.1
 
 # Their dependencies.

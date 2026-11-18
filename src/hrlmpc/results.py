@@ -3,7 +3,7 @@
 Every number and every figure of the results chapter comes from the run
 directories through this module, never from values typed by hand. They are regenerated with::
 
-    python -m hrlmpc.results runs/final runs/final_h6 runs/final_h4 runs/final_map --out results
+    python -m hrlmpc.results runs/final runs/final_h6 runs/final_h4 runs/final_map runs/final_budget2 --out results
 
 which writes ``summary.json`` (every number), ``report.md`` (the numbers,
 readable), ``tables/*.tex`` (``tabular`` bodies to ``\\input``) and
@@ -12,9 +12,10 @@ readable), ``tables/*.tex`` (``tabular`` bodies to ``\\input``) and
 Cells. A run belongs to the cell (layout, setting, disturbance level, variant,
 architecture) read from its configuration (:func:`classify`): the layout
 from the name of its environment file, the setting from the reward and the
-curriculum of its environment section (the dense reward; the
-reverse spawn curriculum marks the main setting; neither marks the
-exploration setting), the disturbance level from the physics, the
+curriculum of its environment section (the dense reward marks the dense
+setting; the reverse spawn curriculum marks the main setting, which is the
+curriculum setting of the thesis; neither marks the exploration setting,
+which is its sparse setting), the disturbance level from the physics, the
 variant from the name of its agent file (the agility sweep,
 ``_h6``/``_h4``; the map-aware hPPO Worker, ``_map``).
 
@@ -23,7 +24,7 @@ first evaluation at which the mode of the policy met it, censored at
 the budget when the run never did. Groups of such times are summarised by
 the Kaplan–Meier estimate of the fraction solved and its median, compared by
 the two-sided log-rank test and, for the counts of solving seeds, by Fisher's
-exact test; means over seeds carry Student-t 95 % intervals (chapter 5 of
+exact test; means over seeds carry Student-t 95 % intervals (Section 5.4 of
 the thesis).
 
 Figures. The curves show the mean over seeds with its 95 % band; bars show
@@ -124,7 +125,7 @@ class Cell:
 
     Attributes:
         layout: ``slalom``, ``trap`` or ``tunnel`` (the first word of the environment file's name).
-        setting: ``main`` (the sparse reward with the curriculum), ``exploration`` (without), ``dense``.
+        setting: ``main`` (the curriculum setting of the thesis), ``exploration`` (its sparse setting), ``dense``.
         d_bar: The radius of the disturbance set.
         variant: ``""`` for the shipped agent file, ``h6``/``h4`` for the sweep, ``map`` for the ablation.
         arch: The algorithm.

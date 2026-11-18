@@ -1,4 +1,4 @@
-# Trap, main setting, at the disturbance level d_bar = 1.0: configs/env/trap_sparse.yaml
+# Trap, curriculum setting ("main" in the code), at the disturbance level d_bar = 1.0: configs/env/trap_sparse.yaml
 # with only the radius of the disturbance set changed (a test).
 
 physics:

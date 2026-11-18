@@ -401,7 +401,7 @@ def test_the_saved_manager_reproduces_the_last_evaluation(tmp_path: Path) -> Non
 
 
 def test_a_run_from_before_the_regularizer_is_loaded_without_it(tmp_path: Path) -> None:
-    """The ``config.yaml`` of a run of steps 9 and 10 has no ``mpc.start_weight``; its Worker had no
+    """The ``config.yaml`` of a run written before the regularizer has no ``mpc.start_weight``; its Worker had no
     regularizer, so :func:`load_manager` rebuilds it with ``start_weight = 0``, at any disturbance."""
     run_dir = train(_env(physics={"d_bar": 0.5}), _config(), budget=40, seed=2, run_dir=tmp_path / "run",
                     worker_factory=PDWorker, echo=None)
@@ -415,7 +415,7 @@ def test_a_run_from_before_the_regularizer_is_loaded_without_it(tmp_path: Path) 
 
 
 def test_a_run_from_before_the_workers_price_is_loaded_at_the_shaped_price(tmp_path: Path) -> None:
-    """The ``config.yaml`` of a run from before has no ``hierarchy.worker_progress_coef``; its reload, which
+    """The ``config.yaml`` of an older run has no ``hierarchy.worker_progress_coef``; its reload, which
     only evaluates the deterministic policy, takes the shaped reward's 10 (the price is immaterial there)."""
     run_dir = train(_env(), _config(), budget=40, seed=2, run_dir=tmp_path / "run", worker_factory=PDWorker,
                     echo=None)

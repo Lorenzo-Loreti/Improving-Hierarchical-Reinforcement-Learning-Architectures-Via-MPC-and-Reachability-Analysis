@@ -76,11 +76,13 @@ def check_physics(params: PhysicsParams) -> None:
     """Check that the parameters are admissible.
 
     The conditions are: positive ``dt``, ``a_max`` and ``v_max``;
-    ``0 < gamma dt < 1``; ``0 <= gamma_w dt < 1`` (A3); ``d_bar >= 0``;
+    ``0 < gamma dt < 1``; ``0 <= gamma_w dt < 1``; ``d_bar >= 0``;
     ``v_max < a_max / gamma``, without which the speed limit is redundant in
     the absence of disturbance; and
     ``d_bar <= min(a_max + gamma v_max, v_max / dt)``, so that V is robustly
-    control invariant at every disturbance level.
+    control invariant at every disturbance level. The messages of the last two
+    conditions carry the labels F1 and F2: the facts behind them are
+    Propositions A.1 and A.2 of the thesis.
 
     Args:
         params: The parameters to check.

@@ -191,7 +191,7 @@ def test_sparse_reward_has_no_progress_term() -> None:
 
 
 def test_effort_is_charged_on_the_saturated_input() -> None:
-    """a command of 5 m/s^2 is saturated to a_max, so the effort term is 0.01, not 0.04."""
+    """A command of 5 m/s^2 is saturated to a_max, so the effort term is 0.01, not 0.04."""
     config = _config(physics={"d_bar": 0.0})
     env = NavigationEnv(config, num_envs=1, seed=SEED)
     env.reset(positions=[[2.0, 0.0]], velocities=[[0.0, 0.0]])
@@ -243,7 +243,7 @@ def test_shaping_telescopes_without_discount() -> None:
 
 
 def test_contact_metrics_count_events_duration_and_impulse() -> None:
-    """a head-on impact, then two steps at rest on the floor, a lift-off and a free step.
+    """A head-on impact, then two steps at rest on the floor, a lift-off and a free step.
 
     The impact takes two steps: the first reaction lets the agent reach the floor with 0.5 m/s,
     the second cancels that speed (0.475 m/s after the ambient friction).
@@ -322,11 +322,11 @@ def test_reset_with_given_states_is_validated() -> None:
 def test_shipped_configs_meet_the_criterion_of_the_contact_penalty(name: str, expected_threshold: float) -> None:
     """Braking against a wall does not pay off.
 
-    One saved step is worth at most c_t + (1 - gamma_RL) B + c_e, plus, when
+    One saved step is worth at most c_t + (1 - gamma_RL) c_g + c_e, plus, when
     the shaping discount s exceeds gamma_RL, the step's share (s - gamma_RL)
     c_p d of the progress reward, with d at most the arena's length to the
     goal line; c_n must exceed that worth divided by a_max dt. Without the
-    progress term (the sparse reward) the bound is that.
+    progress term (the sparse reward) only the first three terms remain.
     """
     config = _config(name)
     r, p = config.reward, config.physics

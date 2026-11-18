@@ -111,4 +111,3 @@ def test_the_machine_is_described(monkeypatch: pytest.MonkeyPatch) -> None:
         "node": "wolfgang-cpu03", "cpus_per_task": None,
     }
     assert machine["threads"]["OMP_NUM_THREADS"] == "1"
-

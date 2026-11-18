@@ -1,5 +1,5 @@
-#  hPPO: two PPO learners, the Manager and the goal-conditioned Worker. The values are those selected by
-#  the tuning: configuration c3 of configs/agent/tuning/hppo/ (the Manager's entropy coefficient 0.03).
+# hPPO: two PPO learners, the Manager and the goal-conditioned Worker. The values are those selected by
+# the tuning: configuration c3 of configs/agent/tuning/hppo/ (the Manager's entropy coefficient 0.03).
 # Write floats with a dot and a signed exponent (3.0e-4, 1.0e+5): YAML 1.1 reads 3e-4 and 1.0e5 as strings.
 
 hierarchy:

@@ -1,5 +1,6 @@
 # Slalom at the disturbance level d_bar = 0.5: configs/env/slalom.yaml
-# with only the radius of the disturbance set changed.
+# with only the radius of the disturbance set changed. Not used by the experiments
+# of the thesis.
 
 physics:
   dt: 0.1          # sampling time T_s [s]

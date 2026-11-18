@@ -33,7 +33,8 @@ CONVERGED, RELAXATION, FIXED, ROUNDS, EMPTY, UNSOLVED, ERROR, BEST = range(8)
 :mod:`hrlmpc.mpc_worker`): the exact plan within the MIP gap of the relaxation's bound; the relaxation's own
 plan, because a round added no cut; the rounds exhausted; the relaxation without a solution. With every
 binary fixed, Clarabel alone: a plan; no plan (infeasible, or inaccurate and not accepted). In both: a solver
-failure ended the search. ``BEST`` (R1): the rounds ran out after the search had found exact plans,
+failure ended the search. ``BEST`` (R1; the remedies R1 and R2 are those of the docstring of
+:mod:`hrlmpc.mpc_worker`): the rounds ran out after the search had found exact plans,
 none certified within the gap, and the cheapest of them is its plan; ``ROUNDS`` thus means that the rounds
 ran out without an exact plan. A relaxation without a solution or a solver failure ends the search without a
 plan whatever it found before (``EMPTY``, ``ERROR``)."""
@@ -275,4 +276,3 @@ def episode_mask(lengths: ArrayLike, steps: int) -> BoolArray:
     lengths_arr = np.asarray(lengths, dtype=np.int64)
     mask: BoolArray = np.arange(steps)[:, None] < lengths_arr[None, :]
     return mask
-

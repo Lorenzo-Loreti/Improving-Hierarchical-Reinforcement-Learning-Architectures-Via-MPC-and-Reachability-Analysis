@@ -221,7 +221,7 @@ def test_the_final_checkpoint_reproduces_the_last_evaluation(tmp_path: Path) -> 
 
 
 def test_a_run_from_before_the_workers_price_is_loaded_at_the_shaped_price(tmp_path: Path) -> None:
-    """a run from before has no ``hierarchy.worker_progress_coef`` in its ``config.yaml``; its Worker was
+    """An older run has no ``hierarchy.worker_progress_coef`` in its ``config.yaml``; its Worker was
     paid the environment's ``progress_coef``. The reload only evaluates the deterministic policies, so it takes the
     shaped reward's 10."""
     run_dir = train(_env(), _hppo(), budget=40, seed=1, run_dir=tmp_path / "run", echo=None)
@@ -322,7 +322,7 @@ def test_training_leaves_the_global_torch_settings_as_they_were(tmp_path: Path) 
 def test_a_worker_with_map_features_trains_and_reloads(tmp_path: Path) -> None:
     """With ``hierarchy.worker_map_features`` the Worker's networks take ``6 + K`` inputs, the run records the
     features in its ``config.yaml``, the reload rebuilds the same hierarchy and the checkpoint reproduces the last
-    evaluation; a run without the key reloads with the Worker (6 inputs)."""
+    evaluation; a run without the key reloads with the Worker without map features (6 inputs)."""
     env = _env()
     hppo = _hppo(hierarchy__worker_map_features={"rays": 8, "range": 1.5})
     assert hppo.hierarchy.worker_map_features is not None and hppo.hierarchy.worker_map_features.rays == 8

@@ -8,8 +8,8 @@ run, so that every evaluation of every run meets the same disturbances.
 
 Actions. At every evaluation point the training loops evaluate the
 policy twice, with the mean of each Beta and then with its mode
-(:data:`EVAL_ACTIONS`). The evaluation with the mean keeps the names of steps
-7-10 (``eval/``, ``eval_mpc/``, ...); the one with the mode adds ``_mode``
+(:data:`EVAL_ACTIONS`). The evaluation with the mean logs under the plain names
+(``eval/``, ``eval_mpc/``, ...); the one with the mode adds ``_mode``
 (``eval_mode/``, ``eval_mode_mpc/``, ...; :func:`evaluation_name`). The
 run's ``evaluations.jsonl`` holds one line per evaluation and action
 (:func:`append_details`).
@@ -27,8 +27,8 @@ single decision of an MPC Worker is its own ``eval_mpc/solve_ms_max``.
 Oracle. Where a table of the minimum times of the starts exists
 (:mod:`hrlmpc.oracle`), the evaluation also measures each successful episode
 against the oracle's minimum time, as ``oracle_gap_mean`` and
-``oracle_gap_max``; the bound below stays as ``arrival_gap_*``, for
-continuity with the runs of steps 7-10. Without a table the oracle gaps are NaN.
+``oracle_gap_max``; the gap to the bound below is logged beside it, as
+``arrival_gap_*``. Without a table the oracle gaps are NaN.
 
 Minimum-time bound. Let ``A = a_max + d_bar`` and
 
@@ -49,8 +49,8 @@ the length of the shortest path in ``P_free`` from ``p_0`` to the goal region
 (:mod:`hrlmpc.paths`). Without obstacles ``d_free(p_0) = goal_x - p_x,0``, and
 then also ``p_x,k <= p_x,0 + T_s (s_1 + ... + s_k)``. With ``d_bar = 0``, from
 rest and away from the walls, full thrust along ``+x`` attains this, so in the
-tunnel the bound is the minimum time. The proof is to be written in the
-thesis; the tests check both statements numerically.
+tunnel the bound is the minimum time. Proposition A.5 of the thesis proves
+both statements; the tests check them numerically.
 """
 
 from __future__ import annotations
@@ -367,7 +367,7 @@ def evaluate(
         seed: Seed of the evaluation environment.
         inputs: Whether the commands are accelerations, as from an MPC Worker
             (:meth:`~hrlmpc.env.NavigationEnv.step_input`), instead of actions
-            in the square mapped; by default the controller's ``inputs``
+            in the square, which the environment maps onto ``U``; by default the controller's ``inputs``
             attribute, if it has one, and ``False`` otherwise.
         oracle: The oracle table of the layout for these starts, if there is one.
 
@@ -414,7 +414,7 @@ def evaluate(
 
 def evaluation_name(action: str, group: str = "") -> str:
     """The name under which an evaluation with ``action`` logs the metrics of ``group``: ``eval`` and
-    ``eval_<group>`` for the mean, as in steps 7-10; ``eval_mode`` and ``eval_mode_<group>`` for the mode.
+    ``eval_<group>`` for the mean; ``eval_mode`` and ``eval_mode_<group>`` for the mode.
 
     Raises:
         ValueError: If ``action`` is not one of :data:`EVAL_ACTIONS`.

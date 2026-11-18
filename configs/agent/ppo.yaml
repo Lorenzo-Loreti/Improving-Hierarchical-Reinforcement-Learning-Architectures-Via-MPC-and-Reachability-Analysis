@@ -1,5 +1,5 @@
-#  Flat PPO. The values are those selected by the tuning: configuration c5 of
-#  configs/agent/tuning/ppo/ (learning rate 1.0e-3).
+# Flat PPO. The values are those selected by the tuning: configuration c5 of
+# configs/agent/tuning/ppo/ (learning rate 1.0e-3).
 # Write floats with a dot and a signed exponent (3.0e-4, 1.0e+5): YAML 1.1 reads 3e-4 and 1.0e5 as strings.
 
 network:

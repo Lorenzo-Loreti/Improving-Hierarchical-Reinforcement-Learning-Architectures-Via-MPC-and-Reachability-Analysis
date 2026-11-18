@@ -64,8 +64,8 @@ class HierarchyConfig:
             and the Worker keeps its dense reward. The shipped value is
             the shaped reward's, 10.
         worker_map_features: The local map features appended to the Worker's
-            input, or ``None`` for the Worker, which knows no
-            walls; absent from the file means ``None``.
+            input, or ``None`` for the Worker of hPPO as the thesis compares it, which
+            observes no walls; absent from the file means ``None``.
     """
 
     segment_steps: int

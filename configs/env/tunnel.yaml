@@ -1,5 +1,5 @@
-# Tunnel: the slalom's arena without obstacles, for quick checks and debugging
-# only; not part of the main comparison.
+# Tunnel: the slalom's arena without obstacles, the reference layout of the thesis.
+# This file is its dense setting.
 
 physics:
   dt: 0.1

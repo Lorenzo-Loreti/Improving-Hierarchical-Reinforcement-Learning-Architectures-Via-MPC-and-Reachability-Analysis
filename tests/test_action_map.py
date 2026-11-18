@@ -69,7 +69,7 @@ def test_the_mode_of_a_beta_is_its_densest_point() -> None:
 
 
 def test_the_mode_reaches_the_edge_where_the_mean_cannot() -> None:
-    """a concentration of 1 puts the mode on the edge; both 1, the uniform density, give the mean, 1/2; and
+    """A concentration of 1 puts the mode on the edge; both 1, the uniform density, give the mean, 1/2; and
     the mode always lies beyond the mean, on its side of 1/2."""
     np.testing.assert_array_equal(beta_mode([1.0, 3.0, 1.0], [2.0, 1.0, 1.0]), [0.0, 1.0, 0.5])
     rng = np.random.default_rng(SEED)

@@ -222,7 +222,7 @@ def test_step_equals_the_linear_model_when_no_correction_acts() -> None:
 
 
 def test_disturbance_enters_like_an_acceleration() -> None:
-    """d is added to the saturated input, so it enters through B only, also at the walls."""
+    """The disturbance d is added to the saturated input, so it enters through B only, also at the walls."""
     layout = _layout("slalom")
     rng = np.random.default_rng(SEED)
     n = 2000
@@ -440,7 +440,7 @@ def test_entry_face_is_the_last_line_crossed() -> None:
 
 
 def test_exact_ties_go_to_the_lowest_face_index() -> None:
-    """a segment exactly through O1's top-left vertex; dyadic numbers make the tie exact."""
+    """A segment exactly through O1's top-left vertex; dyadic numbers make the tie exact."""
     layout = _layout("slalom")
     top, left = _face(layout, (5, 0.25), (4, 0.25)), _face(layout, (4, 0.25), (4, -3))
     assert top < left

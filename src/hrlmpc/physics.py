@@ -14,17 +14,17 @@ one, with bit-for-bit the same result. For each agent with state
    region (the interior of an obstacle, or the outside of the arena); add it
    to the collected faces ``S``; set ``v`` to the Euclidean projection of
    ``v^`` onto the intersection of the half-planes
-   ``{v: n_j. v >= -delta_j / dt}``, ``j in S``; repeat until the segment
+   ``{v: n_j . v >= -delta_j / dt}``, ``j in S``; repeat until the segment
    crosses no face. Here ``n_j`` is the unit normal of face ``j`` pointing
    into the free space and ``delta_j >= 0`` the distance of ``p`` from its
    line. Faces hit at the same instant are taken in order of the correction
    they need, smallest first, then by index;
 5. wall friction: if the agent lies on a face, moves along it
-   (``n_j. v = 0``) and is still on it at the end of the step,
+   (``n_j . v = 0``) and is still on it at the end of the step,
    ``v <- (1 - gamma_w dt) v``;
 6. position: ``p+ = p + dt v``.
 
-By the wall reaction keeps ``||v||_2 <= v_max``.
+By Proposition A.3 of the thesis the wall reaction keeps ``||v||_2 <= v_max``.
 
 Tolerances. The free space is the one of :mod:`hrlmpc.geometry`. A
 segment crosses into a blocked region only if it reaches more than
@@ -71,8 +71,8 @@ class StepResult:
             before the wall friction.
         wall_faces: ``(B, F)`` faces collected by the wall reaction.
         friction: ``(B,)`` whether the wall friction acted (stage 5).
-        contact: ``(B,)`` contact in the sense: a wall reaction, or the
-            new position on a face.
+        contact: ``(B,)`` contact in the sense of Section 3.2.3 of the thesis: a wall
+            reaction, or the new position on a face.
     """
 
     p: FloatArray

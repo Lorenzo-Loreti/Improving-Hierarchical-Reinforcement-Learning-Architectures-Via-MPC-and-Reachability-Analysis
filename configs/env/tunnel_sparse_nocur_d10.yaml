@@ -1,4 +1,4 @@
-# Tunnel, exploration setting (the control), at the disturbance level d_bar = 1.0:
+# Tunnel, sparse setting ("exploration" in the code), at the disturbance level d_bar = 1.0:
 # configs/env/tunnel_sparse_nocur.yaml with only the radius of the disturbance set changed (a test).
 
 physics:

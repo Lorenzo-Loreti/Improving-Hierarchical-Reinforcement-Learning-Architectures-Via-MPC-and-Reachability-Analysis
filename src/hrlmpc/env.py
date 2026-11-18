@@ -9,7 +9,7 @@ each step, for every agent:
 3. :func:`hrlmpc.physics.physics_step` advances the state;
 4. the reward is computed, with the contact penalty:
 
-       r_k = -c_t - c_n ||dv_wall_k|| - c_s 1[contact at k] + B 1[p_(k+1) in G]
+       r_k = -c_t - c_n ||dv_wall_k|| - c_s 1[contact at k] + c_g 1[p_(k+1) in G]
              + s Phi(p_(k+1)) - Phi(p_k) - c_e ||u_k||^2 / a_max^2,
 
    ``Phi(p) = -c_p max(goal_x - p_x, 0)``, ``s`` the shaping discount (1), ``u_k`` the input after the saturation onto ``U``; the unshaped
@@ -122,7 +122,8 @@ class StepInfo:
         u: ``(B, 2)`` inputs after the saturation onto ``U``.
         disturbance: ``(B, 2)`` disturbances ``d_k``.
         reward_unshaped: ``(B,)`` rewards without the shaping term.
-        contact: ``(B,)`` contact in the sense.
+        contact: ``(B,)`` contact, as in :class:`hrlmpc.physics.StepResult`: a wall reaction, or
+            the new position on a face.
         impulse: ``(B,)`` ``||dv_wall||``, the normal velocity cancelled by the walls [m/s].
         limiter: ``(B,)`` correction of the speed limiter, ``||v^ - v~|| / dt`` [m/s^2].
         saturation: ``(B,)`` correction of the saturation onto ``U``, ``||u - u_cmd||`` [m/s^2].

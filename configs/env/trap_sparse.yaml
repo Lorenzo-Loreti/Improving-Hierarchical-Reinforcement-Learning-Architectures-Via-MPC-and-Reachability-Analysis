@@ -1,4 +1,4 @@
-# Trap layout with the sparse reward: the complex case of
+# Trap layout, curriculum setting of the thesis ("main" in the code): the complex case of
 # the comparison. A U-shaped obstacle opening towards the spawn box sits on the
 # straight route to the goal (its cavity is a dead end 1.5 m deep and 1.6 m wide,
 # with corridors of 0.8 m around it), and a gate of 0.75 m follows it. Physics,

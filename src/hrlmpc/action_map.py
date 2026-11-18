@@ -73,4 +73,3 @@ def beta_mode(alpha: ArrayLike, beta: ArrayLike) -> FloatArray:
     num, den = np.broadcast_arrays(a - 1.0, a + b - 2.0)
     mode: FloatArray = np.divide(num, den, out=np.full(den.shape, 0.5), where=den > 0.0)
     return mode
-

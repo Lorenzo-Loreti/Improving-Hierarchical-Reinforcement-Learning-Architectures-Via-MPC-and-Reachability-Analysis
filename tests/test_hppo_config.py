@@ -176,7 +176,7 @@ so the Worker keeps its dense reward under the sparse reward (whose ``progress_c
 
 def test_a_configuration_from_before_the_workers_price_gets_the_shaped_one() -> None:
     """``with_worker_price`` fills a missing ``hierarchy.worker_progress_coef`` with the shaped price, for the
-    reload of a run from before; it leaves a present key, its input and anything but a mapping alone."""
+    reload of an older run; it leaves a present key, its input and anything but a mapping alone."""
     data = _data()
     del data["hierarchy"]["worker_progress_coef"]
     before = copy.deepcopy(data)
@@ -197,8 +197,9 @@ def test_a_configuration_from_before_the_workers_price_gets_the_shaped_one() -> 
 
 
 def test_the_map_features_are_optional_and_absent_from_the_shipped_file() -> None:
-    """``hierarchy.worker_map_features`` may be absent or null (the Worker), or give the rays and the
-    range; the shipped file has none, and the loaded configuration round-trips with the key written as null."""
+    """``hierarchy.worker_map_features`` may be absent or null (the Worker without map features), or give the
+    rays and the range; the shipped file has none, and the loaded configuration round-trips with the key written
+    as null."""
     config = load_hppo_config(SHIPPED)
     assert config.hierarchy.worker_map_features is None
     assert "worker_map_features" not in _data()["hierarchy"]

@@ -50,7 +50,7 @@ def test_the_shipped_configuration_is_the_decided_one() -> None:
         horizon=None, q_pos=10.0, q_vel=1.0, r=0.1, target_weight=1e4, effort_weight=0.1, start_weight=0.1,
         rho=1e-3, mip_gap=1e-4, work_limit=None,
     )
-    assert config.mpc == MPCSettings()  # the defaults are the decided values
+    assert config.mpc == MPCSettings()  # the defaults are the values of the thesis
     assert config.batch_size == 2048 and config.guaranteed_segments == 8 * 25
     assert config.reachability is None and config.algorithm == "ppo_mpc"
 

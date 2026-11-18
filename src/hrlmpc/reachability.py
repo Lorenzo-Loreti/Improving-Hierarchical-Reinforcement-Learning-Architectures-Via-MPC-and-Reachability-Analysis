@@ -22,7 +22,8 @@ sense of the tube, contact-free, and able to stop by the end of the horizon.
    reachable by construction. If no plan is found the target is ``q``,
    and the failure is counted, with how the projection's search ended.
    A search whose rounds run out returns the point of the cheapest exact plan
-   it found: reachable all the same, though not certified the nearest (R1).
+   it found: reachable all the same, though not certified the nearest (the remedy R1 of
+   :mod:`hrlmpc.mpc_worker`).
 
 The Worker of architecture 3 treats an unreachable target in the same way,
 so architectures 3 and 4 differ only in the map of the Manager's

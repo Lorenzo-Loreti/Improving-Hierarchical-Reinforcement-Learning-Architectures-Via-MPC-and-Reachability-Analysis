@@ -5,7 +5,8 @@ Usage, from the repository root::
     python -m hrlmpc.train_ppo --env configs/env/tunnel.yaml --agent configs/agent/ppo.yaml \
         --budget 204800 --seeds 1 2 3 4 5
 
-Each seed writes the run directory ``<runs-dir>/<layout>/ppo/seed<seed>-<UTC time>`` with:
+Each seed writes the run directory ``<runs-dir>/<env>/ppo/seed<seed>-<UTC time>``, ``<env>`` being
+the stem of the environment's file, with:
 
     config.yaml resolved configuration: environment, agent, budget, seed, discount
     meta.json provenance and machine (hrlmpc.utils.runlog)

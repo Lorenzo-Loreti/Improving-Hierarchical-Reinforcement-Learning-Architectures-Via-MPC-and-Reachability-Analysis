@@ -1,6 +1,5 @@
 """The MPC Worker of PPO_MPC: the tube MPC with the waypoint cost, solved by Gurobi and Clarabel.
 
-
 :mod:`hrlmpc.mpc_problem` defines the problem; this module solves it, at every
 step and for every agent, with two solvers. The cost depends on the steps left in the
 segment and, with a tube, on the measured state (the regularizer), so it is set at every step; both solvers minimise the same cost:
@@ -23,7 +22,8 @@ oracle :class:`_GaugeOracle` returns), and both are solved again, at most
 :data:`MAX_CUT_ROUNDS` times. A round that adds no cut returns the
 relaxation's own plan: it meets the disks and ``Z``
 to :data:`CUT_TOL` and the faces to :attr:`~hrlmpc.mpc_problem.MPCProblem.face_slack`,
-which ``rho`` covers, so the speed limiter may act about 1e-6 m/s beyond what the tightening covers. When the reachable positions fix every binary
+which ``rho`` covers, so the speed limiter may act about 1e-6 m/s beyond what the tightening covers.
+When the reachable positions fix every binary
 (:meth:`~hrlmpc.mpc_problem.MPCProblem.fixed_binaries`), as on the tunnel, the
 problem is convex and Clarabel solves it alone.
 
@@ -31,9 +31,10 @@ Two remedies keep the plans the search finds:
 
 - R1: a search whose rounds run out after it found exact plans, none within
   the gap, returns the cheapest of them (:data:`~hrlmpc.mpc_command.BEST`),
-  feasible for its binaries. It is the solvers' plan of the step, which
-  algorithm 3 below still compares with the shifted plan. A relaxation without
-  a solution or a solver failure still ends the search without a plan.
+  feasible for its binaries. It is the solvers' plan of the step, which the
+  choice below (stage 4 of Algorithm B.1 of the thesis) still compares with the
+  shifted plan. A relaxation without a solution or a solver failure still ends
+  the search without a plan.
 - R2: an exact solve that Clarabel ends inaccurate, or at its iteration
   limit, with a plan counts as a plan if the plan meets the constraints within
   the tolerances of the relaxation's own plan
@@ -147,8 +148,8 @@ Z_SEED_KEEP = 32
 """How many of the slot's latest cuts of ``Z`` each solve starts with."""
 
 ACCEPT_TOL = 1e-6
-"""Algorithm 3's acceptance: the solvers' plan is applied unless the shifted plan is cheaper by more
-than ``ACCEPT_TOL (1 + |J|)`` of its cost ``J``."""
+"""The acceptance of the choice (stage 4 of Algorithm B.1 of the thesis): the solvers' plan is applied unless
+the shifted plan is cheaper by more than ``ACCEPT_TOL (1 + |J|)`` of its cost ``J``."""
 
 CANDIDATE_TOL = 1e-4
 """How far the shifted plan may miss the measured state and still count as feasible: the gauge of
@@ -175,11 +176,13 @@ def _certified(cost: float, bound: float, gap: float) -> bool:
 
 
 def z_directions() -> FloatArray:
-    """The 64 directions ``a = (cos(psi) n, sin(psi) n)`` that start the relaxation of ``Z``.
+    """The directions ``a = (cos(psi) n, sin(psi) n)`` that start the relaxation of ``Z``.
 
-    Eight headings ``n`` and eight mixing angles ``psi``: the directions in
-    which a position error and a velocity error point the same way, the shape
+    Eight headings ``n`` and eight mixing angles ``psi``, 64 rows: the directions in
+    which a position error and a velocity error lie on one line, the shape
     of every support function ``Z``'s construction evaluates; rotation-symmetric like ``Z``.
+    Turning both angles by a half turn gives the same vector, so the rows are 32 distinct
+    directions, each twice: the 32 half-spaces of Appendix B.3 of the thesis.
     """
     dirs = []
     for phi in 2.0 * np.pi * np.arange(8) / 8:
@@ -764,8 +767,8 @@ and whether its plan is an accepted inaccurate plan.
     def _shift_is_feasible(self, x: FloatArray, z0: FloatArray) -> bool:
         """Whether the shifted plan, which starts at ``z0``, is feasible at the measured state ``x``.
 
-        The shift of a feasible plan meets every other constraint by
-        construction (theorem 4.1: every rest state is an equilibrium), so
+        The shift of a feasible plan meets every other constraint by construction
+        (Proposition A.7 (iv) of the thesis: every rest state is an equilibrium), so
         only the tube constraint ``x - z0 in Z``, which the last step's
         disturbance moved, is checked, to :data:`CANDIDATE_TOL`; without a
         tube it reads ``z0 = x``. A failed check counts as infeasible, and as an error.
@@ -789,7 +792,8 @@ and whether its plan is an accepted inaccurate plan.
         candidate: Plan | None,
         candidate_cost: float,
     ) -> tuple[Plan | None, int, int]:
-        """Algorithm 3's choice: ``(plan, outcome, invalid_candidate)`` (module docstring)."""
+        """The choice of stage 4 of Algorithm B.1 of the thesis (module docstring):
+        ``(plan, outcome, invalid_candidate)``."""
         if solution is not None:
             cost = self.problem.cost(solution[0], solution[1], target, steps_left, x=x)
             if candidate is None or cost <= candidate_cost + ACCEPT_TOL * (1.0 + abs(candidate_cost)):

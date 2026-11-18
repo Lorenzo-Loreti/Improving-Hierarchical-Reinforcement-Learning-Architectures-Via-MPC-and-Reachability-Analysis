@@ -54,7 +54,8 @@ effort_coef * sum_k ||u_k||^2 / a_max^2``, where the effort term lies in
 arrival can beat an earlier one, so the oracle's plan also maximizes the
 unshaped return within its class, and its replayed return is the reference
 return of the start (:func:`entry_for` refuses a plan that fails this
-condition). Outside the class, the calibration of the contact penalty (an engineering estimate) is meant to keep braking on a wall from paying. The
+condition). Outside the class, the calibration of the contact penalty (an engineering estimate)
+is meant to keep braking on a wall from paying. The
 shipped rewards (``effort_coef`` 0.01, ``time_penalty`` 1) satisfy the
 condition for ``N < 100``.
 
@@ -409,7 +410,9 @@ class OracleProblem:
         return point
 
     def reach_boxes(self, start: ArrayLike, horizon: int) -> tuple[FloatArray, FloatArray]:
-        """Bounds on the positions of every plan from ``start`` at rest: stage ``k`` lies within the distance that the bounds on input and speed allow in ``k`` steps of the start on each axis, clipped to the tightened arena's bounding box.
+        """Bounds on the positions of every plan from ``start`` at rest: stage ``k`` lies within the distance that
+        the bounds on input and speed allow in ``k`` steps of the start on each axis, clipped to the tightened
+        arena's bounding box.
 
         Returns:
             ``(lo, hi)``, each ``(horizon + 1, 2)``.

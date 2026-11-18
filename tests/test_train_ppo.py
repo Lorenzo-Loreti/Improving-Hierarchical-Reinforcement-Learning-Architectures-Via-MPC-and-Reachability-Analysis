@@ -105,7 +105,7 @@ def test_the_spawn_curriculum_is_used_and_logged(tmp_path: Path) -> None:
 
 
 def test_the_oracle_table_of_the_layout_is_used_when_there_is_one(tmp_path: Path) -> None:
-    """a table of the layout and starts in ``oracle_dir`` gives the oracle gaps and is recorded in the run."""
+    """A table of the layout and starts in ``oracle_dir`` gives the oracle gaps and is recorded in the run."""
     from hrlmpc.oracle import OracleEntry, OracleSettings, OracleTable, layout_signature
 
     env, ppo = _env(), _ppo()
@@ -257,4 +257,3 @@ def test_training_leaves_the_global_torch_settings_as_they_were(tmp_path: Path) 
         assert not torch.are_deterministic_algorithms_enabled() and torch.get_num_threads() == 2
     finally:
         torch.set_num_threads(threads)
-

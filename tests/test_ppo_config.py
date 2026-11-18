@@ -28,7 +28,7 @@ def _with(section: str, key: str, value: Any) -> dict[str, Any]:
 
 def test_the_shipped_configuration_is_the_selection_of_the_tuning() -> None:
     """The values of the configuration before the tuning, but for the learning rate, 1e-3 since the tuning
-(configuration c5)."""
+    (configuration c5)."""
     config = load_ppo_config(CONFIG)
     assert config.network.hidden_sizes == (64, 64)
     assert (config.rollout.num_envs, config.rollout.num_steps) == (8, 128)

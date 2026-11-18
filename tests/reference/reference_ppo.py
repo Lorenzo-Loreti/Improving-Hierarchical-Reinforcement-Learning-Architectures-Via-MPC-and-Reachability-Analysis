@@ -1,9 +1,9 @@
 """Frozen copy of an earlier stand-alone implementation of flat PPO, the reference of the bit-identity test
 (tests/test_ppo.py).
 
-The file keeps that implementation unchanged, with the four definitions it needs (``layer_init``,
+The file keeps the code of that implementation unchanged, with the four definitions it needs (``layer_init``,
 ``normalize_obs``, ``ScaledBeta``, ``RunningMeanStd``). Only this docstring, the import lines and
-the order of the definitions are new. Do not edit the code below: it is the
+the order of the definitions are new, and the comments are shortened. Do not edit the code below: it is the
 reference, not part of the package.
 """
 # ruff: noqa
@@ -62,10 +62,8 @@ class ScaledBeta:
     def sample(self):
         return self.dist.sample() * self.scale + self.low
 
-    # No `rsample`: every agent in this tree is a policy-gradient method
-    # whose actor loss is a likelihood-ratio surrogate, so none of them ever
-    # differentiates through the sampled action. `torch.distributions.Beta`
-    # still supports it if a pathwise-gradient agent is ever added here.
+    # No `rsample`: the actor loss is a likelihood-ratio surrogate, which never
+    # differentiates through the sampled action.
 
     def deterministic_sample(self):
         # Mean of Beta distribution is alpha / (alpha + beta)
@@ -86,19 +84,12 @@ class ScaledBeta:
 
 class RunningMeanStd:
     """Chan et al. parallel running mean/variance, used to normalize a
-    critic's regression targets (and, as `adv_rms`, to floor the advantage-
-    normalization denominator -- see `floor_normalize`).
+    critic's regression targets.
 
     Regressing a freshly initialized critic (outputs ~0, moved by at most
     `lr` per Adam step) directly on raw returns takes far more gradient
-    steps than a run provides whenever those returns are large -- e.g. a
-    terminal reward barely discounted over a long horizon lands the critic
-    correlated with the true value but persistently biased by hundreds of
-    units. Regressing on standardized targets instead removes that climb
-    entirely. Each call site's own comment covers *why* its particular
-    target has (or doesn't have) this problem -- the raw scale varies widely
-    across algorithms and, in hPPO, across the manager/worker heads of the
-    same algorithm.
+    steps than a run provides whenever those returns are large. Regressing
+    on standardized targets instead removes that climb.
     """
 
     def __init__(self, epsilon=1e-4, horizon=10):
@@ -115,10 +106,7 @@ class RunningMeanStd:
     def update(self, x, precomputed=None):
         """`precomputed`, when given, is this batch's own `(mean, var)` (biased
         variance, matching `x.var(unbiased=False)`) already computed by the
-        caller -- e.g. `floor_normalize`, which needs the same pair for
-        advantage normalization and would otherwise force a second reduction
-        pass over `x` here. `x` is still required in that case, for its
-        `numel()`."""
+        caller. `x` is still required in that case, for its `numel()`."""
         if precomputed is None:
             batch_mean = float(x.mean())
             batch_var = float(x.var(unbiased=False))
@@ -161,7 +149,7 @@ class ActorNetwork(nn.Module):
             nn.Tanh(),
             layer_init(nn.Linear(64, act_dim * 2), std=0.01)
         )
-        
+
     def forward(self, obs):
         x = self.net(obs)
         alpha = F.softplus(x[..., :self.act_dim]) + 1.0
@@ -178,7 +166,7 @@ class CriticNetwork(nn.Module):
             nn.Tanh(),
             layer_init(nn.Linear(64, 1), std=1.0)
         )
-        
+
     def forward(self, obs):
         return self.net(obs)
 
@@ -216,23 +204,11 @@ class RolloutBuffer:
         """GAE(lambda) over the stored rollout. `next_value` is the value of
         the observation that follows the last stored transition.
 
-        `gamma` and `gae_lambda` are required rather than defaulted: they used
-        to default to 0.99/0.95 while every real call site passed 0.999, so a
-        caller who omitted them got silently different discounting from the
-        trained configuration. Prefer `PPOAgent.compute_returns_and_advantage`,
-        which sources both from the agent.
-
-        Note the `dones` convention: `dones[t]` flags "the transition at index
-        t ended an episode", so the bootstrap mask is `1 - dones[t]`. CleanRL
-        stores "observation t begins a new episode" instead and masks with
-        `dones[t+1]`. Both are correct; they are the same quantity indexed
-        differently, and this one is the natural fit for an auto-resetting
-        vector env, where the observation after a done already belongs to the
-        next episode. It is also why there is no `next_done` argument: CleanRL
-        needs one for the observation after the rollout, whereas here the last
-        transition's own `dones[-1]` already says whether `next_value` may be
-        bootstrapped from. (This method used to take a `next_done` anyway,
-        which every caller filled with exactly `dones[-1]`.)
+        `dones[t]` flags "the transition at index t ended an episode", so the
+        bootstrap mask is `1 - dones[t]`: the natural convention for an
+        auto-resetting vector env, where the observation after a done already
+        belongs to the next episode. The last transition's own `dones[-1]`
+        says whether `next_value` may be bootstrapped from.
         """
         lastgaelam = torch.zeros(self.num_envs, device=self.device)
         for t in reversed(range(self.num_steps)):
@@ -257,50 +233,14 @@ class RolloutBuffer:
         return states, actions, logprobs, values, returns, advantages
 
 class PPOAgent:
-    # Defaults deliberately match what ppo_train.py's flags default to, so an agent
-    # constructed directly -- an evaluation notebook, say -- behaves like the
-    # trained configuration instead of silently differing from it. Change the
-    # two together.
+    # gamma is 0.99. With a discount closer to one, the discounted returns of the
+    # states of a successful episode become almost equal as the policy converges,
+    # and the critic's regression target loses its spread.
     #
-    # gamma is 0.99, not the 0.999 the reward scale was originally designed
-    # around. Measured over 72 seeds, 0.999 makes the critic's regression
-    # target degenerate as the policy converges: every state in a successful
-    # episode earns almost the same discounted return, the spread of returns
-    # inside a batch collapses, and explained_variance collapses with it. The
-    # advantages that survive are then mostly critic error, which the
-    # batch-level normalisation in update() rescales straight back to unit
-    # variance. At 0.99 the return signal stays wide and the critic stays
-    # accurate. See the thesis PPO chapter, section 11.1 (kept outside this repo).
-    #
-    # Deliberately absent: value-loss clipping (`clip_vloss`), the
-    # advantage-std floor (`adv_std_floor_frac`), a configurable ret_rms
-    # horizon and an early-stopping `target_kl`. They were once ported here
-    # from HPPOAgent for API parity but were never enabled in any flat-PPO
-    # run, and the evidence behind them was about hPPO's manager head, not
-    # about this agent -- see `clipped_value_loss` and `floor_normalize` in
-    # algorithms/common.py. HPPOAgent has since dropped all four too,
-    # clip_vloss last (2026-09-24), so its heads now run this update
-    # unchanged; algorithms/hppo/tests/test_hppo.py checks that they end on
-    # identical weights.
-    #
-    # Also absent, and replaced by something simpler that does the same:
-    #
-    # - Entropy autotuning (SAC-style dual ascent on log(ent_coef)). Adam
-    #   moves log(ent_coef) by about its learning rate per update, so at the
-    #   3e-4 it always ran with, ent_coef ended at 0.0098-0.0099 on all six
-    #   benchmark seeds (0.00983 after the slowest, 80-update slalom solve),
-    #   and could not leave +-16% of 0.01 even over a full 500k-step run.
-    #   Every flat-PPO result was in effect trained with the fixed
-    #   ent_coef=0.01 used here; the same inertness was measured on hPPO
-    #   (docs/worker-termination-avoidance.md, section 3).
-    #
-    # - vf_coef. It trades the value loss off against the policy loss only
-    #   when the two share parameters. Here actor and critic are separate
-    #   networks with separately clipped gradients, so the critic's gradient
-    #   comes from the value loss alone and a constant factor on it is
-    #   undone by Adam's normalisation -- all it could still change is the
-    #   gradient-clip threshold and the weight of Adam's eps. The knob that
-    #   actually sets the critic's step size is critic_lr_mult.
+    # ent_coef is fixed, and there is no vf_coef: actor and critic are separate
+    # networks with separately clipped gradients, so a constant factor on the
+    # value loss would be undone by Adam's normalisation. The critic's step size
+    # is set by critic_lr_mult.
     def __init__(self, obs_dim, act_dim, act_limit_low=-1.0, act_limit_high=1.0, lr=3e-4, gamma=0.99, gae_lambda=0.95,
                  clip_coef=0.2, ent_coef=0.01, max_grad_norm=0.5,
                  obs_low=None, obs_high=None,
@@ -328,26 +268,14 @@ class PPOAgent:
         self.critic = CriticNetwork(obs_dim).to(device)
 
         # The critic learns in standardized-return space; these statistics map
-        # its output back to the raw reward scale that GAE works in. Raw
-        # returns here are large -- by the time the benchmark seeds solve the
-        # task, ret_rms sits at mean ~700 / std ~170 on the slalom and mean
-        # ~90 / std ~90 on the tunnel -- against a freshly initialized critic
-        # that outputs ~0; see RunningMeanStd's docstring (algorithms/common.py)
-        # for why that gap matters. (This comment used to quote O(400) at
-        # gamma=0.999, the discount before the switch to 0.99. The tunnel
-        # figures were measured at its former goal_reward of 200; it has used
-        # the slalom's 1000 since 2026-09-24.)
+        # its output back to the raw reward scale that GAE works in. Raw returns
+        # are large against a freshly initialized critic, which outputs ~0; see
+        # RunningMeanStd's docstring.
         self.ret_rms = RunningMeanStd()
 
         # Two parameter groups, so the critic can run at a higher learning
-        # rate than the actor. The critic is the binding constraint early in
-        # training -- advantages mean nothing until explained_variance has
-        # climbed -- while the actor is the head an over-large step damages.
-        #
-        # Callers must anneal *every* group. Writing only `param_groups[0]`,
-        # which was correct while there was a single group, now silently
-        # leaves the critic un-annealed; ppo_train.py captures the base
-        # learning rates once and scales each group against its own.
+        # rate than the actor. A caller that anneals the learning rate must
+        # anneal every group.
         self.optimizer = optim.Adam([
             {"params": list(self.actor.parameters()), "lr": lr},
             {"params": list(self.critic.parameters()), "lr": lr * critic_lr_mult},
@@ -427,14 +355,8 @@ class PPOAgent:
         if checkpoint["obs_low"] is not None:
             self.obs_low = np.asarray(checkpoint["obs_low"], dtype=np.float32)
             self.obs_high = np.asarray(checkpoint["obs_high"], dtype=np.float32)
-        # Guards for checkpoints older than the two-group optimiser, the
-        # observation bounds or ret_rms used to live here; no such flat-PPO
-        # checkpoint is left (all nine under scenarios/tunnel/scripts/
-        # checkpoints/bench_ppo_* carry all three), so they were dropped.
-        #
-        # Checkpoints from before the entropy autotuner was removed also carry
-        # `log_ent_coef` and `ent_coef_optimizer`. They are ignored: ent_coef
-        # only enters training, and the tuned value never left 0.01 +- 2%.
+        # Other entries of a checkpoint (`log_ent_coef` and `ent_coef_optimizer`,
+        # written by an entropy autotuner) are ignored.
 
     def update(self, buffer, num_minibatches, update_epochs):
         # `values` are the pre-update value predictions, on the raw reward
@@ -448,11 +370,8 @@ class PPOAgent:
 
         # Per-batch advantage normalization. The raw std is logged: it is the
         # scale of the signal the normalization is about to hide. The mean
-        # comes from `std_mean`, not `.mean()`: the two differ in the last
-        # bit on about half of all batches, and `std_mean`'s -- bit-identical
-        # to the `var_mean` this used to call -- is the one every reported
-        # flat-PPO run was trained with; `.mean()` shifts slalom seeds 2 and
-        # 3 to measurably different (if equally good) policies.
+        # comes from `std_mean`, not `.mean()`: the two can differ in the last
+        # bit.
         adv_std, adv_mean = torch.std_mean(advantages)
         adv_std_raw = float(adv_std)
         advantages = (advantages - adv_mean) / (adv_std_raw + 1e-8)
@@ -472,10 +391,8 @@ class PPOAgent:
 
         for _ in range(update_epochs):
             # Exactly `num_minibatches` minibatches per epoch, as even as the
-            # batch allows. With the fixed batch here (1024 = 4 x 256 at the
-            # defaults) that is the partition fixed-size slicing gives; the
-            # count is what HPPOAgent needs for its ragged manager batch, and
-            # taking it here too keeps the two updates the same code.
+            # batch allows. With a batch that divides evenly this is the partition
+            # that fixed-size slicing gives.
             b_inds = torch.randperm(batch_size, device=self.device)
             for mb_inds in torch.tensor_split(b_inds, num_minibatches):
                 _, newlogprob, entropy = self.policy_forward(
@@ -485,7 +402,7 @@ class PPOAgent:
                 newvalue = self.critic(states[mb_inds]).squeeze(-1)
                 logratio = newlogprob - logprobs[mb_inds]
                 ratio = logratio.exp()
-                
+
                 with torch.no_grad():
                     # calculate approx_kl http://joschu.net/blog/kl-approx.html
                     approx_kl = ((ratio - 1) - logratio).mean()
@@ -504,7 +421,7 @@ class PPOAgent:
 
                 # Entropy loss
                 entropy_loss = entropy.mean()
-                
+
                 # Total loss. The actor's gradient comes only from the first
                 # two terms and the critic's only from the third, so summing
                 # them is just a way to take both steps with one backward
@@ -518,7 +435,7 @@ class PPOAgent:
                 nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
                 nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
                 self.optimizer.step()
-                
+
                 pg_losses.append(pg_loss.item())
                 v_losses.append(v_loss.item())
                 entropy_losses.append(entropy_loss.item())
@@ -541,7 +458,7 @@ class PPOAgent:
             # Worst single minibatch/epoch of this update, not just the mean
             # -- a collapse can be one bad epoch inside an otherwise
             # unremarkable-looking update, which averaging over all of them
-            # would hide. Ported from HPPOAgent for diagnostic parity.
+            # would hide.
             "loss/approx_kl_max": float(np.max(approx_kls)),
             "loss/ratio_max_dev": float(ratio_max_dev),
             "loss/clipfrac": float(np.mean(clipfracs)),

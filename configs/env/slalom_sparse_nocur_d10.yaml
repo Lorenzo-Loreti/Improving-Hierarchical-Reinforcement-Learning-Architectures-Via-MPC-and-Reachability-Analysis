@@ -1,7 +1,6 @@
-# Slalom, exploration setting at the disturbance level d_bar = 1.0:
+# Slalom, sparse setting ("exploration" in the code) at the disturbance level d_bar = 1.0:
 # configs/env/slalom_sparse_nocur.yaml with only the radius of the disturbance set
-# changed (a test), equivalently slalom_sparse_d10.yaml without the curriculum. This is the setting in which the reachable
-# targets helped at d_bar = 0, now with a tube that shrinks the reachable set.
+# changed (a test), equivalently slalom_sparse_d10.yaml without the curriculum.
 
 physics:
   dt: 0.1          # sampling time T_s [s]

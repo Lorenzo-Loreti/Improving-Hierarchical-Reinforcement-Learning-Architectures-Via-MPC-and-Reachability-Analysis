@@ -154,7 +154,7 @@ def test_observations_invert_to_the_states() -> None:
 
 @pytest.mark.parametrize("layout", ["slalom", "tunnel"])
 def test_the_target_radius_is_one_and_a_half_segment_reaches(layout: str) -> None:
-    """a segment covers at most v_max H T_s = 1.2 m; the targets reach R = 1.8 m."""
+    """A segment covers at most v_max H T_s = 1.2 m; the targets reach R = 1.8 m."""
     config = _config(layout)
     assert segment_reach(config.physics, 10) == pytest.approx(1.2)
     hierarchy = _hierarchy(config)
@@ -343,7 +343,7 @@ def test_a_segment_that_reaches_the_goal_is_terminal_for_the_manager_only() -> N
 
 
 def test_segments_in_flight_continue_in_the_next_rollout() -> None:
-    """a segment in flight keeps the decision's log-probability and value, though the policy changed since."""
+    """A segment in flight keeps the decision's log-probability and value, though the policy changed since."""
     config = _config()
     env = NavigationEnv(config, 1, seed=2)
     hierarchy = _hierarchy(config)
@@ -385,7 +385,7 @@ def test_a_rollout_leaves_its_input_state_unchanged() -> None:
 
 
 def test_the_manager_does_not_replan_on_contact() -> None:
-    """a wall contact in the middle of a segment ends neither the segment nor its target."""
+    """A wall contact in the middle of a segment ends neither the segment nor its target."""
     config = _config()
     down = lambda obs: (np.tile([0.0, -1.0], (len(obs), 1)), np.zeros(len(obs)))  # noqa: E731 - a target in the floor
     env, hierarchy, state, rollout, after = _run(config, batch=1, steps=30, manager=down, positions=[[1.0, -1.5]])
@@ -464,8 +464,7 @@ def test_the_worker_rewards_of_the_rollout() -> None:
 
 def test_the_workers_progress_is_priced_by_the_hierarchy_not_by_the_environment() -> None:
     """Under the sparse reward the environment's ``progress_coef`` is 0, and the
-    Worker keeps its dense reward at the hierarchy's price. Before the fix the Worker of every sparse run
-    was paid no progress at all."""
+    Worker keeps its dense reward at the hierarchy's price."""
     config = _config("slalom", task={"horizon": 30}, reward={"progress_coef": 0.0})
     assert config.reward.progress_coef == 0.0
     env, hierarchy, state, rollout, after = _run(config, batch=4, steps=60, manager=_random_policy(4))

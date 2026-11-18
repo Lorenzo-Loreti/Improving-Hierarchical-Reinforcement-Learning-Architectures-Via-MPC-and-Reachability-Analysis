@@ -1,6 +1,6 @@
 # Tunnel at the disturbance level d_bar = 1.0: configs/env/tunnel.yaml
-# with only the radius of the disturbance set changed. For quick checks and debugging
-# only; not part of the main comparison.
+# with only the radius of the disturbance set changed: the dense setting of the
+# reference layout at that level.
 
 physics:
   dt: 0.1

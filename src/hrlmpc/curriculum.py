@@ -1,10 +1,10 @@
 """The reverse spawn curriculum of the training episodes.
 
-With the sparse reward no architecture finds the goal of the slalom by
-chance (in trial runs PPO and hPPO had no success in 1024 episodes per seed, and their
-policies converged to standing still), so the training
-starts are drawn from a band of the spawn box's shape that begins near the
-goal and slides back towards the spawn box as the policy succeeds:
+With the sparse reward and starts in the spawn box, PPO and hPPO never reach
+the goal of the slalom (the sparse setting of the thesis, Section 6.2.1). In
+the curriculum setting the training starts are therefore drawn from a band of
+the spawn box's shape that begins near the goal and slides back towards the
+spawn box as the policy succeeds (Section 5.2.2):
 
 - stage ``s`` draws uniformly from the free part of the band
   ``[x_start - s step, x_start - s step + width] x [y_lo, y_hi]``, with the
